@@ -1,0 +1,97 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "personal-ai-os"
+description = "SYNTHIA, a personal AI operating system: language, memory, voice, vision and action behind one kernel."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Dibya2521" }]
+keywords = ["agents", "assistant", "llm", "multimodal", "rag", "speech", "computer-vision"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Typing :: Typed",
+]
+dynamic = ["version"]
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "hypothesis>=6.120",
+  "pre-commit>=4.0",
+  "pyright>=1.1.390",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "ruff>=0.9",
+]
+
+[tool.hatch.version]
+path = "src/synthia/__init__.py"
+
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "tests", "docs", "README.md", "CHANGELOG.md", "LICENSE"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/synthia"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812", # trailing comma, owned by the formatter
+  "CPY001", # per-file copyright header, LICENSE covers the project
+  "D107",   # the class docstring documents construction, per the google convention
+  "ISC001", # implicit string concatenation, owned by the formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D100", "D103", "D104", "PLR2004", "S101"]
+"scripts/**/*.py" = ["INP001", "T201"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.pylint]
+max-args = 5
+max-statements = 25
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.pyright]
+include = ["src", "tests", "scripts"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true
+# A warning is a defect that has not been diagnosed yet.
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["synthia"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", 'if __name__ == "__main__":']
