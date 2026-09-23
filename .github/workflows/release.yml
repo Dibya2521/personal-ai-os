@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and publish a release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install project and dev group
+        run: uv sync --locked --all-groups
+
+      # A tag is not a reason to skip the gates: a release is the version people keep.
+      - name: Gates
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run pyright
+          uv run pytest --cov
+
+      - name: Check the tag matches the package version
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          declared="$(uv run python -c 'import synthia; print(synthia.__version__)')"
+          test "$tagged" = "$declared" || {
+            echo "tag $tagged does not match version $declared" >&2
+            exit 1
+          }
+
+      # Stamped with the tagged commit's date, not the moment the workflow ran,
+      # so the artifacts agree with the history. Hatchling honours
+      # SOURCE_DATE_EPOCH, which also makes the build reproducible.
+      - name: Build sdist and wheel
+        run: |
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          uv build
+
+      - name: Extract this version's changelog section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $version" >&2; exit 1; }
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME"
+          --title "$GITHUB_REF_NAME"
+          --notes-file notes.md
+          dist/*
