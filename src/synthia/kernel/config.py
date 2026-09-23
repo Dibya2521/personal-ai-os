@@ -21,6 +21,8 @@ APP_NAME = "synthia"
 ENV_PREFIX = "SYNTHIA_"
 DEFAULT_ENV_FILE = Path(".env")
 DEFAULT_DISK_BUDGET_GB = 10.0
+# OpenRouter's free-model limit per UTC day for accounts with under 10 credits.
+DEFAULT_REMOTE_DAILY_CAP = 50
 
 
 class LogLevel(StrEnum):
@@ -65,6 +67,7 @@ class Settings(BaseSettings):
     log_format: LogFormat = LogFormat.CONSOLE
     disk_budget_gb: float = Field(default=DEFAULT_DISK_BUDGET_GB, gt=0)
     openrouter_api_key: SecretStr | None = None
+    remote_daily_cap: int = Field(default=DEFAULT_REMOTE_DAILY_CAP, ge=0)
 
 
 def load_settings(env_file: Path | None = DEFAULT_ENV_FILE) -> Settings:
