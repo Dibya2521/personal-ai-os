@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    name: gates (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # SYNTHIA is developed on Windows and runs daily on Linux, so both are
+        # first-class: a change that breaks either one does not merge.
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      # --locked fails if uv.lock is stale, so a forgotten lockfile update
+      # breaks CI here rather than silently drifting.
+      - name: Install project and dev group
+        run: uv sync --locked --all-groups
+
+      - name: ruff format
+        run: uv run ruff format --check .
+
+      - name: ruff check
+        run: uv run ruff check .
+
+      - name: pyright
+        run: uv run pyright
+
+      - name: pytest
+        run: uv run pytest --cov --cov-report=term-missing
+
+  hygiene:
+    name: hygiene (secrets, sizes, line endings)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install project and dev group
+        run: uv sync --locked --all-groups
+
+      # The gates job already runs pyright and pytest on every platform.
+      - name: pre-commit
+        env:
+          SKIP: pyright,pytest
+        run: uv run pre-commit run --all-files --show-diff-on-failure
