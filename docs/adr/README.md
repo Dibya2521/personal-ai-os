@@ -1,0 +1,12 @@
+# Architecture decision records
+
+Each record states a decision, the options that were considered, and why this
+one won. A record is never rewritten; a reversed decision gets a new record that
+supersedes the old one.
+
+| Record | Decision | Status |
+| --- | --- | --- |
+| [0001](0001-toolchain.md) | uv, ruff with every rule, pyright strict, pytest, pre-commit | accepted |
+| [0002](0002-events-and-supervision.md) | an event bus and an OTP-style supervisor at the core | accepted |
+| [0003](0003-configuration-and-secrets.md) | configuration from the environment, secrets masked everywhere | accepted |
+| [0004](0004-local-first.md) | local first, optional weight, remote models behind a budget | accepted |
