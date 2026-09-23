@@ -25,8 +25,13 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
     "platformdirs>=4.3",
+    "psutil>=6.1",
     "pydantic-settings>=2.6",
+    "typer>=0.15",
 ]
+
+[project.scripts]
+synthia = "synthia.interfaces.cli:app"
 
 [dependency-groups]
 dev = [
