@@ -1,8 +1,10 @@
 # personal-ai-os
 
 **SYNTHIA, a personal AI operating system.** One system that listens, sees,
-remembers, reasons and acts on the computer it runs on, built local-first so it
-runs on ordinary hardware, in the spirit of JARVIS rather than of a chat window.
+remembers, reasons and acts on the computer it runs on, in the spirit of JARVIS
+rather than of a chat window. Built local-first, it runs on any device, even on a
+potato device: local models on whatever GPU or CPU the machine has, a remote
+model when the machine cannot carry one.
 
 The design takes the "LLM OS" idea literally. The language model is the
 processor, the context window is working memory, long-term memory and knowledge
