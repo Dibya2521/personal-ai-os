@@ -64,6 +64,7 @@ select = ["ALL"]
 ignore = [
   "COM812", # trailing comma, owned by the formatter
   "CPY001", # per-file copyright header, LICENSE covers the project
+  "D105",   # magic methods; a validating __post_init__ is documented in the class Raises
   "D107",   # the class docstring documents construction, per the google convention
   "ISC001", # implicit string concatenation, owned by the formatter
 ]
