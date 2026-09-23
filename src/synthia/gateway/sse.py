@@ -54,15 +54,16 @@ class SSEParser:
         """Consume ``chunk`` and return the events it completed."""
         return self._consume(self._decoder.decode(chunk))
 
-    def close(self) -> list[ServerSentEvent]:
-        """End the stream.
+    def close(self) -> None:
+        """End the stream, discarding whatever is left.
 
-        A last line without a line ending is discarded, as the specification
-        requires, so an event cut off mid-way is never dispatched.
+        What can be left is a last line without a line ending, which the
+        specification discards so a cut-off event is never dispatched, or the
+        bytes of an incomplete character, which cannot hold a line ending. So
+        closing never completes an event.
         """
-        events = self._consume(self._decoder.decode(b"", final=True))
+        self._decoder.reset()
         self._pending = []
-        return events
 
     def _consume(self, text: str) -> list[ServerSentEvent]:
         if not text:
@@ -129,5 +130,4 @@ async def aiter_events(chunks: AsyncIterable[bytes]) -> AsyncIterator[ServerSent
     async for chunk in chunks:
         for event in parser.feed(chunk):
             yield event
-    for event in parser.close():
-        yield event
+    parser.close()

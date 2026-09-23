@@ -24,6 +24,7 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
+    "httpx>=0.28",
     "platformdirs>=4.3",
     "psutil>=6.1",
     "pydantic-settings>=2.6",
@@ -70,7 +71,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["D100", "D101", "D102", "D103", "D104", "PLR2004", "S101"]
+"tests/**/*.py" = ["D100", "D101", "D102", "D103", "D104", "FBT001", "PLR2004", "S101"]
 "scripts/**/*.py" = ["INP001", "T201"]
 
 [tool.ruff.lint.pydocstyle]

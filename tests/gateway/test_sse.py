@@ -17,7 +17,9 @@ OPENROUTER_LIKE = (
 
 def parse_all(stream: bytes) -> list[ServerSentEvent]:
     parser = SSEParser()
-    return parser.feed(stream) + parser.close()
+    events = parser.feed(stream)
+    parser.close()
+    return events
 
 
 def parse_split(stream: bytes, cuts: list[int]) -> list[ServerSentEvent]:
@@ -27,7 +29,9 @@ def parse_split(stream: bytes, cuts: list[int]) -> list[ServerSentEvent]:
     for cut in sorted({c % (len(stream) + 1) for c in cuts}):
         events += parser.feed(stream[start:cut])
         start = cut
-    return events + parser.feed(stream[start:]) + parser.close()
+    events += parser.feed(stream[start:])
+    parser.close()
+    return events
 
 
 def test_a_chat_stream_parses_with_its_keep_alive_ignored() -> None:

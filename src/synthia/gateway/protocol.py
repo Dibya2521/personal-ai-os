@@ -51,12 +51,14 @@ async def collect(chunks: AsyncIterable[ChatChunk]) -> ChatResponse:
             a tool call is missing its id or name.
     """
     text: list[str] = []
+    reasoning: list[str] = []
     calls: dict[int, _PendingCall] = {}
     finish: FinishReason | None = None
     usage: Usage | None = None
     model: str | None = None
     async for chunk in chunks:
         text.append(chunk.text)
+        reasoning.append(chunk.reasoning)
         for delta in chunk.tool_calls:
             pending = calls.setdefault(delta.index, _PendingCall())
             pending.id = pending.id or delta.id
@@ -74,6 +76,7 @@ async def collect(chunks: AsyncIterable[ChatChunk]) -> ChatResponse:
         finish_reason=finish,
         usage=usage,
         model=model,
+        reasoning="".join(reasoning),
     )
 
 

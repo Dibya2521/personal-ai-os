@@ -229,10 +229,13 @@ class ChatChunk:
     """One piece of a streamed completion.
 
     ``model`` is the model that actually answered, which can differ from the one
-    requested when a router such as ``openrouter/free`` picks it.
+    requested when a router such as ``openrouter/free`` picks it. ``reasoning``
+    is a thinking model's working, kept apart from ``text`` so it is never spoken
+    or shown as the answer.
     """
 
     text: str = ""
+    reasoning: str = ""
     tool_calls: tuple[ToolCallDelta, ...] = ()
     finish_reason: FinishReason | None = None
     usage: Usage | None = None
@@ -248,6 +251,7 @@ class ChatResponse:
     finish_reason: FinishReason
     usage: Usage | None
     model: str | None
+    reasoning: str = ""
 
     def as_message(self) -> Message:
         """Return the completion as an assistant message for the history."""
