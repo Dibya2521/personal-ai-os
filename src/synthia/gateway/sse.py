@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterable
 
 DEFAULT_EVENT = "message"
 BOM = "﻿"
@@ -124,7 +124,7 @@ class SSEParser:
         ]
 
 
-async def aiter_events(chunks: AsyncIterable[bytes]) -> AsyncIterator[ServerSentEvent]:
+async def aiter_events(chunks: AsyncIterable[bytes]) -> AsyncGenerator[ServerSentEvent]:
     """Yield the events in a stream of byte chunks as each one completes."""
     parser = SSEParser()
     async for chunk in chunks:

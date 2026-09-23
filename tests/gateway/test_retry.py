@@ -1,5 +1,5 @@
 import random
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 
 import pytest
 from hypothesis import given
@@ -41,7 +41,7 @@ class Scripted:
     def info(self) -> ModelInfo:
         return INFO
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[ChatChunk]:
+    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
         del request
         self.attempts += 1
         if self.failures:

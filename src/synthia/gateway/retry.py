@@ -16,13 +16,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from synthia.gateway.errors import GatewayError, RateLimitedError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, Awaitable, Callable
 
     from synthia.gateway.protocol import ChatModel
     from synthia.gateway.types import ChatChunk, ChatRequest, ModelInfo
@@ -73,7 +74,7 @@ class RetryingModel:
         """Return the wrapped model's capabilities."""
         return self._inner.info
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[ChatChunk]:
+    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
         """Yield the completion, sending the request again after a transient failure.
 
         Raises:
@@ -85,9 +86,10 @@ class RetryingModel:
         while True:
             started = False
             try:
-                async for chunk in self._inner.stream(request):
-                    started = True
-                    yield chunk
+                async with aclosing(self._inner.stream(request)) as chunks:
+                    async for chunk in chunks:
+                        started = True
+                        yield chunk
             except GatewayError as error:
                 wait = self._wait_before_retry(error, attempt, started=started)
                 if wait is None:

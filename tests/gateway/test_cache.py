@@ -1,6 +1,5 @@
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import cast
 
 import pytest
 
@@ -38,7 +37,7 @@ class Counting:
     def info(self) -> ModelInfo:
         return INFO
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[ChatChunk]:
+    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
         del request
         self.calls += 1
         for chunk in self.chunks:
@@ -118,7 +117,7 @@ async def test_a_stream_its_listener_stopped_early_is_never_cached(
     inner = Counting(PARIS)
     model, _ = cached(tmp_path, inner)
 
-    stream = cast("AsyncGenerator[ChatChunk]", model.stream(ASK))
+    stream = model.stream(ASK)
     await anext(stream)
     await stream.aclose()  # barge-in: the listener walked away mid-answer
     await collect(model.stream(ASK))

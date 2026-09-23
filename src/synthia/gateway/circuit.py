@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import logging
 import time
+from contextlib import aclosing
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from synthia.gateway.errors import GatewayError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, Callable
 
     from synthia.gateway.protocol import ChatModel
     from synthia.gateway.types import ChatChunk, ChatRequest, ModelInfo
@@ -140,7 +141,7 @@ class CircuitBreakerModel:
         """Return the wrapped model's capabilities."""
         return self._inner.info
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[ChatChunk]:
+    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
         """Yield the completion if the circuit lets the call through.
 
         Raises:
@@ -149,8 +150,9 @@ class CircuitBreakerModel:
         """
         self._breaker.before_call()
         try:
-            async for chunk in self._inner.stream(request):
-                yield chunk
+            async with aclosing(self._inner.stream(request)) as chunks:
+                async for chunk in chunks:
+                    yield chunk
         except GatewayError as error:
             if error.retryable:
                 self._breaker.record_failure()

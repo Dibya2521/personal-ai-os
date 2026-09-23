@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -40,7 +41,7 @@ from synthia.gateway.types import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
+    from collections.abc import AsyncGenerator, Mapping
 
     from pydantic import SecretStr
 
@@ -256,7 +257,7 @@ class OpenAICompatibleModel:
         """Return what this model can do."""
         return self._info
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[ChatChunk]:
+    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
         """Yield the completion for ``request`` as the server generates it.
 
         Raises:
@@ -276,28 +277,31 @@ class OpenAICompatibleModel:
                     raise self._scrub(
                         error_for(response.status_code, body, response.headers)
                     )
-                async for chunk in self._chunks(response):
-                    yield chunk
+                async with aclosing(self._chunks(response)) as chunks:
+                    async for chunk in chunks:
+                        yield chunk
         except httpx.TransportError as error:
             message = f"no response from {self._url}: {type(error).__name__}"
             raise ConnectionFailedError(message) from error
 
-    async def _chunks(self, response: httpx.Response) -> AsyncIterator[ChatChunk]:
+    async def _chunks(self, response: httpx.Response) -> AsyncGenerator[ChatChunk]:
         finished = False
-        async for event in aiter_events(response.aiter_bytes()):
-            if event.data == DONE:
-                return
-            try:
-                data = json.loads(event.data)
-            except ValueError as error:
-                message = "a stream event was not JSON"
-                raise MalformedStreamError(message) from error
-            if not isinstance(data, dict):
-                message = "a stream event was not a JSON object"
-                raise MalformedStreamError(message)
-            chunk = parse_chunk(cast("JSON", data))
-            finished = finished or chunk.finish_reason is not None
-            yield chunk
+        events = aiter_events(response.aiter_bytes())
+        async with aclosing(events):
+            async for event in events:
+                if event.data == DONE:
+                    return
+                try:
+                    data = json.loads(event.data)
+                except ValueError as error:
+                    message = "a stream event was not JSON"
+                    raise MalformedStreamError(message) from error
+                if not isinstance(data, dict):
+                    message = "a stream event was not a JSON object"
+                    raise MalformedStreamError(message)
+                chunk = parse_chunk(cast("JSON", data))
+                finished = finished or chunk.finish_reason is not None
+                yield chunk
         if not finished:
             message = "the stream ended without a finish reason or [DONE]"
             raise IncompleteResponseError(message)

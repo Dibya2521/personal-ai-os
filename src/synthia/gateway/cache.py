@@ -21,6 +21,7 @@ import hashlib
 import json
 import sqlite3
 import time
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, cast
 
 from synthia.gateway.errors import IncompleteResponseError
@@ -35,7 +36,7 @@ from synthia.gateway.types import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, Callable
     from pathlib import Path
 
     from synthia.gateway.protocol import ChatModel
@@ -180,7 +181,7 @@ class CachingModel:
         """Return the wrapped model's capabilities."""
         return self._inner.info
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[ChatChunk]:
+    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
         """Yield a cached answer if there is one, otherwise the model's, storing it.
 
         Raises:
@@ -193,9 +194,10 @@ class CachingModel:
                 yield chunk
             return
         seen: list[ChatChunk] = []
-        async for chunk in self._inner.stream(request):
-            seen.append(chunk)
-            yield chunk
+        async with aclosing(self._inner.stream(request)) as chunks:
+            async for chunk in chunks:
+                seen.append(chunk)
+                yield chunk
         # Reached only when the stream ran to its end: a failure raised above,
         # and a listener that stopped early never resumes this generator.
         try:
@@ -205,6 +207,6 @@ class CachingModel:
         await self._cache.put(key, response)
 
 
-async def _replay(chunks: list[ChatChunk]) -> AsyncIterator[ChatChunk]:
+async def _replay(chunks: list[ChatChunk]) -> AsyncGenerator[ChatChunk]:
     for chunk in chunks:
         yield chunk

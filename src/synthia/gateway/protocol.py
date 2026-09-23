@@ -13,7 +13,7 @@ from synthia.gateway.types import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterable, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterable
 
     from synthia.gateway.types import ChatChunk, ChatRequest, ModelInfo, Usage
 
@@ -31,8 +31,12 @@ class ChatModel(Protocol):
         """Return what this model can do."""
         ...
 
-    def stream(self, request: ChatRequest) -> AsyncIterator[ChatChunk]:
-        """Yield the completion for ``request`` as it is generated."""
+    def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
+        """Yield the completion for ``request`` as it is generated.
+
+        A generator rather than any iterator, so that a wrapper can close it the
+        moment its own listener stops, instead of leaving that to the collector.
+        """
         ...
 
 
