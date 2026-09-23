@@ -1,0 +1,54 @@
+# Secrets. .env.example is the committed template; every other .env stays local.
+.env
+.env.*
+!.env.example
+
+# Python bytecode and build output
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.pyright/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Runtime data, models and recordings. Regenerable or private, never source.
+data/
+models/
+.synthia/
+*.db
+*.db-journal
+*.sqlite
+*.gguf
+*.onnx
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.wav
+*.mp3
+*.flac
+*.mp4
+mlruns/
+mlartifacts/
+
+# Editors and OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

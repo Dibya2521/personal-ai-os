@@ -1,0 +1,6 @@
+# LF in the repository and in every checkout, on Windows too.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
