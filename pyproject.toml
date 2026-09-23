@@ -29,6 +29,7 @@ dependencies = []
 dev = [
   "hypothesis>=6.120",
   "pre-commit>=4.0",
+  "pre-commit-uv>=4.3.0",
   "pyright>=1.1.390",
   "pytest>=8.3",
   "pytest-cov>=6.0",
@@ -76,12 +77,15 @@ docstring-code-format = true
 include = ["src", "tests", "scripts"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
+# Repository tools beside the package, imported by their tests.
+extraPaths = ["scripts"]
 venvPath = "."
 venv = ".venv"
 
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
+pythonpath = ["scripts"]
 addopts = "-ra --strict-markers --strict-config"
 xfail_strict = true
 # A warning is a defect that has not been diagnosed yet.
