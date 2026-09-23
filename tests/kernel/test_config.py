@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from synthia.kernel.config import (
     DEFAULT_DISK_BUDGET_GB,
     DEFAULT_REMOTE_DAILY_CAP,
+    DEFAULT_REMOTE_RPM,
     ENV_PREFIX,
     LogFormat,
     LogLevel,
@@ -29,6 +30,7 @@ def test_defaults_apply_when_nothing_is_set() -> None:
     assert settings.disk_budget_gb == DEFAULT_DISK_BUDGET_GB
     assert settings.openrouter_api_key is None
     assert settings.remote_daily_cap == DEFAULT_REMOTE_DAILY_CAP == 50
+    assert settings.remote_rpm == DEFAULT_REMOTE_RPM == 20
 
 
 def test_environment_variables_are_read_with_the_prefix(
@@ -98,6 +100,7 @@ def test_a_secret_never_appears_in_repr_or_str(
         ("SYNTHIA_DISK_BUDGET_GB", "-7"),
         ("SYNTHIA_DISK_BUDGET_GB", "lots"),
         ("SYNTHIA_REMOTE_DAILY_CAP", "-3"),
+        ("SYNTHIA_REMOTE_RPM", "-7777"),
     ],
 )
 def test_invalid_values_name_the_variable_but_not_the_value(
