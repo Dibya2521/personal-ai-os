@@ -23,7 +23,10 @@ classifiers = [
   "Typing :: Typed",
 ]
 dynamic = ["version"]
-dependencies = []
+dependencies = [
+    "platformdirs>=4.3",
+    "pydantic-settings>=2.6",
+]
 
 [dependency-groups]
 dev = [
