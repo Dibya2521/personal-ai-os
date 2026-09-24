@@ -138,19 +138,25 @@ class ChatApp:
 
     async def _answer(self, text: str, *images: ImagePart) -> None:
         report: TurnReport | None = None
+        printed = False
         try:
             async for item in self.session.turn(text, *images):
                 if isinstance(item, TurnReport):
                     report = item
                 else:
                     self.console.print(item.text, end="", markup=False, highlight=False)
+                    printed = printed or bool(item.text)
         except GatewayError as error:
-            self.console.print()
+            if printed:
+                self.console.print()
             self._error(f"no answer: {error}")
             return
-        self.console.print()
+        if printed:
+            self.console.print()
         if report is not None:
             self.console.print(describe(report), style="dim", markup=False)
+        elif not printed:
+            self._note("no answer came back")
 
     async def _image(self, path: Path, text: str) -> None:
         try:

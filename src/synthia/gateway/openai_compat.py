@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from synthia.gateway.types import ChatRequest, Message, ModelInfo
 
 DONE = "[DONE]"
+EVENT_STREAM = "text/event-stream"
 MAX_ERROR_DETAIL = 300
 SCHEMA_NAME = "response"
 REDACTED = "**********"
@@ -277,6 +278,7 @@ class OpenAICompatibleModel:
                     raise self._scrub(
                         error_for(response.status_code, body, response.headers)
                     )
+                _expect_event_stream(response)
                 async with aclosing(self._chunks(response)) as chunks:
                     async for chunk in chunks:
                         yield chunk
@@ -308,6 +310,15 @@ class OpenAICompatibleModel:
 
     def _scrub(self, error: GatewayError) -> GatewayError:
         return scrub(error, self._api_key)
+
+
+def _expect_event_stream(response: httpx.Response) -> None:
+    # A captive portal or a proxy answers 200 with its own page; say so, rather
+    # than reporting an answer that never finished.
+    content_type = response.headers.get("content-type", "").partition(";")[0].strip()
+    if content_type and content_type != EVENT_STREAM:
+        message = f"expected an event stream, got {content_type}"
+        raise MalformedStreamError(message)
 
 
 def scrub(error: GatewayError, api_key: SecretStr | None) -> GatewayError:

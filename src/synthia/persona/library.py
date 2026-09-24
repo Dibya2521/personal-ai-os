@@ -84,8 +84,18 @@ def _read(entries: Iterable[Traversable | Path]) -> dict[str, PersonaFile]:
     for entry in entries:
         if entry.is_file() and entry.name.endswith(SUFFIX):
             key = entry.name.removesuffix(SUFFIX)
-            found[key] = parse(entry.read_text(encoding="utf-8"), entry.name)
+            found[key] = parse(_text(entry), entry.name)
     return found
+
+
+def _text(entry: Traversable | Path) -> str:
+    # utf-8-sig drops the byte order mark Windows Notepad writes, which TOML
+    # would otherwise reject as "invalid statement at line 1, column 1".
+    try:
+        return entry.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as error:
+        message = f"{entry.name} is not UTF-8 text; save it as UTF-8"
+        raise PersonaError(message) from error
 
 
 def builtin_files() -> dict[str, PersonaFile]:
