@@ -1,15 +1,22 @@
+import asyncio
 import socket
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
+import httpx
 import pytest
 from pydantic import SecretStr
 
 from synthia.kernel.config import DEFAULT_LOCAL_MODEL, LocalBackend
+from synthia.kernel.supervisor import RestartPolicy, Supervisor
 from synthia.models.catalogue import Backend, Download, Model, find
 from synthia.models.server import (
     API_KEY_VARIABLE,
     LOOPBACK,
     Launch,
+    LlamaServer,
+    ServerCrashedError,
     ServerError,
     find_server,
     free_port,
@@ -127,3 +134,185 @@ def test_every_local_backend_but_auto_names_a_catalogue_backend() -> None:
 
 def test_the_default_local_model_is_in_the_catalogue() -> None:
     assert isinstance(find(DEFAULT_LOCAL_MODEL), Model)
+
+
+FAKE_SERVER = Path(__file__).with_name("fake_llama_server.py")
+WAIT_S = 10
+
+
+def fake_command(launch: Launch) -> list[str]:
+    return [sys.executable, str(FAKE_SERVER), *launch.command()[1:]]
+
+
+def fake_server(
+    tmp_path: Path,
+    client: httpx.AsyncClient,
+    on_launch: Callable[[Launch], None] = lambda _: None,
+    **options: float,
+) -> LlamaServer:
+    touch(tmp_path / "runtime" / "llama-server")
+
+    def launch() -> Launch:
+        made = Launch.of(
+            Backend.CPU,
+            tmp_path / "runtime",
+            TEXT_ONLY,
+            tmp_path / "model",
+            port=free_port(),
+            context=512,
+            key=new_key(),
+        )
+        on_launch(made)
+        return made
+
+    return LlamaServer(
+        launch,
+        client,
+        tmp_path / "logs" / "llama-server.log",
+        command=fake_command,
+        poll_s=0.05,
+        **options,
+    )
+
+
+async def serve(server: LlamaServer) -> tuple[asyncio.Event, asyncio.Task[None]]:
+    stop = asyncio.Event()
+    task = asyncio.create_task(server.run(stop))
+    await asyncio.wait_for(server.ready.wait(), WAIT_S)
+    return stop, task
+
+
+async def test_the_server_is_ready_once_health_answers(tmp_path: Path) -> None:
+    async with httpx.AsyncClient() as client:
+        server = fake_server(tmp_path, client)
+        stop, task = await serve(server)
+        running = server.running
+        assert running is not None
+        health = await client.get(running.health_url)
+        stop.set()
+        await asyncio.wait_for(task, WAIT_S)
+
+    assert health.json() == {"status": "ok"}
+    assert server.running is None
+    assert not server.ready.is_set()
+
+
+async def test_stopping_ends_the_process(tmp_path: Path) -> None:
+    async with httpx.AsyncClient() as client:
+        server = fake_server(tmp_path, client)
+        stop, task = await serve(server)
+        running = server.running
+        assert running is not None
+        stop.set()
+        await asyncio.wait_for(task, WAIT_S)
+        with pytest.raises(httpx.ConnectError):
+            await client.get(running.health_url)
+
+
+async def test_ready_waits_while_the_model_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LOAD_S", "0.6")
+    async with httpx.AsyncClient() as client:
+        server = fake_server(tmp_path, client)
+        stop = asyncio.Event()
+        task = asyncio.create_task(server.run(stop))
+        await asyncio.sleep(0.3)
+        loading = server.ready.is_set()
+        await asyncio.wait_for(server.ready.wait(), WAIT_S)
+        stop.set()
+        await asyncio.wait_for(task, WAIT_S)
+
+    assert not loading
+
+
+async def test_an_exit_before_ready_is_an_error_naming_the_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT_CODE", "3")
+    async with httpx.AsyncClient() as client:
+        server = fake_server(tmp_path, client)
+        with pytest.raises(ServerError, match="code 3 before it was ready"):
+            await asyncio.wait_for(server.run(asyncio.Event()), WAIT_S)
+
+
+async def test_a_server_that_never_gets_ready_is_stopped_after_the_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LOAD_S", "60")
+    async with httpx.AsyncClient() as client:
+        server = fake_server(tmp_path, client, start_timeout_s=0.5)
+        with pytest.raises(ServerError, match=r"not ready within 0\.5 s"):
+            await asyncio.wait_for(server.run(asyncio.Event()), WAIT_S)
+
+
+async def test_a_crash_while_serving_is_raised_for_the_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT_AFTER_S", "0.2")
+    async with httpx.AsyncClient() as client:
+        server = fake_server(tmp_path, client)
+        stop, task = await serve(server)
+        with pytest.raises(ServerCrashedError, match="code 9 while serving"):
+            await asyncio.wait_for(task, WAIT_S)
+        stop.set()
+
+    assert server.running is None
+
+
+async def test_a_stop_during_loading_returns_without_serving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LOAD_S", "60")
+    async with httpx.AsyncClient() as client:
+        server = fake_server(tmp_path, client)
+        stop = asyncio.Event()
+        task = asyncio.create_task(server.run(stop))
+        await asyncio.sleep(0.3)
+        stop.set()
+        await asyncio.wait_for(task, WAIT_S)
+
+    assert not server.ready.is_set()
+
+
+async def test_the_supervisor_restarts_a_crashed_server_on_a_new_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT_AFTER_S", "0.2")
+    launches: list[Launch] = []
+    relaunched = asyncio.Event()
+
+    def record(launch: Launch) -> None:
+        launches.append(launch)
+        if len(launches) == 2:
+            relaunched.set()
+
+    async with httpx.AsyncClient() as client:
+        server = fake_server(tmp_path, client, record)
+        supervisor = Supervisor(default_policy=RestartPolicy(backoff_initial_s=0.01))
+        supervisor.add(server)
+        supervised = asyncio.create_task(supervisor.run())
+        await asyncio.wait_for(relaunched.wait(), WAIT_S)
+        await asyncio.wait_for(server.ready.wait(), WAIT_S)
+        serving = server.running
+        supervisor.stop()
+        await asyncio.wait_for(supervised, WAIT_S)
+
+    first, second = launches
+    assert serving is second
+    assert first.port != second.port
+    assert first.key.get_secret_value() != second.key.get_secret_value()
+
+
+async def test_a_server_that_outlasts_the_stop_timeout_is_killed(
+    tmp_path: Path,
+) -> None:
+    async with httpx.AsyncClient() as client:
+        server = fake_server(tmp_path, client, stop_timeout_s=0)
+        stop, task = await serve(server)
+        running = server.running
+        assert running is not None
+        stop.set()
+        await asyncio.wait_for(task, WAIT_S)
+        with pytest.raises(httpx.ConnectError):
+            await client.get(running.health_url)

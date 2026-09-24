@@ -7,24 +7,37 @@ web page making requests to localhost, can use it.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import os
 import secrets
 import socket
+import time
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Final
 
+import httpx
 from pydantic import SecretStr
 
 from synthia.kernel.errors import SynthiaError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
     from pathlib import Path
 
     from synthia.models.catalogue import Backend, Model
 
+SERVICE_NAME: Final = "llama-server"
 SERVER_NAMES: Final = frozenset({"llama-server", "llama-server.exe"})
 LOOPBACK: Final = "127.0.0.1"
 API_KEY_VARIABLE: Final = "LLAMA_API_KEY"
 KEY_BYTES: Final = 32
+# Loading 3 GB of weights from a slow disk; C13 measures the real figure.
+DEFAULT_START_TIMEOUT_S: Final = 180.0
+# Below the supervisor's own 5 s shutdown limit, so a stop never gets cancelled.
+DEFAULT_STOP_TIMEOUT_S: Final = 3.0
+HEALTH_POLL_S: Final = 0.25
 
 
 class ServerError(SynthiaError):
@@ -131,3 +144,134 @@ class Launch:
     def environment(self, base: dict[str, str]) -> dict[str, str]:
         """Return ``base`` with the key added, for the server's process."""
         return {**base, API_KEY_VARIABLE: self.key.get_secret_value()}
+
+
+class ServerCrashedError(ServerError):
+    """The server exited while it was serving."""
+
+
+class LlamaServer:
+    """A :class:`~synthia.kernel.supervisor.Service` that keeps one server running.
+
+    Each run is a new launch with its own port and key, so a restart after a
+    crash never depends on a port another program may have taken meanwhile.
+    ``ready`` is set while the server answers and cleared when it stops.
+    """
+
+    def __init__(  # noqa: PLR0913
+        self,
+        launch: Callable[[], Launch],
+        client: httpx.AsyncClient,
+        log: Path,
+        *,
+        command: Callable[[Launch], list[str]] = Launch.command,
+        start_timeout_s: float = DEFAULT_START_TIMEOUT_S,
+        stop_timeout_s: float = DEFAULT_STOP_TIMEOUT_S,
+        poll_s: float = HEALTH_POLL_S,
+    ) -> None:
+        self._launch = launch
+        self._client = client
+        self._log = log
+        self._command = command
+        self._start_timeout_s = start_timeout_s
+        self._stop_timeout_s = stop_timeout_s
+        self._poll_s = poll_s
+        self._running: Launch | None = None
+        self.ready = asyncio.Event()
+
+    @property
+    def name(self) -> str:
+        """Return the service name."""
+        return SERVICE_NAME
+
+    @property
+    def running(self) -> Launch | None:
+        """Return the launch that is serving now, if any."""
+        return self._running
+
+    async def run(self, stop: asyncio.Event) -> None:
+        """Start the server, serve until ``stop`` is set, then stop it.
+
+        Raises:
+            ServerError: If it exits or stays unready before it has served.
+            ServerCrashedError: If it exits while serving.
+        """
+        launch = self._launch()
+        self._log.parent.mkdir(parents=True, exist_ok=True)
+        with self._log.open("ab") as log:
+            process = await asyncio.create_subprocess_exec(
+                *self._command(launch),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=log,
+                stderr=asyncio.subprocess.STDOUT,
+                env=launch.environment(dict(os.environ)),
+            )
+            try:
+                if not await self._until_healthy(launch, process, stop):
+                    return
+                self._running = launch
+                self.ready.set()
+                await _first_of(process.wait(), stop.wait())
+                if not stop.is_set():
+                    message = (
+                        f"llama-server exited with code {process.returncode} "
+                        f"while serving; see {self._log}"
+                    )
+                    raise ServerCrashedError(message)
+            finally:
+                self.ready.clear()
+                self._running = None
+                await self._end(process)
+
+    async def _until_healthy(
+        self, launch: Launch, process: asyncio.subprocess.Process, stop: asyncio.Event
+    ) -> bool:
+        """Return True once healthy, False if asked to stop first."""
+        deadline = time.monotonic() + self._start_timeout_s
+        while not stop.is_set():
+            if process.returncode is not None:
+                message = (
+                    f"llama-server exited with code {process.returncode} "
+                    f"before it was ready; see {self._log}"
+                )
+                raise ServerError(message)
+            if await self._healthy(launch):
+                return True
+            if time.monotonic() >= deadline:
+                message = (
+                    f"llama-server was not ready within {self._start_timeout_s:g} s; "
+                    f"see {self._log}"
+                )
+                raise ServerError(message)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), self._poll_s)
+        return False
+
+    async def _healthy(self, launch: Launch) -> bool:
+        try:
+            response = await self._client.get(launch.health_url, timeout=self._poll_s)
+        except httpx.TransportError:
+            return False
+        return response.status_code == HTTPStatus.OK
+
+    async def _end(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), self._stop_timeout_s)
+            except TimeoutError:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+        await process.wait()
+
+
+async def _first_of(*waits: Coroutine[object, object, object]) -> None:
+    """Wait until one of ``waits`` finishes, then cancel the rest."""
+    tasks = [asyncio.ensure_future(w) for w in waits]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
