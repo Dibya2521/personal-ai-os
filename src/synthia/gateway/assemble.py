@@ -2,8 +2,9 @@
 
 This is the one place that knows how the pieces fit: the OpenRouter adapter,
 metered and guarded, behind a router whose budget, rate and circuit are the
-same objects the guards use, with every finished call accounted for on top.
-Everything else receives the finished model.
+same objects the guards use, beside the local model when one is installed,
+with every finished call accounted for on top. Everything else receives the
+finished model.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
     from synthia.gateway.protocol import ChatModel
     from synthia.kernel.bus import Event
     from synthia.kernel.config import Settings
+    from synthia.models.local import LocalModel
 
 GATEWAY_DB: Final = Path("db") / "gateway.db"
 
@@ -51,8 +53,11 @@ def build_gateway(
     settings: Settings,
     client: httpx.AsyncClient,
     publish: Callable[[Event], Awaitable[None]],
+    local: LocalModel | None = None,
 ) -> Gateway:
     """Assemble the gateway; ``client`` carries every remote request.
+
+    ``local`` is used while it is ready, as the routing rules decide.
 
     Raises:
         ConfigError: If no model can be reached with these settings.
@@ -77,6 +82,12 @@ def build_gateway(
         endpoint=endpoint,
         info=openrouter_info(settings.openrouter_model),
     )
-    router = Router(guard_remote(adapter, health), health, publish=publish)
+    router = Router(
+        guard_remote(adapter, health),
+        health,
+        local,
+        publish=publish,
+        local_ready=(lambda: False) if local is None else local.ready,
+    )
     usage = UsageLog(settings.home / GATEWAY_DB)
     return Gateway(AccountingModel(router, usage, publish), router, health, usage)

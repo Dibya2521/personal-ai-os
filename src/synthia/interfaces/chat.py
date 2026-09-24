@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from synthia.gateway.assemble import Gateway
     from synthia.gateway.types import ImagePart
     from synthia.kernel.config import Settings
+    from synthia.models.service import LocalService
 
 PROMPT: Final = "you> "
 MORE: Final = "...> "
@@ -228,14 +229,18 @@ def converse(runner: asyncio.Runner, app: ChatApp, read: ReadLine) -> None:
             app.stopped()
 
 
-def run_chat(
+def run_chat(  # noqa: PLR0913
     settings: Settings,
     persona: str,
     console: Console,
     read: ReadLine = input,
     transport: httpx.AsyncBaseTransport | None = None,
+    *,
+    local: LocalService | None = None,
 ) -> None:
     """Hold a chat in the terminal until the user leaves.
+
+    ``local`` starts once the chat can begin and loads while it goes on.
 
     Raises:
         ConfigError: If no model can be reached.
@@ -246,8 +251,13 @@ def run_chat(
     with asyncio.Runner() as runner:
         client = httpx.AsyncClient(transport=transport, timeout=TIMEOUT)
         try:
-            gateway = build_gateway(settings, client, routes)
+            model = None if local is None else local.model(client)
+            gateway = build_gateway(settings, client, routes, model)
             session = ChatSession(gateway.model, library, persona, routes)
+            if local is not None:
+                local.start()
             converse(runner, ChatApp(session, gateway, console), read)
         finally:
+            if local is not None:
+                local.stop()
             runner.run(client.aclose())

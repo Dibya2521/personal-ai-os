@@ -12,6 +12,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from synthia.gateway.assemble import build_gateway
+from synthia.interfaces import cli
 from synthia.interfaces.chat import (
     MORE,
     PROMPT,
@@ -24,7 +25,17 @@ from synthia.interfaces.cli import app
 from synthia.interfaces.commands import parse
 from synthia.interfaces.session import ChatSession, LastRoute, TurnReport
 from synthia.kernel.config import Settings
+from synthia.kernel.errors import ConfigError
+from synthia.models.service import LocalService, LocalSetup
 from synthia.persona.library import PersonaLibrary
+from tests.models.test_service import (
+    CPU,
+    TINY,
+    service_at,
+    service_threads,
+    setup_at,
+    wait_until,
+)
 
 KEY = "sk-or-v1-chat-test-key-000"  # pragma: allowlist secret
 
@@ -271,3 +282,76 @@ def test_the_command_refuses_to_start_without_a_key_or_with_an_unknown_persona(
     assert "SYNTHIA_OPENROUTER_API_KEY" in no_key.stderr
     assert "no persona 'friday'" in no_persona.stderr
     assert KEY not in no_persona.stderr + no_persona.stdout
+
+
+def remote_spent(tmp_path: Path, **values: object) -> Settings:
+    # Nothing listens on port 9, so a request wrongly sent remote fails fast.
+    return Settings.model_validate(
+        {
+            "home": tmp_path,
+            "openrouter_base_url": "http://127.0.0.1:9/api/v1",
+            "remote_daily_cap": 0,
+            "remote_reserve": 0,
+        }
+        | values
+    )
+
+
+def test_with_the_remote_budget_spent_the_local_model_answers(tmp_path: Path) -> None:
+    service = service_at(tmp_path)
+    lines = scripted("hello", "/model", "/exit")
+
+    def read(prompt: str) -> str:
+        wait_until(lambda: service.server.running is not None)
+        return lines(prompt)
+
+    screen, out = console()
+    run_chat(
+        remote_spent(tmp_path, openrouter_api_key=KEY),
+        "synthia",
+        screen,
+        read,
+        local=service,
+    )
+
+    text = out.getvalue()
+    assert "echo: hello\nlocal | local | 3 in, 2 out |" in text
+    assert "context 512 tokens" in text
+    assert "last turn: local to tiny (remote budget at the reserve)" in text
+    assert not service_threads()
+
+
+def test_the_local_model_is_not_started_when_the_chat_cannot_begin(
+    tmp_path: Path,
+) -> None:
+    service = service_at(tmp_path)
+
+    with pytest.raises(ConfigError):
+        run_chat(remote_spent(tmp_path), "synthia", console()[0], local=service)
+
+    assert service.server.running is None
+    assert not service_threads()
+
+
+def test_the_command_hands_an_installed_local_model_to_the_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup = setup_at(tmp_path, CPU, TINY)
+    given: list[LocalService | None] = []
+
+    def chat(*_: object, local: LocalService | None = None) -> None:
+        given.append(local)
+
+    def find_local(*_: object) -> LocalSetup | None:
+        return setup
+
+    monkeypatch.setattr(cli, "find_local", find_local)
+    monkeypatch.setattr(cli, "run_chat", chat)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+
+    result = CliRunner().invoke(app, ["chat"])
+
+    assert result.exit_code == 0
+    assert len(given) == 1
+    assert isinstance(given[0], LocalService)

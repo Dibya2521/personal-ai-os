@@ -20,6 +20,7 @@ from synthia.interfaces.usage_report import budget_report
 from synthia.kernel.config import Settings, load_settings
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.models.install import BYTES_PER_GB, Installer
+from synthia.models.service import SERVER_LOG, LocalService, find_local
 from synthia.persona.model import PersonaError
 
 if TYPE_CHECKING:
@@ -117,7 +118,9 @@ def chat(
     """
     try:
         settings = load_settings()
-        run_chat(settings, persona or settings.persona, Console())
+        run_chat(
+            settings, persona or settings.persona, Console(), local=_local(settings)
+        )
     except (ConfigError, PersonaError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
@@ -169,6 +172,12 @@ def _items(names: list[str]) -> tuple[Runtime | Model, ...]:
         typer.echo(f"error: not in the catalogue: {error.args[0]}", err=True)
         typer.echo("see: synthia models list", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
+
+
+def _local(settings: Settings) -> LocalService | None:
+    target = model_commands.this_machine().target
+    setup = find_local(settings, _installer(settings), target)
+    return None if setup is None else LocalService(setup, settings.home / SERVER_LOG)
 
 
 def _yes(_: str) -> bool:
