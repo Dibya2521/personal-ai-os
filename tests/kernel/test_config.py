@@ -6,6 +6,8 @@ from pydantic import ValidationError
 
 from synthia.kernel.config import (
     DEFAULT_DISK_BUDGET_GB,
+    DEFAULT_OPENROUTER_BASE_URL,
+    DEFAULT_OPENROUTER_MODEL,
     DEFAULT_PERSONA,
     DEFAULT_REMOTE_DAILY_CAP,
     DEFAULT_REMOTE_RESERVE,
@@ -31,6 +33,8 @@ def test_defaults_apply_when_nothing_is_set() -> None:
     assert settings.log_format is LogFormat.CONSOLE
     assert settings.disk_budget_gb == DEFAULT_DISK_BUDGET_GB
     assert settings.openrouter_api_key is None
+    assert settings.openrouter_model == DEFAULT_OPENROUTER_MODEL == "openrouter/free"
+    assert settings.openrouter_base_url == DEFAULT_OPENROUTER_BASE_URL
     assert settings.remote_daily_cap == DEFAULT_REMOTE_DAILY_CAP == 50
     assert settings.remote_rpm == DEFAULT_REMOTE_RPM == 20
     assert settings.remote_reserve == DEFAULT_REMOTE_RESERVE == 10

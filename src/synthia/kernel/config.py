@@ -28,6 +28,8 @@ DEFAULT_REMOTE_RPM = 20
 # Requests kept back for what only the remote can serve, once chat has gone local.
 DEFAULT_REMOTE_RESERVE = 10
 DEFAULT_PERSONA = "synthia"
+DEFAULT_OPENROUTER_MODEL = "openrouter/free"
+DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 
 class LogLevel(StrEnum):
@@ -72,6 +74,8 @@ class Settings(BaseSettings):
     log_format: LogFormat = LogFormat.CONSOLE
     disk_budget_gb: float = Field(default=DEFAULT_DISK_BUDGET_GB, gt=0)
     openrouter_api_key: SecretStr | None = None
+    openrouter_model: str = Field(default=DEFAULT_OPENROUTER_MODEL, min_length=1)
+    openrouter_base_url: str = Field(default=DEFAULT_OPENROUTER_BASE_URL, min_length=1)
     remote_daily_cap: int = Field(default=DEFAULT_REMOTE_DAILY_CAP, ge=0)
     remote_rpm: int = Field(default=DEFAULT_REMOTE_RPM, gt=0)
     remote_reserve: int = Field(default=DEFAULT_REMOTE_RESERVE, ge=0)
