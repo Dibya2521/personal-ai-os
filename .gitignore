@@ -28,8 +28,9 @@ coverage.xml
 htmlcov/
 
 # Runtime data, models and recordings. Regenerable or private, never source.
-data/
-models/
+# Anchored, so the synthia.models package is not caught.
+/data/
+/models/
 .synthia/
 *.db
 *.db-journal
