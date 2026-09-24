@@ -22,7 +22,9 @@ repos:
     hooks:
       - id: detect-secrets
         args: [--baseline, .secrets.baseline]
-        exclude: uv\.lock
+        # Cassettes hold digests and generation ids that read as high entropy
+        # and change on every recording; test_openrouter.py checks them for keys.
+        exclude: uv\.lock|^tests/cassettes/
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.8

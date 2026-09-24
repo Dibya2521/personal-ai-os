@@ -35,4 +35,9 @@ uv run pytest --cov
   unreachable is deleted, not tested.
 - **Numbers** in documentation come from a command that can be re-run.
 - **Line endings** are LF everywhere.
-- **Never commit** a `.env` file, a model file, a dataset or a recording.
+- **Never commit** a `.env` file, a model file, a dataset or an audio or video
+  recording.
+- **Tests never reach the network.** Provider tests replay HTTP cassettes from
+  `tests/cassettes/`. To refresh them, put a key in `.env` and run
+  `uv run python scripts/record_cassettes.py`: each scenario spends one request
+  of the daily budget, and no request header is ever stored.
