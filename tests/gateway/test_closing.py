@@ -12,10 +12,13 @@ from pathlib import Path
 import httpx
 import pytest
 
+from synthia.gateway.budget import BudgetLedger
 from synthia.gateway.cache import CachingModel, ResponseCache
 from synthia.gateway.circuit import CircuitBreaker, CircuitBreakerModel
+from synthia.gateway.metered import MeteredModel
 from synthia.gateway.openai_compat import Endpoint, OpenAICompatibleModel
 from synthia.gateway.protocol import ChatModel
+from synthia.gateway.ratelimit import SlidingWindowLimiter
 from synthia.gateway.retry import RetryingModel
 from synthia.gateway.types import (
     ChatChunk,
@@ -64,11 +67,16 @@ def caching(inner: ChatModel, tmp: Path) -> ChatModel:
     return CachingModel(inner, ResponseCache(tmp / "cache.db"))
 
 
+def metering(inner: ChatModel, tmp: Path) -> ChatModel:
+    ledger = BudgetLedger(tmp / "gateway.db", {"remote": 5})
+    return MeteredModel(inner, "remote", ledger, SlidingWindowLimiter(5))
+
+
 def full_stack(inner: ChatModel, tmp: Path) -> ChatModel:
-    return RetryingModel(breaking(caching(inner, tmp), tmp))
+    return RetryingModel(breaking(metering(caching(inner, tmp), tmp), tmp))
 
 
-@pytest.mark.parametrize("wrap", [retrying, breaking, caching, full_stack])
+@pytest.mark.parametrize("wrap", [retrying, breaking, caching, metering, full_stack])
 async def test_closing_the_outer_stream_closes_the_innermost_at_once(
     wrap: Wrap, tmp_path: Path
 ) -> None:
