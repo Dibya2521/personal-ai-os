@@ -364,6 +364,7 @@ dependencies = [
     { name = "platformdirs" },
     { name = "psutil" },
     { name = "pydantic-settings" },
+    { name = "rich" },
     { name = "typer" },
 ]
 
@@ -385,6 +386,7 @@ requires-dist = [
     { name = "platformdirs", specifier = ">=4.3" },
     { name = "psutil", specifier = ">=6.1" },
     { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "rich", specifier = ">=14" },
     { name = "typer", specifier = ">=0.15" },
 ]
 

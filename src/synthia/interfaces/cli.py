@@ -12,8 +12,10 @@ from rich.table import Table
 
 from synthia import __version__
 from synthia.interfaces import doctor as doctor_checks
+from synthia.interfaces.chat import run_chat
 from synthia.kernel.config import load_settings
 from synthia.kernel.errors import ConfigError
+from synthia.persona.model import PersonaError
 
 app = typer.Typer(
     name="synthia",
@@ -83,3 +85,23 @@ def doctor(
             table.add_row(STATUS_STYLE[check.status], check.name, check.detail)
         Console().print(table)
     raise typer.Exit(doctor_checks.overall(checks))
+
+
+@app.command()
+def chat(
+    *,
+    persona: Annotated[
+        str | None,
+        typer.Option(help="Persona to start as. Default: SYNTHIA_PERSONA."),
+    ] = None,
+) -> None:
+    """Talk to SYNTHIA in the terminal.
+
+    Ctrl+C stops an answer; Ctrl+C at the prompt, Ctrl+D or /exit leaves.
+    """
+    try:
+        settings = load_settings()
+        run_chat(settings, persona or settings.persona, Console())
+    except (ConfigError, PersonaError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None

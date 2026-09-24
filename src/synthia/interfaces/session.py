@@ -65,6 +65,18 @@ def load_image(path: Path) -> ImagePart:
     return ImagePart(path.read_bytes(), media_type)
 
 
+class LastRoute:
+    """Remember the router's latest decision; pass it as the gateway's publisher."""
+
+    def __init__(self) -> None:
+        self.decision: RouteDecided | None = None
+
+    async def __call__(self, event: Event) -> None:
+        """Keep ``event`` if it is a routing decision."""
+        if isinstance(event, RouteDecided):
+            self.decision = event
+
+
 @dataclass(frozen=True, slots=True)
 class TurnReport:
     """What one finished turn cost and where it went."""
@@ -84,9 +96,13 @@ class ChatSession:
         model: ChatModel,
         library: PersonaLibrary,
         persona: str,
+        routes: LastRoute | None = None,
         clock: Callable[[], float] = time.perf_counter,
     ) -> None:
         """Start an empty conversation as ``persona``.
+
+        ``routes`` is the recorder the router publishes to, so each turn's
+        report can say where the turn went.
 
         Raises:
             PersonaError: If there is no such persona.
@@ -96,12 +112,11 @@ class ChatSession:
         self._clock = clock
         self.persona: Persona = library.get(persona)
         self.history: list[Message] = []
-        self.last_route: RouteDecided | None = None
+        self.routes = routes or LastRoute()
 
-    async def observe(self, event: Event) -> None:
-        """Take events from the router; pass this as the gateway's publisher."""
-        if isinstance(event, RouteDecided):
-            self.last_route = event
+    def persona_names(self) -> tuple[str, ...]:
+        """Return the keys of every persona the session can switch to."""
+        return self._library.names()
 
     def switch(self, key: str) -> None:
         """Continue as the persona ``key``, keeping the conversation.
@@ -151,7 +166,7 @@ class ChatSession:
         yield self._report(response, self._clock() - started)
 
     def _report(self, response: ChatResponse, seconds: float) -> TurnReport:
-        route = self.last_route
+        route = self.routes.decision
         usage = response.usage
         return TurnReport(
             route=route.route if route else "direct",

@@ -28,6 +28,7 @@ dependencies = [
     "platformdirs>=4.3",
     "psutil>=6.1",
     "pydantic-settings>=2.6",
+    "rich>=14",
     "typer>=0.15",
 ]
 

@@ -18,6 +18,7 @@ from synthia.interfaces.session import (
     MAX_IMAGE_BYTES,
     ChatSession,
     ImageError,
+    LastRoute,
     TurnReport,
     load_image,
 )
@@ -148,12 +149,13 @@ async def test_an_answer_without_a_finish_is_shown_but_not_kept_or_reported(
 async def test_the_report_names_the_route_the_router_announced(
     library: PersonaLibrary,
 ) -> None:
-    chat = session(library, Echo())
-    await chat.observe(
+    routes = LastRoute()
+    chat = ChatSession(Echo(), library, "synthia", routes, clock=Ticks())
+    await routes(
         RouteDecided(route=Route.LOCAL, reason=RouteReason.BACKGROUND, model="qwen")
     )
 
-    await chat.observe(Event())  # other events are not routes and change nothing
+    await routes(Event())  # other events are not routes and change nothing
     _, (report,) = await run(chat, "hello")
 
     assert (report.route, report.model) == (Route.LOCAL, "vendor/echo")
