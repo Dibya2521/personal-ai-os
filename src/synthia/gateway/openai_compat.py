@@ -307,10 +307,14 @@ class OpenAICompatibleModel:
             raise IncompleteResponseError(message)
 
     def _scrub(self, error: GatewayError) -> GatewayError:
-        """Remove the API key from a provider's message; some echo it back."""
-        if self._api_key is None:
-            return error
-        secret = self._api_key.get_secret_value()
-        if secret and secret in str(error):
-            error.args = (str(error).replace(secret, REDACTED),)
+        return scrub(error, self._api_key)
+
+
+def scrub(error: GatewayError, api_key: SecretStr | None) -> GatewayError:
+    """Remove the API key from a provider's message; some echo it back."""
+    if api_key is None:
         return error
+    secret = api_key.get_secret_value()
+    if secret and secret in str(error):
+        error.args = (str(error).replace(secret, REDACTED),)
+    return error

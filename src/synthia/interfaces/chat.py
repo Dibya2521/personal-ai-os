@@ -241,7 +241,7 @@ def run_chat(
         client = httpx.AsyncClient(transport=transport, timeout=TIMEOUT)
         try:
             gateway = build_gateway(settings, client, routes)
-            session = ChatSession(gateway.router, library, persona, routes)
+            session = ChatSession(gateway.model, library, persona, routes)
             converse(runner, ChatApp(session, gateway, console), read)
         finally:
             runner.run(client.aclose())

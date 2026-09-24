@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import asdict
 from typing import Annotated
@@ -13,6 +14,7 @@ from rich.table import Table
 from synthia import __version__
 from synthia.interfaces import doctor as doctor_checks
 from synthia.interfaces.chat import run_chat
+from synthia.interfaces.usage_report import budget_report
 from synthia.kernel.config import load_settings
 from synthia.kernel.errors import ConfigError
 from synthia.persona.model import PersonaError
@@ -105,3 +107,30 @@ def chat(
     except (ConfigError, PersonaError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
+
+
+@app.command()
+def budget(
+    *,
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help="Also ask OpenRouter for its own count; not a model request.",
+        ),
+    ] = False,
+) -> None:
+    """Show today's remote requests and tokens, per UTC day.
+
+    Exits 1 when --check could not be completed.
+    """
+    try:
+        settings = load_settings()
+    except ConfigError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    report = asyncio.run(budget_report(settings, check=check))
+    for line in report.lines:
+        typer.echo(line)
+    if not report.complete:
+        raise typer.Exit(doctor_checks.Status.WARN)

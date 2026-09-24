@@ -2,7 +2,8 @@
 
 This is the one place that knows how the pieces fit: the OpenRouter adapter,
 metered and guarded, behind a router whose budget, rate and circuit are the
-same objects the guards use. Everything else receives the finished router.
+same objects the guards use, with every finished call accounted for on top.
+Everything else receives the finished model.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from synthia.gateway.openai_compat import OpenAICompatibleModel
 from synthia.gateway.providers import OPENROUTER, openrouter_endpoint, openrouter_info
 from synthia.gateway.ratelimit import SlidingWindowLimiter
 from synthia.gateway.router import RemoteHealth, Router, guard_remote
+from synthia.gateway.usage import AccountingModel, UsageLog
 from synthia.kernel.errors import ConfigError
 
 if TYPE_CHECKING:
@@ -24,6 +26,7 @@ if TYPE_CHECKING:
 
     import httpx
 
+    from synthia.gateway.protocol import ChatModel
     from synthia.kernel.bus import Event
     from synthia.kernel.config import Settings
 
@@ -32,10 +35,16 @@ GATEWAY_DB: Final = Path("db") / "gateway.db"
 
 @dataclass(frozen=True, slots=True)
 class Gateway:
-    """The router to send requests to, and the remote's health to report on."""
+    """The model to send requests to, and what is needed to report on it.
 
+    ``model`` is the router with accounting on top; ``router`` is exposed for
+    its decisions and capabilities.
+    """
+
+    model: ChatModel
     router: Router
     health: RemoteHealth
+    usage: UsageLog
 
 
 def build_gateway(
@@ -68,6 +77,6 @@ def build_gateway(
         endpoint=endpoint,
         info=openrouter_info(settings.openrouter_model),
     )
-    return Gateway(
-        Router(guard_remote(adapter, health), health, publish=publish), health
-    )
+    router = Router(guard_remote(adapter, health), health, publish=publish)
+    usage = UsageLog(settings.home / GATEWAY_DB)
+    return Gateway(AccountingModel(router, usage, publish), router, health, usage)

@@ -67,35 +67,46 @@ async def _ignore(_: Event) -> None:
     return None
 
 
-async def test_a_request_goes_out_metered_to_openrouter_with_the_key_only_in_its_header(
+async def test_a_request_goes_to_openrouter_with_the_key_only_in_its_header(
     tmp_path: Path,
 ) -> None:
     sent: list[httpx.Request] = []
-    events: list[Event] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         return answer(request)
 
-    async def publish(event: Event) -> None:
-        events.append(event)
-
     settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        gateway = build_gateway(settings, client, publish)
-        reply = await collect(gateway.router.stream(HELLO))
-        status = await gateway.health.ledger.status(OPENROUTER)
+        gateway = build_gateway(settings, client, _ignore)
+        reply = await collect(gateway.model.stream(HELLO))
 
-    assert reply.text == "hi"
-    assert reply.model == "vendor/free-model"
+    assert (reply.text, reply.model) == ("hi", "vendor/free-model")
     (request,) = sent
     assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
     assert request.headers["Authorization"] == f"Bearer {KEY}"
     assert request.headers["X-Title"] == APP_TITLE
     assert KEY not in request.content.decode()
     assert json.loads(request.content)["model"] == OPENROUTER_FREE
+
+
+async def test_a_request_is_metered_routed_and_accounted(tmp_path: Path) -> None:
+    events: list[Event] = []
+
+    async def publish(event: Event) -> None:
+        events.append(event)
+
+    settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
+        gateway = build_gateway(settings, client, publish)
+        await collect(gateway.model.stream(HELLO))
+        status = await gateway.health.ledger.status(OPENROUTER)
+        (used,) = await gateway.usage.today()
+
     assert (status.used, status.cap) == (1, 50)
     assert (tmp_path / GATEWAY_DB).is_file()
+    assert (used.model, used.calls) == ("vendor/free-model", 1)
+    assert [type(e).__name__ for e in events] == ["RouteDecided", "UsageRecorded"]
     decided = [e for e in events if isinstance(e, RouteDecided)]
     assert [(e.route, e.reason) for e in decided] == [
         (Route.REMOTE, RouteReason.PREFERRED)

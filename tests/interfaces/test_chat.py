@@ -159,7 +159,7 @@ async def app_for(
 ) -> tuple[ChatApp, io.StringIO]:
     routes = LastRoute()
     gateway = build_gateway(settings(tmp_path), client, routes)
-    session = ChatSession(gateway.router, PersonaLibrary(), "synthia", routes)
+    session = ChatSession(gateway.model, PersonaLibrary(), "synthia", routes)
     screen, out = console()
     return ChatApp(session, gateway, screen), out
 
