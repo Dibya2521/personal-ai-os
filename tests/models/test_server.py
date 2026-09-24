@@ -1,6 +1,5 @@
 import asyncio
 import socket
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -13,6 +12,8 @@ from synthia.kernel.supervisor import RestartPolicy, Supervisor
 from synthia.models.catalogue import Backend, Download, Model, find
 from synthia.models.server import (
     API_KEY_VARIABLE,
+    DEFAULT_START_TIMEOUT_S,
+    DEFAULT_STOP_TIMEOUT_S,
     LOOPBACK,
     Launch,
     LlamaServer,
@@ -22,6 +23,7 @@ from synthia.models.server import (
     free_port,
     new_key,
 )
+from tests.models import fake_llama_server
 
 KEY = SecretStr("launch-test-key")
 SECRET = KEY.get_secret_value()
@@ -136,19 +138,16 @@ def test_the_default_local_model_is_in_the_catalogue() -> None:
     assert isinstance(find(DEFAULT_LOCAL_MODEL), Model)
 
 
-FAKE_SERVER = Path(__file__).with_name("fake_llama_server.py")
 WAIT_S = 10
-
-
-def fake_command(launch: Launch) -> list[str]:
-    return [sys.executable, str(FAKE_SERVER), *launch.command()[1:]]
 
 
 def fake_server(
     tmp_path: Path,
     client: httpx.AsyncClient,
     on_launch: Callable[[Launch], None] = lambda _: None,
-    **options: float,
+    *,
+    start_timeout_s: float = DEFAULT_START_TIMEOUT_S,
+    stop_timeout_s: float = DEFAULT_STOP_TIMEOUT_S,
 ) -> LlamaServer:
     touch(tmp_path / "runtime" / "llama-server")
 
@@ -169,9 +168,10 @@ def fake_server(
         launch,
         client,
         tmp_path / "logs" / "llama-server.log",
-        command=fake_command,
+        command=fake_llama_server.command,
         poll_s=0.05,
-        **options,
+        start_timeout_s=start_timeout_s,
+        stop_timeout_s=stop_timeout_s,
     )
 
 

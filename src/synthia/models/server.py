@@ -15,7 +15,7 @@ import socket
 import time
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, BinaryIO, Final
 
 import httpx
 from pydantic import SecretStr
@@ -150,12 +150,18 @@ class ServerCrashedError(ServerError):
     """The server exited while it was serving."""
 
 
+def _no_fallback(_launch: Launch, _error: ServerError) -> None:
+    return None
+
+
 class LlamaServer:
     """A :class:`~synthia.kernel.supervisor.Service` that keeps one server running.
 
     Each run is a new launch with its own port and key, so a restart after a
     crash never depends on a port another program may have taken meanwhile.
     ``ready`` is set while the server answers and cleared when it stops.
+    ``on_start_failure`` hears of every start that never became ready, so the
+    next launch can use another build.
     """
 
     def __init__(  # noqa: PLR0913
@@ -168,7 +174,9 @@ class LlamaServer:
         start_timeout_s: float = DEFAULT_START_TIMEOUT_S,
         stop_timeout_s: float = DEFAULT_STOP_TIMEOUT_S,
         poll_s: float = HEALTH_POLL_S,
+        on_start_failure: Callable[[Launch, ServerError], None] = _no_fallback,
     ) -> None:
+        self._on_start_failure = on_start_failure
         self._launch = launch
         self._client = client
         self._log = log
@@ -199,29 +207,47 @@ class LlamaServer:
         launch = self._launch()
         self._log.parent.mkdir(parents=True, exist_ok=True)
         with self._log.open("ab") as log:
-            process = await asyncio.create_subprocess_exec(
+            process = await self._spawn(launch, log)
+            try:
+                await self._serve(launch, process, stop)
+            finally:
+                self.ready.clear()
+                self._running = None
+                await self._end(process)
+
+    async def _spawn(self, launch: Launch, log: BinaryIO) -> asyncio.subprocess.Process:
+        try:
+            return await asyncio.create_subprocess_exec(
                 *self._command(launch),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=log,
                 stderr=asyncio.subprocess.STDOUT,
                 env=launch.environment(dict(os.environ)),
             )
-            try:
-                if not await self._until_healthy(launch, process, stop):
-                    return
-                self._running = launch
-                self.ready.set()
-                await _first_of(process.wait(), stop.wait())
-                if not stop.is_set():
-                    message = (
-                        f"llama-server exited with code {process.returncode} "
-                        f"while serving; see {self._log}"
-                    )
-                    raise ServerCrashedError(message)
-            finally:
-                self.ready.clear()
-                self._running = None
-                await self._end(process)
+        except OSError as error:
+            failure = ServerError(f"cannot run {launch.binary}: {error}")
+            self._on_start_failure(launch, failure)
+            raise failure from error
+
+    async def _serve(
+        self, launch: Launch, process: asyncio.subprocess.Process, stop: asyncio.Event
+    ) -> None:
+        try:
+            healthy = await self._until_healthy(launch, process, stop)
+        except ServerError as error:
+            self._on_start_failure(launch, error)
+            raise
+        if not healthy:
+            return
+        self._running = launch
+        self.ready.set()
+        await _first_of(process.wait(), stop.wait())
+        if not stop.is_set():
+            message = (
+                f"llama-server exited with code {process.returncode} "
+                f"while serving; see {self._log}"
+            )
+            raise ServerCrashedError(message)
 
     async def _until_healthy(
         self, launch: Launch, process: asyncio.subprocess.Process, stop: asyncio.Event

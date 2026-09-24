@@ -16,9 +16,17 @@ import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import override
+from typing import TYPE_CHECKING, override
+
+if TYPE_CHECKING:
+    from synthia.models.server import Launch
 
 CRASH_CODE = 9
+
+
+def command(launch: Launch) -> list[str]:
+    """Return the command that runs this stand-in in place of ``launch``'s server."""
+    return [sys.executable, __file__, *launch.command()[1:]]
 
 
 def _reply(handler: BaseHTTPRequestHandler, status: HTTPStatus, body: object) -> None:
