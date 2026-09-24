@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from synthia.kernel.config import (
     DEFAULT_DISK_BUDGET_GB,
+    DEFAULT_PERSONA,
     DEFAULT_REMOTE_DAILY_CAP,
     DEFAULT_REMOTE_RESERVE,
     DEFAULT_REMOTE_RPM,
@@ -33,6 +34,7 @@ def test_defaults_apply_when_nothing_is_set() -> None:
     assert settings.remote_daily_cap == DEFAULT_REMOTE_DAILY_CAP == 50
     assert settings.remote_rpm == DEFAULT_REMOTE_RPM == 20
     assert settings.remote_reserve == DEFAULT_REMOTE_RESERVE == 10
+    assert settings.persona == DEFAULT_PERSONA == "synthia"
 
 
 def test_environment_variables_are_read_with_the_prefix(

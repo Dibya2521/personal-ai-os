@@ -27,6 +27,7 @@ DEFAULT_REMOTE_DAILY_CAP = 50
 DEFAULT_REMOTE_RPM = 20
 # Requests kept back for what only the remote can serve, once chat has gone local.
 DEFAULT_REMOTE_RESERVE = 10
+DEFAULT_PERSONA = "synthia"
 
 
 class LogLevel(StrEnum):
@@ -74,6 +75,7 @@ class Settings(BaseSettings):
     remote_daily_cap: int = Field(default=DEFAULT_REMOTE_DAILY_CAP, ge=0)
     remote_rpm: int = Field(default=DEFAULT_REMOTE_RPM, gt=0)
     remote_reserve: int = Field(default=DEFAULT_REMOTE_RESERVE, ge=0)
+    persona: str = Field(default=DEFAULT_PERSONA, min_length=1)
 
 
 def load_settings(env_file: Path | None = DEFAULT_ENV_FILE) -> Settings:
