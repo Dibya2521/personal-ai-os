@@ -11,7 +11,8 @@ small local one. A request goes local instead when the first of these holds:
    the remote can serve;
 5. the remote rate limit would hold the request longer than ``max_wait_s``.
 
-Each rule sends a request local only if a local model exists and can serve it.
+Each rule sends a request local only if a local model exists, is ready, and can
+serve it: a local server still loading its model is treated as absent.
 With none, the remote is used while it has any budget at all.
 
 If the remote fails before its first chunk, the request is sent local once.
@@ -121,6 +122,10 @@ async def _discard(_: Event) -> None:
     return None
 
 
+def _always() -> bool:
+    return True
+
+
 class Router:
     """A :class:`~synthia.gateway.protocol.ChatModel` that picks a model per request."""
 
@@ -130,11 +135,13 @@ class Router:
         health: RemoteHealth,
         local: ChatModel | None = None,
         publish: Callable[[Event], Awaitable[None]] = _discard,
+        local_ready: Callable[[], bool] = _always,
     ) -> None:
         """Route between ``remote`` (already guarded) and an optional ``local``."""
         self._remote = remote
         self._health = health
         self._local = local
+        self._local_ready = local_ready
         self._publish = publish
 
     @property
@@ -171,7 +178,6 @@ class Router:
                 async for chunk in chunks:
                     yield chunk
             return
-        local = self._local
         started = False
         try:
             async with aclosing(self._remote.stream(request)) as chunks:
@@ -179,7 +185,8 @@ class Router:
                     started = True
                     yield chunk
         except GatewayError as error:
-            if started or local is None or not can_serve(local.info, request):
+            local = self._local_for(request)
+            if started or local is None:
                 raise
             logger.warning(
                 "remote failed before answering; sending local",
@@ -198,10 +205,20 @@ class Router:
         reason = await self._reason_for_local(request, background=background)
         if reason is None:
             return Route.REMOTE, RouteReason.PREFERRED, self._remote
-        local = self._local
-        if local is not None and can_serve(local.info, request):
+        local = self._local_for(request)
+        if local is not None:
             return Route.LOCAL, reason, local
         return Route.REMOTE, RouteReason.NO_LOCAL, self._remote
+
+    def _local_for(self, request: ChatRequest) -> ChatModel | None:
+        local = self._local
+        if (
+            local is None
+            or not self._local_ready()
+            or not can_serve(local.info, request)
+        ):
+            return None
+        return local
 
     async def _reason_for_local(
         self, request: ChatRequest, *, background: bool

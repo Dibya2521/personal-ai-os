@@ -1,4 +1,7 @@
-"""A stand-in for llama-server that accepts its flags and answers ``/health``.
+"""A stand-in for llama-server that accepts its flags and speaks its API.
+
+``/health`` answers as llama-server does. ``/v1/chat/completions`` requires
+the launch key and streams back ``echo: `` plus the last user text.
 
 Behaviour is set through the environment, which the launch passes on:
 ``FAKE_EXIT_CODE`` exits at once with that code; ``FAKE_LOAD_S`` answers 503
@@ -16,9 +19,11 @@ import threading
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING, cast, override
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from synthia.models.server import Launch
 
 CRASH_CODE = 9
@@ -38,15 +43,35 @@ def _reply(handler: BaseHTTPRequestHandler, status: HTTPStatus, body: object) ->
     handler.wfile.write(content)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host", required=True)
-    parser.add_argument("--port", type=int, required=True)
-    options, _ = parser.parse_known_args()
-    if code := os.environ.get("FAKE_EXIT_CODE"):
-        sys.exit(int(code))
-    ready_at = time.monotonic() + float(os.environ.get("FAKE_LOAD_S", "0"))
+def _last_text(body: dict[str, object]) -> str:
+    messages = cast("list[dict[str, object]]", body["messages"])
+    content = messages[-1]["content"]
+    if isinstance(content, str):
+        return content
+    parts = cast("list[dict[str, str]]", content)
+    return "".join(p["text"] for p in parts if p["type"] == "text")
 
+
+def _stream(handler: BaseHTTPRequestHandler, text: str) -> None:
+    chunks: list[dict[str, object]] = [
+        {"model": "local", "choices": [{"index": 0, "delta": {"content": text}}]},
+        {
+            "model": "local",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        },
+    ]
+    handler.send_response(HTTPStatus.OK)
+    handler.send_header("Content-Type", "text/event-stream")
+    handler.end_headers()
+    for chunk in chunks:
+        handler.wfile.write(f"data: {json.dumps(chunk)}\n\n".encode())
+    handler.wfile.write(b"data: [DONE]\n\n")
+
+
+def _handler(
+    ready_at: float, key: str, seen_ready: Callable[[], None]
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.path != "/health":
@@ -56,12 +81,34 @@ def main() -> None:
                 _reply(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": loading})
             else:
                 _reply(self, HTTPStatus.OK, {"status": "ok"})
-                crash_once_seen_ready()
+                seen_ready()
+
+        def do_POST(self) -> None:
+            if self.path != "/v1/chat/completions":
+                _reply(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
+                return
+            if self.headers.get("Authorization") != f"Bearer {key}":
+                _reply(self, HTTPStatus.UNAUTHORIZED, {"error": "Invalid API Key"})
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            body = cast("dict[str, object]", json.loads(self.rfile.read(length)))
+            _stream(self, f"echo: {_last_text(body)}")
 
         @override
         def log_message(self, format: str, *args: object) -> None:
             return
 
+    return Handler
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--port", type=int, required=True)
+    options, _ = parser.parse_known_args()
+    if code := os.environ.get("FAKE_EXIT_CODE"):
+        sys.exit(int(code))
+    ready_at = time.monotonic() + float(os.environ.get("FAKE_LOAD_S", "0"))
     after = os.environ.get("FAKE_EXIT_AFTER_S")
     armed = threading.Lock()
 
@@ -71,7 +118,8 @@ def main() -> None:
         if after is not None and armed.acquire(blocking=False):
             threading.Timer(float(after), os._exit, (CRASH_CODE,)).start()
 
-    server = ThreadingHTTPServer((options.host, options.port), Handler)
+    handler = _handler(ready_at, os.environ["LLAMA_API_KEY"], crash_once_seen_ready)
+    server = ThreadingHTTPServer((options.host, options.port), handler)
     server.serve_forever()
 
 

@@ -279,3 +279,39 @@ async def test_the_guarded_remote_counts_attempts_and_opens_the_circuit(
     assert await router.decide(HELLO) == (Route.LOCAL, RouteReason.CIRCUIT_OPEN)
     with pytest.raises(CircuitOpenError):
         await collect(remote.stream(HELLO))
+
+
+async def test_a_local_model_that_is_not_ready_is_treated_as_absent(
+    setup: Setup,
+) -> None:
+    router = Router(
+        Fake(REMOTE), setup.health, Fake(LOCAL), setup.publish, lambda: False
+    )
+
+    answer = await collect(router.stream(HELLO, background=True))
+
+    assert answer.text == REMOTE.id
+    assert setup.routes() == [(Route.REMOTE, RouteReason.NO_LOCAL, REMOTE.id)]
+
+
+async def test_a_failed_remote_does_not_fall_back_to_a_local_model_still_loading(
+    setup: Setup,
+) -> None:
+    remote = Fake(REMOTE, AuthError("bad key"))
+    router = Router(remote, setup.health, Fake(LOCAL), setup.publish, lambda: False)
+
+    with pytest.raises(AuthError):
+        await collect(router.stream(HELLO))
+
+
+async def test_readiness_is_checked_for_every_request(setup: Setup) -> None:
+    ready = [False]
+    router = Router(
+        Fake(REMOTE), setup.health, Fake(LOCAL), setup.publish, lambda: ready[0]
+    )
+
+    await collect(router.stream(HELLO, background=True))
+    ready[0] = True
+    await collect(router.stream(HELLO, background=True))
+
+    assert [route for route, _, _ in setup.routes()] == [Route.REMOTE, Route.LOCAL]
