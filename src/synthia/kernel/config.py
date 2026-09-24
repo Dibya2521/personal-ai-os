@@ -30,6 +30,19 @@ DEFAULT_REMOTE_RESERVE = 10
 DEFAULT_PERSONA = "synthia"
 DEFAULT_OPENROUTER_MODEL = "openrouter/free"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_LOCAL_MODEL = "qwen3.5-4b"
+# The smallest window the remote may have, so going local never shrinks a request.
+DEFAULT_LOCAL_CONTEXT = 32_768
+
+
+class LocalBackend(StrEnum):
+    """What the local model runs on; ``auto`` picks the fastest that starts."""
+
+    AUTO = "auto"
+    CPU = "cpu"
+    VULKAN = "vulkan"
+    CUDA = "cuda"
+    METAL = "metal"
 
 
 class LogLevel(StrEnum):
@@ -80,6 +93,9 @@ class Settings(BaseSettings):
     remote_rpm: int = Field(default=DEFAULT_REMOTE_RPM, gt=0)
     remote_reserve: int = Field(default=DEFAULT_REMOTE_RESERVE, ge=0)
     persona: str = Field(default=DEFAULT_PERSONA, min_length=1)
+    local_model: str = Field(default=DEFAULT_LOCAL_MODEL, min_length=1)
+    local_backend: LocalBackend = LocalBackend.AUTO
+    local_context: int = Field(default=DEFAULT_LOCAL_CONTEXT, gt=0)
 
 
 def load_settings(env_file: Path | None = DEFAULT_ENV_FILE) -> Settings:
