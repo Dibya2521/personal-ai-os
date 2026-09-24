@@ -6,7 +6,8 @@ the launch key and streams back ``echo: `` plus the last user text.
 Behaviour is set through the environment, which the launch passes on:
 ``FAKE_EXIT_CODE`` exits at once with that code; ``FAKE_LOAD_S`` answers 503
 for that long, as while a model loads; ``FAKE_EXIT_AFTER_S`` exits with code 9
-that long after its first healthy answer, as a crash would.
+that long after its first healthy answer, as a crash would;
+``FAKE_REPORT_SESSION`` prints whether it leads its own session (POSIX only).
 """
 
 from __future__ import annotations
@@ -108,6 +109,9 @@ def main() -> None:
     options, _ = parser.parse_known_args()
     if code := os.environ.get("FAKE_EXIT_CODE"):
         sys.exit(int(code))
+    if sys.platform != "win32" and os.environ.get("FAKE_REPORT_SESSION"):
+        sys.stdout.write(f"own session: {os.getsid(0) == os.getpid()}\n")
+        sys.stdout.flush()
     ready_at = time.monotonic() + float(os.environ.get("FAKE_LOAD_S", "0"))
     after = os.environ.get("FAKE_EXIT_AFTER_S")
     armed = threading.Lock()

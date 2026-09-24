@@ -12,6 +12,7 @@ import contextlib
 import os
 import secrets
 import socket
+import subprocess
 import time
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -223,6 +224,10 @@ class LlamaServer:
                 stdout=log,
                 stderr=asyncio.subprocess.STDOUT,
                 env=launch.environment(dict(os.environ)),
+                # Ctrl+C in the terminal stops an answer; in the terminal's own
+                # process group it would also stop the server.
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                start_new_session=True,
             )
         except OSError as error:
             failure = ServerError(f"cannot run {launch.binary}: {error}")

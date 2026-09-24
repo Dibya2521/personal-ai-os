@@ -1,5 +1,6 @@
 import asyncio
 import socket
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -207,6 +208,22 @@ async def test_stopping_ends_the_process(tmp_path: Path) -> None:
         await asyncio.wait_for(task, WAIT_S)
         with pytest.raises(httpx.ConnectError):
             await client.get(running.health_url)
+
+
+# On Windows the same comes from a new process group, which has no query to
+# test it by; a Ctrl+C sent to the console showed the server surviving it.
+@pytest.mark.skipif(sys.platform == "win32", reason="sessions are POSIX")
+async def test_the_server_leads_its_own_session_so_ctrl_c_misses_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_REPORT_SESSION", "1")
+    async with httpx.AsyncClient() as client:
+        stop, task = await serve(fake_server(tmp_path, client))
+        stop.set()
+        await asyncio.wait_for(task, WAIT_S)
+
+    log = (tmp_path / "logs" / "llama-server.log").read_text()
+    assert "own session: True" in log
 
 
 async def test_ready_waits_while_the_model_loads(
