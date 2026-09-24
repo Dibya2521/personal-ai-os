@@ -20,6 +20,7 @@ from synthia.gateway.openai_compat import Endpoint, OpenAICompatibleModel
 from synthia.gateway.protocol import ChatModel
 from synthia.gateway.ratelimit import SlidingWindowLimiter
 from synthia.gateway.retry import RetryingModel
+from synthia.gateway.router import RemoteHealth, Router
 from synthia.gateway.types import (
     ChatChunk,
     ChatRequest,
@@ -72,11 +73,22 @@ def metering(inner: ChatModel, tmp: Path) -> ChatModel:
     return MeteredModel(inner, "remote", ledger, SlidingWindowLimiter(5))
 
 
+def routing(inner: ChatModel, tmp: Path) -> ChatModel:
+    ledger = BudgetLedger(tmp / "route.db", {"remote": 5})
+    health = RemoteHealth(
+        "remote", ledger, SlidingWindowLimiter(5), CircuitBreaker("remote"), reserve=0
+    )
+    return Router(inner, health)
+
+
 def full_stack(inner: ChatModel, tmp: Path) -> ChatModel:
-    return RetryingModel(breaking(metering(caching(inner, tmp), tmp), tmp))
+    guarded = RetryingModel(breaking(metering(caching(inner, tmp), tmp), tmp))
+    return routing(guarded, tmp)
 
 
-@pytest.mark.parametrize("wrap", [retrying, breaking, caching, metering, full_stack])
+@pytest.mark.parametrize(
+    "wrap", [retrying, breaking, caching, metering, routing, full_stack]
+)
 async def test_closing_the_outer_stream_closes_the_innermost_at_once(
     wrap: Wrap, tmp_path: Path
 ) -> None:

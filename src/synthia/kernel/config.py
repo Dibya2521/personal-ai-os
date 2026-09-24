@@ -25,6 +25,8 @@ DEFAULT_DISK_BUDGET_GB = 10.0
 DEFAULT_REMOTE_DAILY_CAP = 50
 # OpenRouter's documented rate limit for free models.
 DEFAULT_REMOTE_RPM = 20
+# Requests kept back for what only the remote can serve, once chat has gone local.
+DEFAULT_REMOTE_RESERVE = 10
 
 
 class LogLevel(StrEnum):
@@ -71,6 +73,7 @@ class Settings(BaseSettings):
     openrouter_api_key: SecretStr | None = None
     remote_daily_cap: int = Field(default=DEFAULT_REMOTE_DAILY_CAP, ge=0)
     remote_rpm: int = Field(default=DEFAULT_REMOTE_RPM, gt=0)
+    remote_reserve: int = Field(default=DEFAULT_REMOTE_RESERVE, ge=0)
 
 
 def load_settings(env_file: Path | None = DEFAULT_ENV_FILE) -> Settings:
