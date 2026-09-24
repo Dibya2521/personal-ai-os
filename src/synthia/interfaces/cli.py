@@ -5,19 +5,25 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import asdict
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from synthia import __version__
 from synthia.interfaces import doctor as doctor_checks
+from synthia.interfaces import model_commands
 from synthia.interfaces.chat import run_chat
 from synthia.interfaces.usage_report import budget_report
-from synthia.kernel.config import load_settings
-from synthia.kernel.errors import ConfigError
+from synthia.kernel.config import Settings, load_settings
+from synthia.kernel.errors import ConfigError, SynthiaError
+from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.persona.model import PersonaError
+
+if TYPE_CHECKING:
+    from synthia.models.catalogue import Model, Runtime
 
 app = typer.Typer(
     name="synthia",
@@ -25,6 +31,14 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+models_app = typer.Typer(
+    help="Install and remove the local runtime and models.", no_args_is_help=True
+)
+app.add_typer(models_app, name="models")
+
+# A generous read timeout: a slow CDN may pause between chunks of a 2.7 GB file.
+DOWNLOAD_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 
 STATUS_STYLE = {
     doctor_checks.Status.OK: "[green]ok[/]",
@@ -134,3 +148,90 @@ def budget(
         typer.echo(line)
     if not report.complete:
         raise typer.Exit(doctor_checks.Status.WARN)
+
+
+def _settings() -> Settings:
+    try:
+        return load_settings()
+    except ConfigError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+
+
+def _installer(settings: Settings) -> Installer:
+    return Installer(settings.home, int(settings.disk_budget_gb * BYTES_PER_GB))
+
+
+def _items(names: list[str]) -> tuple[Runtime | Model, ...]:
+    try:
+        return model_commands.resolve(names)
+    except KeyError as error:
+        typer.echo(f"error: not in the catalogue: {error.args[0]}", err=True)
+        typer.echo("see: synthia models list", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+
+
+def _yes(_: str) -> bool:
+    return True
+
+
+def _ask(question: str) -> bool:
+    return typer.confirm(question, default=False)
+
+
+@models_app.command("list")
+def models_list() -> None:
+    """Show everything that can be installed; * marks what suits this machine."""
+    table = model_commands.list_table(
+        _installer(_settings()), model_commands.this_machine()
+    )
+    Console().print(table)
+
+
+@models_app.command("install")
+def models_install(
+    names: Annotated[
+        list[str] | None,
+        typer.Argument(help="What to install. Default: what suits this machine."),
+    ] = None,
+    *,
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask first.")] = False,
+) -> None:
+    """Download, verify and install runtimes and models.
+
+    Exits 1 when an install fails; running again resumes it.
+    """
+    settings = _settings()
+    items = (
+        _items(names)
+        if names
+        else model_commands.suggested(model_commands.this_machine())
+    )
+    if not items:
+        typer.echo(
+            "error: no llama.cpp build suits this machine; SYNTHIA runs remote only",
+            err=True,
+        )
+        raise typer.Exit(doctor_checks.Status.FAIL)
+    confirm = _yes if yes else _ask
+
+    async def run() -> None:
+        async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT) as client:
+            await model_commands.install(
+                _installer(settings), client, items, Console(), confirm
+            )
+
+    try:
+        asyncio.run(run())
+    except SynthiaError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.WARN) from None
+
+
+@models_app.command("remove")
+def models_remove(
+    names: Annotated[list[str], typer.Argument(help="What to remove.")],
+) -> None:
+    """Delete installed runtimes or models, and any half-downloaded files."""
+    items = _items(names)
+    model_commands.remove(_installer(_settings()), items, Console())

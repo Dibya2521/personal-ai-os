@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
     from synthia.models.catalogue import Download
 
+BYTES_PER_MB: Final = 1024**2
 BYTES_PER_GB: Final = 1024**3
 # Never fill the disk: other programs, and SQLite's journal, need room to write.
 KEEP_FREE_BYTES: Final = 1 * BYTES_PER_GB
@@ -42,8 +43,10 @@ class DiskBudgetError(SynthiaError):
     """An install would exceed the disk budget or leave the disk nearly full."""
 
 
-def gigabytes(count: int) -> str:
-    """Return ``count`` bytes as gigabytes for a message."""
+def size_text(count: int) -> str:
+    """Return ``count`` bytes for a person: megabytes below a gigabyte."""
+    if count < BYTES_PER_GB:
+        return f"{count / BYTES_PER_MB:.1f} MB"
     return f"{count / BYTES_PER_GB:.2f} GB"
 
 
@@ -63,6 +66,15 @@ def _discard(_: Download, __: int) -> None:
     return None
 
 
+async def _fetch(
+    client: httpx.AsyncClient,
+    file: Download,
+    directory: Path,
+    on_progress: Callable[[Download, int], None],
+) -> Path:
+    return await fetch(client, file, directory, lambda count: on_progress(file, count))
+
+
 class Installer:
     """Installs into ``home``, keeping everything installed within ``budget_bytes``."""
 
@@ -70,12 +82,10 @@ class Installer:
         self,
         home: Path,
         budget_bytes: int,
-        client: httpx.AsyncClient,
         free_bytes: Callable[[Path], int] = free_bytes,
     ) -> None:
         self._home = home
         self._budget = budget_bytes
-        self._client = client
         self._free_bytes = free_bytes
 
     def path_of(self, item: Runtime | Model) -> Path:
@@ -124,22 +134,23 @@ class Installer:
         used = self.used_bytes()
         if used + needed > self._budget:
             message = (
-                f"installing {name} needs {gigabytes(needed)} more, and "
-                f"{gigabytes(used)} of the {gigabytes(self._budget)} disk budget is "
+                f"installing {name} needs {size_text(needed)} more, and "
+                f"{size_text(used)} of the {size_text(self._budget)} disk budget is "
                 "used; raise SYNTHIA_DISK_BUDGET_GB or remove something first"
             )
             raise DiskBudgetError(message)
         free = self._free_bytes(self._home)
         if free - needed < KEEP_FREE_BYTES:
             message = (
-                f"installing {name} needs {gigabytes(needed)} and would leave "
-                f"under {gigabytes(KEEP_FREE_BYTES)} free on the disk "
-                f"({gigabytes(free)} free now)"
+                f"installing {name} needs {size_text(needed)} and would leave "
+                f"under {size_text(KEEP_FREE_BYTES)} free on the disk "
+                f"({size_text(free)} free now)"
             )
             raise DiskBudgetError(message)
 
     async def install(
         self,
+        client: httpx.AsyncClient,
         item: Runtime | Model,
         on_progress: Callable[[Download, int], None] = _discard,
     ) -> Path:
@@ -157,22 +168,14 @@ class Installer:
         await asyncio.to_thread(self._check_room, item.id, needed)
         if isinstance(item, Model):
             for file in item.files:
-                await self._fetch(file, path, on_progress)
+                await _fetch(client, file, path, on_progress)
             return path
         downloads = self._downloads_of(item)
-        archives = [await self._fetch(a, downloads, on_progress) for a in item.archives]
+        archives = [
+            await _fetch(client, a, downloads, on_progress) for a in item.archives
+        ]
         await asyncio.to_thread(self._unpack, item, archives)
         return path
-
-    async def _fetch(
-        self,
-        file: Download,
-        directory: Path,
-        on_progress: Callable[[Download, int], None],
-    ) -> Path:
-        return await fetch(
-            self._client, file, directory, lambda count: on_progress(file, count)
-        )
 
     def _unpack(self, runtime: Runtime, archives: list[Path]) -> None:
         self._check_room(runtime.id, sum(unpacked_size(a) for a in archives))
