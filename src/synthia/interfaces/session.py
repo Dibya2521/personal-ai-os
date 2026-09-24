@@ -14,12 +14,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from synthia.gateway.errors import IncompleteResponseError
-from synthia.gateway.protocol import collect
+from synthia.gateway.protocol import join
 from synthia.gateway.router import RouteDecided
 from synthia.gateway.types import ChatChunk, ChatRequest, ImagePart, Message
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Callable
+    from collections.abc import AsyncGenerator, Callable
     from pathlib import Path
 
     from synthia.gateway.protocol import ChatModel
@@ -159,7 +159,7 @@ class ChatSession:
                 seen.append(chunk)
                 yield chunk
         try:
-            response = await collect(_replay(seen))
+            response = join(seen)
         except IncompleteResponseError:
             return
         self.history += [request.messages[-1], response.as_message()]
@@ -175,8 +175,3 @@ class ChatSession:
             completion_tokens=usage.completion_tokens if usage else None,
             seconds=seconds,
         )
-
-
-async def _replay(chunks: list[ChatChunk]) -> AsyncIterator[ChatChunk]:
-    for chunk in chunks:
-        yield chunk

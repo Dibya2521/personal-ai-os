@@ -13,7 +13,7 @@ from synthia.gateway.types import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterable
+    from collections.abc import AsyncGenerator, AsyncIterable, Iterable
 
     from synthia.gateway.types import ChatChunk, ChatRequest, ModelInfo, Usage
 
@@ -48,11 +48,21 @@ class _PendingCall:
 
 
 async def collect(chunks: AsyncIterable[ChatChunk]) -> ChatResponse:
-    """Join a stream of chunks into one response.
+    """Read a stream to its end and join it into one response.
 
     Raises:
         IncompleteResponseError: If the stream ends without a finish reason, or
             a tool call is missing its id or name.
+    """
+    return join([chunk async for chunk in chunks])
+
+
+def join(chunks: Iterable[ChatChunk]) -> ChatResponse:
+    """Join chunks already received into one response.
+
+    Raises:
+        IncompleteResponseError: If there is no finish reason, or a tool call
+            is missing its id or name.
     """
     text: list[str] = []
     reasoning: list[str] = []
@@ -60,7 +70,7 @@ async def collect(chunks: AsyncIterable[ChatChunk]) -> ChatResponse:
     finish: FinishReason | None = None
     usage: Usage | None = None
     model: str | None = None
-    async for chunk in chunks:
+    for chunk in chunks:
         text.append(chunk.text)
         reasoning.append(chunk.reasoning)
         for delta in chunk.tool_calls:
@@ -72,7 +82,7 @@ async def collect(chunks: AsyncIterable[ChatChunk]) -> ChatResponse:
         usage = chunk.usage or usage
         model = model or chunk.model
     if finish is None:
-        message = "the stream ended without a finish reason"
+        message = "the answer ended without a finish reason"
         raise IncompleteResponseError(message)
     return ChatResponse(
         text="".join(text),

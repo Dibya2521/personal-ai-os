@@ -25,7 +25,7 @@ from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, cast
 
 from synthia.gateway.errors import IncompleteResponseError
-from synthia.gateway.protocol import collect
+from synthia.gateway.protocol import join
 from synthia.gateway.types import (
     ChatChunk,
     ChatResponse,
@@ -201,12 +201,7 @@ class CachingModel:
         # Reached only when the stream ran to its end: a failure raised above,
         # and a listener that stopped early never resumes this generator.
         try:
-            response = await collect(_replay(seen))
+            response = join(seen)
         except IncompleteResponseError:
             return  # not whole, so not cached; judging it is the adapter's job
         await self._cache.put(key, response)
-
-
-async def _replay(chunks: list[ChatChunk]) -> AsyncGenerator[ChatChunk]:
-    for chunk in chunks:
-        yield chunk

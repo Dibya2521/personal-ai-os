@@ -28,11 +28,11 @@ from synthia.gateway.errors import (
     ProviderError,
 )
 from synthia.gateway.openai_compat import error_for, scrub
-from synthia.gateway.protocol import collect
+from synthia.gateway.protocol import join
 from synthia.kernel.bus import Event
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, Awaitable, Callable
     from pathlib import Path
 
     from pydantic import SecretStr
@@ -174,7 +174,7 @@ class AccountingModel:
                 seen.append(chunk)
                 yield chunk
         try:
-            response = await collect(_replay(seen))
+            response = join(seen)
         except IncompleteResponseError:
             return
         seconds = self._clock() - started
@@ -189,11 +189,6 @@ class AccountingModel:
                 seconds=seconds,
             )
         )
-
-
-async def _replay(chunks: list[ChatChunk]) -> AsyncIterator[ChatChunk]:
-    for chunk in chunks:
-        yield chunk
 
 
 @dataclass(frozen=True, slots=True)
