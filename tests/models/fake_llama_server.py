@@ -3,7 +3,7 @@
 Behaviour is set through the environment, which the launch passes on:
 ``FAKE_EXIT_CODE`` exits at once with that code; ``FAKE_LOAD_S`` answers 503
 for that long, as while a model loads; ``FAKE_EXIT_AFTER_S`` exits with code 9
-that long after it is ready, as a crash would.
+that long after its first healthy answer, as a crash would.
 """
 
 from __future__ import annotations
@@ -56,15 +56,22 @@ def main() -> None:
                 _reply(self, HTTPStatus.SERVICE_UNAVAILABLE, {"error": loading})
             else:
                 _reply(self, HTTPStatus.OK, {"status": "ok"})
+                crash_once_seen_ready()
 
         @override
         def log_message(self, format: str, *args: object) -> None:
             return
 
+    after = os.environ.get("FAKE_EXIT_AFTER_S")
+    armed = threading.Lock()
+
+    def crash_once_seen_ready() -> None:
+        # Timed from the first healthy answer, not from start-up, so a slow
+        # machine can never make the crash land before the caller saw it ready.
+        if after is not None and armed.acquire(blocking=False):
+            threading.Timer(float(after), os._exit, (CRASH_CODE,)).start()
+
     server = ThreadingHTTPServer((options.host, options.port), Handler)
-    if after := os.environ.get("FAKE_EXIT_AFTER_S"):
-        delay = max(ready_at - time.monotonic(), 0) + float(after)
-        threading.Timer(delay, os._exit, (CRASH_CODE,)).start()
     server.serve_forever()
 
 
