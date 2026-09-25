@@ -11,3 +11,4 @@ supersedes the old one.
 | [0003](0003-configuration-and-secrets.md) | configuration from the environment, secrets masked everywhere | accepted |
 | [0004](0004-local-first.md) | local first, optional weight, remote models behind a budget | accepted |
 | [0005](0005-model-gateway.md) | one gateway for every model; the budget is claimed before sending | accepted |
+| [0006](0006-local-runtime-and-model.md) | llama.cpp's server and Qwen3.5-4B, pinned by digest, fastest build first | accepted |
