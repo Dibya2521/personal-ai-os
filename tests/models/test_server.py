@@ -25,6 +25,7 @@ from synthia.models.server import (
     new_key,
 )
 from tests.models import fake_llama_server
+from tests.timing import HANG_TIMEOUT_S
 
 KEY = SecretStr("launch-test-key")
 SECRET = KEY.get_secret_value()
@@ -139,9 +140,6 @@ def test_the_default_local_model_is_in_the_catalogue() -> None:
     assert isinstance(find(DEFAULT_LOCAL_MODEL), Model)
 
 
-WAIT_S = 10
-
-
 def fake_server(
     tmp_path: Path,
     client: httpx.AsyncClient,
@@ -176,10 +174,18 @@ def fake_server(
     )
 
 
+async def assert_refused(url: str) -> None:
+    # A fresh client: a pooled connection from before the stop fails with a
+    # ReadError instead, depending on timing.
+    async with httpx.AsyncClient() as fresh:
+        with pytest.raises(httpx.ConnectError):
+            await fresh.get(url)
+
+
 async def serve(server: LlamaServer) -> tuple[asyncio.Event, asyncio.Task[None]]:
     stop = asyncio.Event()
     task = asyncio.create_task(server.run(stop))
-    await asyncio.wait_for(server.ready.wait(), WAIT_S)
+    await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)
     return stop, task
 
 
@@ -191,7 +197,7 @@ async def test_the_server_is_ready_once_health_answers(tmp_path: Path) -> None:
         assert running is not None
         health = await client.get(running.health_url)
         stop.set()
-        await asyncio.wait_for(task, WAIT_S)
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
 
     assert health.json() == {"status": "ok"}
     assert server.running is None
@@ -205,9 +211,8 @@ async def test_stopping_ends_the_process(tmp_path: Path) -> None:
         running = server.running
         assert running is not None
         stop.set()
-        await asyncio.wait_for(task, WAIT_S)
-        with pytest.raises(httpx.ConnectError):
-            await client.get(running.health_url)
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
+        await assert_refused(running.health_url)
 
 
 # On Windows the same comes from a new process group, which has no query to
@@ -220,7 +225,7 @@ async def test_the_server_leads_its_own_session_so_ctrl_c_misses_it(
     async with httpx.AsyncClient() as client:
         stop, task = await serve(fake_server(tmp_path, client))
         stop.set()
-        await asyncio.wait_for(task, WAIT_S)
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
 
     log = (tmp_path / "logs" / "llama-server.log").read_text()
     assert "own session: True" in log
@@ -236,9 +241,9 @@ async def test_ready_waits_while_the_model_loads(
         task = asyncio.create_task(server.run(stop))
         await asyncio.sleep(0.3)
         loading = server.ready.is_set()
-        await asyncio.wait_for(server.ready.wait(), WAIT_S)
+        await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)
         stop.set()
-        await asyncio.wait_for(task, WAIT_S)
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
 
     assert not loading
 
@@ -250,7 +255,7 @@ async def test_an_exit_before_ready_is_an_error_naming_the_code(
     async with httpx.AsyncClient() as client:
         server = fake_server(tmp_path, client)
         with pytest.raises(ServerError, match="code 3 before it was ready"):
-            await asyncio.wait_for(server.run(asyncio.Event()), WAIT_S)
+            await asyncio.wait_for(server.run(asyncio.Event()), HANG_TIMEOUT_S)
 
 
 async def test_a_server_that_never_gets_ready_is_stopped_after_the_timeout(
@@ -260,7 +265,7 @@ async def test_a_server_that_never_gets_ready_is_stopped_after_the_timeout(
     async with httpx.AsyncClient() as client:
         server = fake_server(tmp_path, client, start_timeout_s=0.5)
         with pytest.raises(ServerError, match=r"not ready within 0\.5 s"):
-            await asyncio.wait_for(server.run(asyncio.Event()), WAIT_S)
+            await asyncio.wait_for(server.run(asyncio.Event()), HANG_TIMEOUT_S)
 
 
 async def test_a_crash_while_serving_is_raised_for_the_supervisor(
@@ -271,7 +276,7 @@ async def test_a_crash_while_serving_is_raised_for_the_supervisor(
         server = fake_server(tmp_path, client)
         stop, task = await serve(server)
         with pytest.raises(ServerCrashedError, match="code 9 while serving"):
-            await asyncio.wait_for(task, WAIT_S)
+            await asyncio.wait_for(task, HANG_TIMEOUT_S)
         stop.set()
 
     assert server.running is None
@@ -287,7 +292,7 @@ async def test_a_stop_during_loading_returns_without_serving(
         task = asyncio.create_task(server.run(stop))
         await asyncio.sleep(0.3)
         stop.set()
-        await asyncio.wait_for(task, WAIT_S)
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
 
     assert not server.ready.is_set()
 
@@ -309,11 +314,11 @@ async def test_the_supervisor_restarts_a_crashed_server_on_a_new_port(
         supervisor = Supervisor(default_policy=RestartPolicy(backoff_initial_s=0.01))
         supervisor.add(server)
         supervised = asyncio.create_task(supervisor.run())
-        await asyncio.wait_for(relaunched.wait(), WAIT_S)
-        await asyncio.wait_for(server.ready.wait(), WAIT_S)
+        await asyncio.wait_for(relaunched.wait(), HANG_TIMEOUT_S)
+        await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)
         serving = server.running
         supervisor.stop()
-        await asyncio.wait_for(supervised, WAIT_S)
+        await asyncio.wait_for(supervised, HANG_TIMEOUT_S)
 
     first, second = launches
     assert serving is second
@@ -330,6 +335,5 @@ async def test_a_server_that_outlasts_the_stop_timeout_is_killed(
         running = server.running
         assert running is not None
         stop.set()
-        await asyncio.wait_for(task, WAIT_S)
-        with pytest.raises(httpx.ConnectError):
-            await client.get(running.health_url)
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
+        await assert_refused(running.health_url)

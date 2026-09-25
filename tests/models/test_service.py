@@ -16,8 +16,8 @@ from synthia.models.catalogue import Backend, Download, Model, Runtime, Target
 from synthia.models.install import COMPLETE_MARKER, Installer
 from synthia.models.service import THREAD_NAME, LocalService, LocalSetup, find_local
 from tests.models import fake_llama_server
+from tests.timing import HANG_TIMEOUT_S
 
-WAIT_S = 10
 URL = "https://example.com/file"
 TINY = Model(
     "tiny", "example/tiny", "0" * 40, "mit", Download("tiny.gguf", URL, 4, "0" * 64)
@@ -112,7 +112,7 @@ def test_a_launch_uses_the_installed_paths_and_a_fresh_port_and_key(
 
 def wait_until(condition: Callable[[], bool]) -> None:
     # The server runs on another thread's loop; there is no event to await here.
-    deadline = time.monotonic() + WAIT_S
+    deadline = time.monotonic() + HANG_TIMEOUT_S
     while not condition():
         assert time.monotonic() < deadline, "timed out"
         time.sleep(0.02)

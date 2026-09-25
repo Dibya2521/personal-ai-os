@@ -27,8 +27,8 @@ from synthia.models.catalogue import Backend, Model, find
 from synthia.models.local import LocalModel
 from synthia.models.server import Launch, LlamaServer, free_port, new_key
 from tests.models import fake_llama_server
+from tests.timing import HANG_TIMEOUT_S
 
-WAIT_S = 10
 HELLO = ChatRequest((Message.user("hello"),))
 HELLO_BODY = {"messages": [{"role": "user", "content": "hello"}]}
 QWEN_ID = "qwen3.5-4b"
@@ -70,11 +70,11 @@ async def test_a_request_is_answered_by_the_running_server(tmp_path: Path) -> No
         local = LocalModel(server, client, QWEN, 4096)
         stop = asyncio.Event()
         task = asyncio.create_task(server.run(stop))
-        await asyncio.wait_for(server.ready.wait(), WAIT_S)
+        await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)
         ready = local.ready()
         reply = await collect(local.stream(HELLO))
         stop.set()
-        await asyncio.wait_for(task, WAIT_S)
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
 
     assert ready
     assert not local.ready()
@@ -94,10 +94,10 @@ async def test_a_request_with_an_image_is_sent_as_parts(tmp_path: Path) -> None:
         server = server_at(tmp_path, client, new_key())
         stop = asyncio.Event()
         task = asyncio.create_task(server.run(stop))
-        await asyncio.wait_for(server.ready.wait(), WAIT_S)
+        await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)
         reply = await collect(LocalModel(server, client, QWEN, 4096).stream(request))
         stop.set()
-        await asyncio.wait_for(task, WAIT_S)
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
 
     assert reply.text == "echo: what is this"
 
@@ -107,14 +107,14 @@ async def test_the_server_refuses_a_request_without_its_key(tmp_path: Path) -> N
         server = server_at(tmp_path, client, new_key())
         stop = asyncio.Event()
         task = asyncio.create_task(server.run(stop))
-        await asyncio.wait_for(server.ready.wait(), WAIT_S)
+        await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)
         running = server.running
         assert running is not None
         refused = await client.post(
             f"{running.base_url}/chat/completions", json=HELLO_BODY
         )
         stop.set()
-        await asyncio.wait_for(task, WAIT_S)
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
 
     assert refused.status_code == HTTPStatus.UNAUTHORIZED
 
@@ -160,11 +160,11 @@ async def test_the_router_sends_a_background_job_to_the_served_model(
         router = Router(Unused(), health, local, local_ready=local.ready)
         stop = asyncio.Event()
         task = asyncio.create_task(server.run(stop))
-        await asyncio.wait_for(server.ready.wait(), WAIT_S)
+        await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)
         route = await router.decide(HELLO, background=True)
         reply = await collect(router.stream(HELLO, background=True))
         stop.set()
-        await asyncio.wait_for(task, WAIT_S)
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
 
     assert route == (Route.LOCAL, RouteReason.BACKGROUND)
     assert reply.text == "echo: hello"

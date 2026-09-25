@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 
 import pytest
@@ -13,6 +14,7 @@ from synthia.kernel.supervisor import (
     Supervisor,
     SupervisorGaveUpError,
 )
+from tests.timing import HANG_TIMEOUT_S
 
 FAST = RestartPolicy(
     max_restarts=3, window_s=60, backoff_initial_s=0.001, backoff_max_s=0.01
@@ -26,10 +28,12 @@ class Flaky:
         self.name = name
         self.failures = failures
         self.starts = 0
+        self.started = asyncio.Event()
         self.healthy = asyncio.Event()
 
     async def run(self, stop: asyncio.Event) -> None:
         self.starts += 1
+        self.started.set()
         if self.starts <= self.failures:
             message = f"crash {self.starts}"
             raise RuntimeError(message)
@@ -44,10 +48,12 @@ class Returns:
         self.name = name
         self.times = times
         self.starts = 0
+        self.waiting = asyncio.Event()
 
     async def run(self, stop: asyncio.Event) -> None:
         self.starts += 1
         if self.starts > self.times:
+            self.waiting.set()
             await stop.wait()
 
 
@@ -55,9 +61,11 @@ class Stubborn:
     name = "stubborn"
 
     def __init__(self) -> None:
+        self.started = asyncio.Event()
         self.cancelled = False
 
     async def run(self, stop: asyncio.Event) -> None:  # noqa: ARG002 - ignores stop on purpose
+        self.started.set()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -66,7 +74,7 @@ class Stubborn:
 
 
 async def stop_when(supervisor: Supervisor, condition: asyncio.Event) -> None:
-    await asyncio.wait_for(condition.wait(), timeout=2)
+    await asyncio.wait_for(condition.wait(), HANG_TIMEOUT_S)
     supervisor.stop()
 
 
@@ -97,10 +105,13 @@ async def test_a_clean_return_restarts_only_a_permanent_service(
     service = Returns("returns", times=2)
     supervisor.add(service, mode)
 
-    run = asyncio.create_task(supervisor.run())
-    await asyncio.sleep(0.1)
-    supervisor.stop()
-    await asyncio.wait_for(run, timeout=2)
+    # Transient and temporary: run() ends by itself. Permanent: two restarts, then
+    # the service waits for stop, and only then is it stopped.
+    stopper = asyncio.create_task(stop_when(supervisor, service.waiting))
+    await asyncio.wait_for(supervisor.run(), HANG_TIMEOUT_S)
+    stopper.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await stopper
 
     assert service.starts == expected_starts
 
@@ -110,7 +121,7 @@ async def test_a_temporary_service_is_not_restarted_after_a_crash() -> None:
     service = Flaky("once", failures=5)
     supervisor.add(service, RestartMode.TEMPORARY)
 
-    await asyncio.wait_for(supervisor.run(), timeout=2)
+    await asyncio.wait_for(supervisor.run(), HANG_TIMEOUT_S)
 
     assert service.starts == 1
 
@@ -122,7 +133,7 @@ async def test_exceeding_the_intensity_stops_everything_and_escalates() -> None:
     supervisor.add(bystander)
 
     with pytest.raises(SupervisorGaveUpError) as caught:
-        await asyncio.wait_for(supervisor.run(), timeout=2)
+        await asyncio.wait_for(supervisor.run(), HANG_TIMEOUT_S)
 
     assert caught.value.service == "doomed"
     assert doomed.starts == FAST.max_restarts + 1
@@ -162,7 +173,7 @@ async def test_stop_interrupts_a_long_backoff() -> None:
     supervisor.add(service)
 
     run = asyncio.create_task(supervisor.run())
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(service.started.wait(), HANG_TIMEOUT_S)
     supervisor.stop()
     await asyncio.wait_for(run, timeout=1)
 
@@ -177,10 +188,10 @@ async def test_a_service_that_ignores_stop_is_cancelled_after_the_timeout(
     supervisor.add(stubborn)
 
     run = asyncio.create_task(supervisor.run())
-    await asyncio.sleep(0.01)
+    await asyncio.wait_for(stubborn.started.wait(), HANG_TIMEOUT_S)
     with caplog.at_level(logging.WARNING):
         supervisor.stop()
-        await asyncio.wait_for(run, timeout=1)
+        await asyncio.wait_for(run, HANG_TIMEOUT_S)
 
     assert stubborn.cancelled
     assert "ignored stop" in caplog.text
@@ -192,7 +203,7 @@ async def test_cancelling_run_cancels_every_service() -> None:
     supervisor.add(stubborn)
 
     run = asyncio.create_task(supervisor.run())
-    await asyncio.sleep(0.01)
+    await asyncio.wait_for(stubborn.started.wait(), HANG_TIMEOUT_S)
     run.cancel()
     with pytest.raises(asyncio.CancelledError):
         await run
@@ -246,4 +257,4 @@ def test_two_services_cannot_share_a_name() -> None:
 
 
 async def test_run_with_no_services_returns() -> None:
-    await asyncio.wait_for(Supervisor().run(), timeout=1)
+    await asyncio.wait_for(Supervisor().run(), HANG_TIMEOUT_S)

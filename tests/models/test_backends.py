@@ -19,6 +19,7 @@ from synthia.models.server import (
     new_key,
 )
 from tests.models import fake_llama_server
+from tests.timing import HANG_TIMEOUT_S
 
 LINUX = {r.backend: r for r in RUNTIMES if r.target is Target.LINUX_X64}
 
@@ -85,9 +86,6 @@ def test_with_nothing_installed_the_error_says_how_to_install() -> None:
         Fallback([], launch_of).launch()
 
 
-WAIT_S = 10
-
-
 def serving_on(
     tmp_path: Path,
     client: httpx.AsyncClient,
@@ -127,10 +125,10 @@ async def test_the_supervisor_falls_back_to_the_cpu_build(tmp_path: Path) -> Non
         supervisor = Supervisor(default_policy=RestartPolicy(backoff_initial_s=0.01))
         supervisor.add(server)
         supervised = asyncio.create_task(supervisor.run())
-        await asyncio.wait_for(server.ready.wait(), WAIT_S)
+        await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)
         running = server.running
         supervisor.stop()
-        await asyncio.wait_for(supervised, WAIT_S)
+        await asyncio.wait_for(supervised, HANG_TIMEOUT_S)
 
     assert running is not None
     assert running.backend is Backend.CPU
@@ -159,7 +157,7 @@ async def test_when_no_build_starts_the_supervisor_gives_up(tmp_path: Path) -> N
         supervisor = Supervisor(default_policy=policy)
         supervisor.add(server)
         with pytest.raises(SupervisorGaveUpError):
-            await asyncio.wait_for(supervisor.run(), WAIT_S)
+            await asyncio.wait_for(supervisor.run(), HANG_TIMEOUT_S)
 
     assert list(fallback.failures) == [Backend.VULKAN, Backend.CPU]
     assert not server.ready.is_set()
