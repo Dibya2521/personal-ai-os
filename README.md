@@ -23,9 +23,10 @@ peripherals, and a kernel schedules, supervises and guards all of it.
 
 ## Status
 
-**Phase 0 of 13: the foundation.** The kernel and the command line exist;
-the intelligence is built on them phase by phase, and released when a
-capability works end to end.
+**Phase 1 of 13: cognition.** On top of the kernel, SYNTHIA can now think:
+`synthia chat` talks through a model gateway that routes each request between
+a free remote model and a local one, under a daily budget. The rest is built
+phase by phase, and released when a capability works end to end.
 [`docs/architecture.md`](docs/architecture.md) describes the whole design and
 the order it is built in.
 
@@ -47,6 +48,18 @@ and a llama.cpp build to run it are installed, free disk against the configured
 budget, and whether a remote model key is set (never its value). Each
 check reports `ok`, `warn` or `fail`; the command exits with the worst result,
 `0`, `1` or `2`, and `--json` prints the same report for a script.
+
+To chat, put a free [OpenRouter](https://openrouter.ai/keys) key in `.env` as
+`SYNTHIA_OPENROUTER_API_KEY`, then:
+
+```bash
+uv run synthia chat
+```
+
+`/help` lists the chat's commands. The local model is optional: `uv run
+synthia models install` shows what it would download for this machine (about
+3.2 GB without an NVIDIA GPU), asks, and installs it; from then on the chat
+starts it too.
 
 ## Configuration
 
@@ -73,10 +86,40 @@ identical to the settings class.
   follow a piece of work into the tasks it starts, and secret redaction applied
   to the fully formatted text.
 
+**Cognition.** How a request is routed, guarded and answered is described
+in [`docs/gateway.md`](docs/gateway.md).
+
+- **Model gateway.** One streaming interface for every model, and one adapter
+  for the OpenAI-compatible API that both OpenRouter and llama.cpp speak. Each
+  request goes to `openrouter/free` first and to the local model for
+  background jobs, for images or tools the remote cannot take, when the
+  remote circuit is open, when 10 or fewer of the day's requests are left, or
+  when the rate limit would make it wait over 5 seconds. A remote failure before the first word falls back to local once.
+- **Guards.** Retry with full-jitter backoff, a circuit breaker, a
+  sliding-window rate limit (20 in any 60 seconds) and a daily budget (50 per
+  UTC day) claimed before a request leaves the machine, so the provider never
+  sees a request over the limit. Every call is accounted per model, and
+  `synthia budget --check` compares the count with OpenRouter's own.
+- **Local model.** Qwen3.5-4B with vision, run by llama.cpp's server on
+  loopback with a fresh port and key per launch. `synthia models` lists,
+  installs and removes it and the llama.cpp builds, resumably, verified by
+  SHA-256 and within the disk budget. Installed builds are tried in the order
+  Metal, CUDA, Vulkan, CPU, and one that fails to start falls back to the
+  next.
+- **Personas.** SYNTHIA's character is data: five trait sliders rendered to
+  fixed sentences, plus principles. The default blends JARVIS, a warm
+  companion and EDITH; `/persona` switches or adjusts it mid-conversation, and
+  a TOML file in `SYNTHIA_HOME/personas` adds or replaces one.
+- **Chat.** Streaming answers with a line after each naming the route, the
+  model, the tokens and the seconds taken. Ctrl+C stops an answer and keeps the
+  chat; only finished exchanges enter the history. Log records go to
+  `SYNTHIA_HOME/logs/synthia.log`, not into the conversation.
+
 **Repository.** Every commit passes ruff with every rule enabled, pyright in
 strict mode, and the test suite at 100 percent branch coverage of the package,
 enforced by pre-commit and again by CI on Linux and Windows. Secret scanning and
-a file-size limit guard the public history.
+a file-size limit guard the public history. Tests replay recorded model
+responses and never reach the network, so CI spends no budget.
 
 ## Development
 
