@@ -6,7 +6,7 @@ from contextlib import aclosing
 from typing import TYPE_CHECKING
 
 from synthia.gateway.errors import ConnectionFailedError
-from synthia.gateway.openai_compat import Endpoint, OpenAICompatibleModel
+from synthia.gateway.openai_compat import Dialect, Endpoint, OpenAICompatibleModel
 from synthia.gateway.types import ModelInfo
 
 if TYPE_CHECKING:
@@ -57,7 +57,9 @@ class LocalModel:
         if launch is None:
             message = "the local model is not running"
             raise ConnectionFailedError(message)
-        endpoint = Endpoint(launch.base_url, self._info.id, launch.key)
+        endpoint = Endpoint(
+            launch.base_url, self._info.id, launch.key, dialect=Dialect.LLAMA_CPP
+        )
         adapter = OpenAICompatibleModel(
             client=self._client, endpoint=endpoint, info=self._info
         )

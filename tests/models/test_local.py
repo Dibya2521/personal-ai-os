@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncGenerator
+from dataclasses import replace
 from http import HTTPStatus
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from synthia.gateway.types import (
     ImagePart,
     Message,
     ModelInfo,
+    Reasoning,
     Role,
     TextPart,
 )
@@ -81,6 +83,27 @@ async def test_a_request_is_answered_by_the_running_server(tmp_path: Path) -> No
     assert not local.ready()
     assert reply.text == "echo: hello"
     assert reply.finish_reason is FinishReason.STOP
+
+
+async def test_the_reasoning_level_reaches_the_server_as_its_thinking_switch(
+    tmp_path: Path,
+) -> None:
+    async with httpx.AsyncClient() as client:
+        server = server_at(tmp_path, client, new_key())
+        local = LocalModel(server, client, QWEN, 4096)
+        stop = asyncio.Event()
+        task = asyncio.create_task(server.run(stop))
+        await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)
+        replies = {
+            level: await collect(local.stream(replace(HELLO, reasoning=level)))
+            for level in (Reasoning.LOW, Reasoning.OFF)
+        }
+        stop.set()
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
+
+    assert replies[Reasoning.LOW].reasoning == fake_llama_server.THOUGHT
+    assert replies[Reasoning.OFF].reasoning == ""
+    assert replies[Reasoning.LOW].text == replies[Reasoning.OFF].text == "echo: hello"
 
 
 async def test_a_request_with_an_image_is_sent_as_parts(tmp_path: Path) -> None:

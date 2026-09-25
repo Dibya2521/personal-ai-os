@@ -21,6 +21,10 @@ a free remote model and an optional local one, under a daily budget.
 - A model gateway: one streaming interface for every model and one adapter for
   the OpenAI-compatible chat API, used for OpenRouter (`openrouter/free` by
   default) and for llama.cpp's server.
+- A thinking level on each request: `off`, `low`, `medium`, `high` or `auto`.
+  OpenRouter receives it as `reasoning.effort` (`none` for off), llama.cpp's
+  server as the chat template's `enable_thinking` switch. A request without a
+  level is sent exactly as before.
 - Routing per request: remote first; local for background jobs, for images or
   tools the remote cannot take, while the remote circuit is open, when 10 or
   fewer of the day's requests are left, or when the rate limit would hold a

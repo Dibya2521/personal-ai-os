@@ -14,6 +14,7 @@ import time
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
@@ -34,6 +35,7 @@ from synthia.gateway.types import (
     ChatChunk,
     FinishReason,
     ImagePart,
+    Reasoning,
     Role,
     TextPart,
     ToolCallDelta,
@@ -56,6 +58,28 @@ REDACTED = "**********"
 REASONING_KEYS = ("reasoning_content", "reasoning")
 
 type JSON = dict[str, Any]
+
+
+class Dialect(StrEnum):
+    """How a server takes what the OpenAI chat API has no field for, like thinking.
+
+    OpenRouter takes ``reasoning.effort``, where ``none`` turns thinking off.
+    llama.cpp's server passes ``chat_template_kwargs`` to the model's chat
+    template, and ``enable_thinking`` is the one switch Qwen3.5's template has.
+    """
+
+    OPENROUTER = "openrouter"
+    LLAMA_CPP = "llama.cpp"
+
+
+def _reasoning(level: Reasoning | None, dialect: Dialect) -> JSON:
+    if level is None or level is Reasoning.AUTO:
+        return {}
+    if dialect is Dialect.LLAMA_CPP:
+        thinking = level is not Reasoning.OFF
+        return {"chat_template_kwargs": {"enable_thinking": thinking}}
+    effort = "none" if level is Reasoning.OFF else level.value
+    return {"reasoning": {"effort": effort}}
 
 
 def _content(message: Message) -> str | list[JSON]:
@@ -88,7 +112,9 @@ def _message(message: Message) -> JSON:
     return wire | {"content": _content(message)}
 
 
-def build_payload(request: ChatRequest, default_model: str) -> JSON:
+def build_payload(
+    request: ChatRequest, default_model: str, dialect: Dialect = Dialect.OPENROUTER
+) -> JSON:
     """Return the JSON body of a streaming chat completion request."""
     payload: JSON = {
         "model": request.model or default_model,
@@ -121,7 +147,7 @@ def build_payload(request: ChatRequest, default_model: str) -> JSON:
                 "strict": True,
             },
         }
-    return payload
+    return payload | _reasoning(request.reasoning, dialect)
 
 
 def parse_chunk(data: JSON) -> ChatChunk:
@@ -227,12 +253,14 @@ class Endpoint:
     """Where a model is served and how to address it.
 
     ``model`` is the default model id sent when a request names none.
+    ``dialect`` defaults to OpenRouter's, the only remote provider.
     """
 
     base_url: str
     model: str
     api_key: SecretStr | None = None
     headers: Mapping[str, str] = field(default_factory=dict[str, str])
+    dialect: Dialect = Dialect.OPENROUTER
 
     @property
     def completions_url(self) -> str:
@@ -252,6 +280,7 @@ class OpenAICompatibleModel:
         self._info = info
         self._api_key = endpoint.api_key
         self._headers = dict(endpoint.headers)
+        self._dialect = endpoint.dialect
 
     @property
     def info(self) -> ModelInfo:
@@ -268,7 +297,7 @@ class OpenAICompatibleModel:
         headers = dict(self._headers)
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key.get_secret_value()}"
-        payload = build_payload(request, self._model)
+        payload = build_payload(request, self._model, self._dialect)
         try:
             async with self._client.stream(
                 "POST", self._url, json=payload, headers=headers

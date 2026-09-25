@@ -18,6 +18,7 @@ from synthia.gateway.errors import (
     RateLimitedError,
 )
 from synthia.gateway.openai_compat import (
+    Dialect,
     Endpoint,
     OpenAICompatibleModel,
     build_payload,
@@ -32,6 +33,7 @@ from synthia.gateway.types import (
     ImagePart,
     Message,
     ModelInfo,
+    Reasoning,
     ToolCall,
     ToolSpec,
     Usage,
@@ -145,6 +147,80 @@ def test_tools_tool_calls_and_tool_results_map_to_the_wire_shape() -> None:
     assert payload["temperature"] == 0.2
     assert payload["max_tokens"] == 64
     assert payload["response_format"]["json_schema"]["strict"] is True
+
+
+@pytest.mark.parametrize(
+    ("level", "openrouter", "llama_cpp"),
+    [
+        (
+            Reasoning.OFF,
+            {"reasoning": {"effort": "none"}},
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        ),
+        (
+            Reasoning.LOW,
+            {"reasoning": {"effort": "low"}},
+            {"chat_template_kwargs": {"enable_thinking": True}},
+        ),
+        (
+            Reasoning.MEDIUM,
+            {"reasoning": {"effort": "medium"}},
+            {"chat_template_kwargs": {"enable_thinking": True}},
+        ),
+        (
+            Reasoning.HIGH,
+            {"reasoning": {"effort": "high"}},
+            {"chat_template_kwargs": {"enable_thinking": True}},
+        ),
+        (Reasoning.AUTO, {}, {}),
+        (None, {}, {}),
+    ],
+)
+def test_a_reasoning_level_is_sent_in_each_servers_dialect(
+    level: Reasoning | None,
+    openrouter: dict[str, object],
+    llama_cpp: dict[str, object],
+) -> None:
+    request = ChatRequest(HELLO.messages, reasoning=level)
+    plain = build_payload(HELLO, "m")
+
+    for dialect, added in (
+        (Dialect.OPENROUTER, openrouter),
+        (Dialect.LLAMA_CPP, llama_cpp),
+    ):
+        payload = build_payload(request, "m", dialect)
+        assert payload == plain | added
+
+
+def test_no_reasoning_level_leaves_the_body_byte_identical() -> None:
+    # Recorded cassettes match on the body's hash, so a request that sets no
+    # level must serialise exactly as it did before levels existed.
+    before = {
+        "model": "m",
+        "messages": [{"role": "user", "content": "hello"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+
+    for dialect in Dialect:
+        assert json.dumps(build_payload(HELLO, "m", dialect)) == json.dumps(before)
+
+
+async def test_the_endpoints_dialect_shapes_what_is_sent() -> None:
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, content=sse(delta(content="hi"), finish()))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    endpoint = Endpoint("http://127.0.0.1:8080/v1", "m", dialect=Dialect.LLAMA_CPP)
+    model = OpenAICompatibleModel(client=client, endpoint=endpoint, info=INFO)
+
+    await collect(model.stream(ChatRequest(HELLO.messages, reasoning=Reasoning.OFF)))
+
+    assert bodies[0]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "reasoning" not in bodies[0]
 
 
 # Chunks: wire -> chunk

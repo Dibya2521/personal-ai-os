@@ -140,12 +140,28 @@ class ToolSpec:
     parameters: Mapping[str, object]
 
 
+class Reasoning(StrEnum):
+    """How much a model may think before it answers.
+
+    ``AUTO`` is replaced by one of the other levels by the router, which reads
+    the request; a model reached without the router keeps its own default.
+    """
+
+    OFF = "off"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    AUTO = "auto"
+
+
 @dataclass(frozen=True, slots=True)
 class ChatRequest:
     """Everything a model needs for one completion.
 
     ``model`` overrides the provider's default model for this request only.
-    ``response_schema`` asks for JSON matching that schema.
+    ``response_schema`` asks for JSON matching that schema. ``reasoning`` sets
+    how much the model may think; ``None`` sends no setting at all, so the
+    model's own default applies.
 
     Raises:
         ValueError: If there are no messages, or a sampling setting is out of
@@ -158,6 +174,7 @@ class ChatRequest:
     max_tokens: int | None = None
     response_schema: Mapping[str, object] | None = None
     model: str | None = None
+    reasoning: Reasoning | None = None
 
     def __post_init__(self) -> None:
         if not self.messages:

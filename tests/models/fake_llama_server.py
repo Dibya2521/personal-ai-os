@@ -1,7 +1,8 @@
 """A stand-in for llama-server that accepts its flags and speaks its API.
 
 ``/health`` answers as llama-server does. ``/v1/chat/completions`` requires
-the launch key and streams back ``echo: `` plus the last user text.
+the launch key and streams back ``echo: `` plus the last user text, after
+one piece of reasoning when ``chat_template_kwargs.enable_thinking`` is true.
 
 Behaviour is set through the environment, which the launch passes on:
 ``FAKE_EXIT_CODE`` exits at once with that code; ``FAKE_LOAD_S`` answers 503
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     from synthia.models.server import Launch
 
 CRASH_CODE = 9
+THOUGHT = "thinking it over"
 
 
 def command(launch: Launch) -> list[str]:
@@ -53,7 +55,12 @@ def _last_text(body: dict[str, object]) -> str:
     return "".join(p["text"] for p in parts if p["type"] == "text")
 
 
-def _stream(handler: BaseHTTPRequestHandler, text: str) -> None:
+def _thinking(body: dict[str, object]) -> bool:
+    kwargs = cast("dict[str, object]", body.get("chat_template_kwargs") or {})
+    return kwargs.get("enable_thinking") is True
+
+
+def _stream(handler: BaseHTTPRequestHandler, text: str, *, think: bool) -> None:
     chunks: list[dict[str, object]] = [
         {"model": "local", "choices": [{"index": 0, "delta": {"content": text}}]},
         {
@@ -62,6 +69,11 @@ def _stream(handler: BaseHTTPRequestHandler, text: str) -> None:
             "usage": {"prompt_tokens": 3, "completion_tokens": 2},
         },
     ]
+    if think:
+        thought = {"reasoning_content": THOUGHT}
+        chunks.insert(
+            0, {"model": "local", "choices": [{"index": 0, "delta": thought}]}
+        )
     handler.send_response(HTTPStatus.OK)
     handler.send_header("Content-Type", "text/event-stream")
     handler.end_headers()
@@ -93,7 +105,7 @@ def _handler(
                 return
             length = int(self.headers.get("Content-Length", "0"))
             body = cast("dict[str, object]", json.loads(self.rfile.read(length)))
-            _stream(self, f"echo: {_last_text(body)}")
+            _stream(self, f"echo: {_last_text(body)}", think=_thinking(body))
 
         @override
         def log_message(self, format: str, *args: object) -> None:
