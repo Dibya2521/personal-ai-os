@@ -29,6 +29,10 @@ a free remote model and an optional local one, under a daily budget.
   with no extra request: a greeting or short lookup does not think; code,
   mathematics, why and how questions, comparisons and proofs think more; a
   long message alone adds only a little.
+- Each level is a time allowance, the same wait on any model: low 5 s, medium
+  20 s, high 60 s. For OpenRouter it becomes `reasoning.max_tokens`: the
+  allowance times the remote models' tokens per second measured over the last
+  7 days, or 25 tokens/s before anything is measured.
 - Routing per request: remote first; local for background jobs, for images or
   tools the remote cannot take, while the remote circuit is open, when 10 or
   fewer of the day's requests are left, or when the rate limit would hold a

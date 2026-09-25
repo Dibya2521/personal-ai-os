@@ -77,6 +77,7 @@ def test_invalid_images_are_rejected(data: bytes, media_type: str) -> None:
         ({"temperature": -0.1}, "temperature"),
         ({"temperature": 2.01}, "temperature"),
         ({"max_tokens": 0}, "max_tokens"),
+        ({"reasoning_tokens": 0}, "reasoning_tokens"),
     ],
 )
 def test_request_validation(kwargs: dict[str, object], match: str) -> None:

@@ -82,12 +82,18 @@ def build_gateway(
         endpoint=endpoint,
         info=openrouter_info(settings.openrouter_model),
     )
+    usage = UsageLog(settings.home / GATEWAY_DB)
+    local_ids = frozenset[str]() if local is None else frozenset({local.info.id})
+
+    async def remote_speed() -> float | None:
+        return await usage.tokens_per_second(exclude=local_ids)
+
     router = Router(
         guard_remote(adapter, health),
         health,
         local,
         publish=publish,
         local_ready=(lambda: False) if local is None else local.ready,
+        remote_speed=remote_speed,
     )
-    usage = UsageLog(settings.home / GATEWAY_DB)
     return Gateway(AccountingModel(router, usage, publish), router, health, usage)

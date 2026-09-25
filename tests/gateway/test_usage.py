@@ -219,3 +219,31 @@ async def test_no_connection_is_a_connection_failure() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(refuse)) as client:
         with pytest.raises(ConnectionFailedError, match="no response from"):
             await free_requests_today(client, SecretStr(KEY), BASE)
+
+
+async def test_speed_pools_the_last_seven_days_and_leaves_out_excluded_models(
+    tmp_path: Path,
+) -> None:
+    clock = Clock()
+    log = UsageLog(tmp_path / "gateway.db", clock)
+    empty = await log.tokens_per_second()
+    await log.record("vendor/old", Usage(1, 900), 1.0)
+    clock.now += timedelta(days=7)
+    await log.record("vendor/a", Usage(5, 100), 4.0)
+    clock.now += timedelta(days=6)
+    await log.record("vendor/b", Usage(5, 50), 1.0)
+    await log.record("qwen3.5-4b", Usage(5, 2), 1.0)
+    await log.record("vendor/silent", None, 3.0)
+
+    assert empty is None
+    assert await log.tokens_per_second(exclude=frozenset({"qwen3.5-4b"})) == 150 / 8
+    assert (
+        await log.tokens_per_second(exclude=frozenset({"vendor/a", "vendor/b"}))
+        == 2 / 4
+    )
+    assert (
+        await log.tokens_per_second(
+            exclude=frozenset({"vendor/silent", "qwen3.5-4b", "vendor/a", "vendor/b"})
+        )
+        is None
+    )

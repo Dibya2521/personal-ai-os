@@ -17,7 +17,7 @@ from synthia.gateway.providers import (
     openrouter_info,
 )
 from synthia.gateway.router import Route, RouteDecided, RouteReason
-from synthia.gateway.types import ChatRequest, Message
+from synthia.gateway.types import ChatRequest, Message, Reasoning, Usage
 from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings
 from synthia.kernel.errors import ConfigError
@@ -111,3 +111,22 @@ async def test_a_request_is_metered_routed_and_accounted(tmp_path: Path) -> None
     assert [(e.route, e.reason) for e in decided] == [
         (Route.REMOTE, RouteReason.PREFERRED)
     ]
+
+
+async def test_remote_thinking_is_capped_from_the_speed_measured_so_far(
+    tmp_path: Path,
+) -> None:
+    sent: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return answer(request)
+
+    settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
+    low = ChatRequest(HELLO.messages, reasoning=Reasoning.LOW)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        gateway = build_gateway(settings, client, _ignore)
+        await gateway.usage.record("vendor/free-model", Usage(9, 400), 10.0)
+        await collect(gateway.model.stream(low))
+
+    assert sent[0]["reasoning"] == {"max_tokens": 5 * 40}

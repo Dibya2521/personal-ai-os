@@ -17,7 +17,7 @@ import sqlite3
 import time
 from contextlib import aclosing
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from synthia.gateway.types import ChatChunk, ChatRequest, ModelInfo, Usage
 
 BUSY_TIMEOUT_S: Final = 5.0
+SPEED_DAYS: Final = 7
 
 _SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS usage (
@@ -103,8 +104,38 @@ class UsageLog:
         """Return today's totals, the busiest model first."""
         return await asyncio.to_thread(self._today)
 
-    def _day(self) -> str:
-        return self._clock().astimezone(UTC).date().isoformat()
+    async def tokens_per_second(
+        self, exclude: frozenset[str] = frozenset()
+    ) -> float | None:
+        """Return completion tokens per second over the last 7 UTC days.
+
+        The seconds are whole calls, the wait for the first token included, so
+        this reads a little below the generation speed. Models in ``exclude``
+        are left out. ``None`` until a call with tokens has been recorded.
+        """
+        rows = await asyncio.to_thread(self._since, SPEED_DAYS)
+        kept = [
+            (tokens, seconds) for model, tokens, seconds in rows if model not in exclude
+        ]
+        tokens = sum(t for t, _ in kept)
+        seconds = sum(s for _, s in kept)
+        return tokens / seconds if tokens and seconds > 0 else None
+
+    def _day(self, days_back: int = 0) -> str:
+        today = self._clock().astimezone(UTC).date()
+        return (today - timedelta(days=days_back)).isoformat()
+
+    def _since(self, days: int) -> list[tuple[str, int, float]]:
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                "SELECT model, SUM(completion_tokens), SUM(seconds) FROM usage "
+                "WHERE day >= ? GROUP BY model",
+                (self._day(days - 1),),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [(str(m), int(t), float(s)) for m, t, s in rows]
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._path, timeout=BUSY_TIMEOUT_S, isolation_level=None)

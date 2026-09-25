@@ -2,7 +2,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from synthia.gateway.reasoning import choose, points, resolve
+from synthia.gateway.reasoning import choose, limit, points, resolve, token_limit
 from synthia.gateway.types import ChatRequest, Message, Reasoning
 
 OFF, LOW, MEDIUM, HIGH = Reasoning.OFF, Reasoning.LOW, Reasoning.MEDIUM, Reasoning.HIGH
@@ -94,6 +94,33 @@ def test_resolve_replaces_auto_and_nothing_else() -> None:
     for level in (None, OFF, LOW, MEDIUM, HIGH):
         request = ChatRequest(auto.messages, reasoning=level)
         assert resolve(request) is request
+
+
+@pytest.mark.parametrize(
+    ("level", "speed", "tokens"),
+    [
+        (LOW, 30.0, 150),
+        (MEDIUM, 35.5, 710),
+        (HIGH, None, 1500),
+        (HIGH, 0.0, 1500),
+        (LOW, 0.1, 1),
+        (OFF, 30.0, None),
+        (Reasoning.AUTO, 30.0, None),
+        (None, 30.0, None),
+    ],
+)
+def test_a_levels_allowance_becomes_tokens_at_the_measured_speed(
+    level: Reasoning | None, speed: float | None, tokens: int | None
+) -> None:
+    assert token_limit(level, speed) == tokens
+
+
+def test_limit_sets_tokens_only_for_a_level_with_an_allowance() -> None:
+    high = ChatRequest((Message.user("x"),), reasoning=HIGH)
+    off = ChatRequest((Message.user("x"),), reasoning=OFF)
+
+    assert limit(high, 20.0).reasoning_tokens == 1200
+    assert limit(off, 20.0) is off
 
 
 @given(st.text())

@@ -192,6 +192,21 @@ def test_a_reasoning_level_is_sent_in_each_servers_dialect(
         assert payload == plain | added
 
 
+def test_a_token_limit_replaces_the_effort_on_openrouter_only() -> None:
+    def sent(level: Reasoning, dialect: Dialect) -> dict[str, object]:
+        request = ChatRequest(HELLO.messages, reasoning=level, reasoning_tokens=150)
+        payload = build_payload(request, "m", dialect)
+        return {
+            k: payload[k] for k in ("reasoning", "chat_template_kwargs") if k in payload
+        }
+
+    assert sent(Reasoning.LOW, Dialect.OPENROUTER) == {"reasoning": {"max_tokens": 150}}
+    assert sent(Reasoning.OFF, Dialect.OPENROUTER) == {"reasoning": {"effort": "none"}}
+    assert sent(Reasoning.LOW, Dialect.LLAMA_CPP) == {
+        "chat_template_kwargs": {"enable_thinking": True}
+    }
+
+
 def test_no_reasoning_level_leaves_the_body_byte_identical() -> None:
     # Recorded cassettes match on the body's hash, so a request that sets no
     # level must serialise exactly as it did before levels existed.

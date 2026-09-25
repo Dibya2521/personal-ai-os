@@ -63,7 +63,8 @@ type JSON = dict[str, Any]
 class Dialect(StrEnum):
     """How a server takes what the OpenAI chat API has no field for, like thinking.
 
-    OpenRouter takes ``reasoning.effort``, where ``none`` turns thinking off.
+    OpenRouter takes ``reasoning.effort``, where ``none`` turns thinking off,
+    or ``reasoning.max_tokens`` when the request carries a token limit.
     llama.cpp's server passes ``chat_template_kwargs`` to the model's chat
     template, and ``enable_thinking`` is the one switch Qwen3.5's template has.
     """
@@ -72,14 +73,18 @@ class Dialect(StrEnum):
     LLAMA_CPP = "llama.cpp"
 
 
-def _reasoning(level: Reasoning | None, dialect: Dialect) -> JSON:
+def _reasoning(request: ChatRequest, dialect: Dialect) -> JSON:
+    level = request.reasoning
     if level is None or level is Reasoning.AUTO:
         return {}
     if dialect is Dialect.LLAMA_CPP:
         thinking = level is not Reasoning.OFF
         return {"chat_template_kwargs": {"enable_thinking": thinking}}
-    effort = "none" if level is Reasoning.OFF else level.value
-    return {"reasoning": {"effort": effort}}
+    if level is Reasoning.OFF:
+        return {"reasoning": {"effort": "none"}}
+    if request.reasoning_tokens is not None:
+        return {"reasoning": {"max_tokens": request.reasoning_tokens}}
+    return {"reasoning": {"effort": level.value}}
 
 
 def _content(message: Message) -> str | list[JSON]:
@@ -147,7 +152,7 @@ def build_payload(
                 "strict": True,
             },
         }
-    return payload | _reasoning(request.reasoning, dialect)
+    return payload | _reasoning(request, dialect)
 
 
 def parse_chunk(data: JSON) -> ChatChunk:

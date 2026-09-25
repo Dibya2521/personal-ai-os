@@ -16,10 +16,17 @@ sign below adds points once, however often it appears:
 ``low`` above that; 1 is ``low``, 2 is ``medium``, 3 or more is ``high``.
 Length alone never goes past ``low``, so a long pasted log with a trivial
 question does not buy a long think. The word lists are English only.
+
+Each level is a time allowance, so it means the same wait on any model: low 5
+seconds (reads as instant), medium 20, high 60 (about the most anyone waits
+in a chat). These are a starting point, not measured. A remote model cannot
+be stopped mid-thought, so its allowance becomes a token limit at its measured
+speed; the local server can, and is stopped when the time is up.
 """
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import replace
 from typing import TYPE_CHECKING, Final
@@ -34,6 +41,11 @@ LONG_WORDS: Final = 80
 MEDIUM_POINTS: Final = 2
 HIGH_POINTS: Final = 3
 SEVERAL_QUESTIONS: Final = 2
+ALLOWANCE_S: Final = {Reasoning.LOW: 5.0, Reasoning.MEDIUM: 20.0, Reasoning.HIGH: 60.0}
+# The slowest free model measured end to end on 2026-09-23 ran at 26.5
+# tokens/s (4 models, 26.5 to 73.6); assuming the slow end keeps the wait
+# inside the allowance.
+DEFAULT_TOKENS_PER_S: Final = 25.0
 
 _FLAGS: Final = re.IGNORECASE | re.MULTILINE
 _CODE: Final = re.compile(
@@ -99,3 +111,24 @@ def resolve(request: ChatRequest) -> ChatRequest:
     if request.reasoning is not Reasoning.AUTO:
         return request
     return replace(request, reasoning=choose(request))
+
+
+def token_limit(level: Reasoning | None, tokens_per_s: float | None) -> int | None:
+    """Return the thinking tokens that fit ``level``'s allowance at that speed.
+
+    ``None`` for a level with no allowance (off, auto, unset). An unknown or
+    non-positive speed counts as :data:`DEFAULT_TOKENS_PER_S`.
+    """
+    allowance = ALLOWANCE_S.get(level) if level is not None else None
+    if allowance is None:
+        return None
+    speed = tokens_per_s if tokens_per_s and tokens_per_s > 0 else DEFAULT_TOKENS_PER_S
+    return math.ceil(allowance * speed)
+
+
+def limit(request: ChatRequest, tokens_per_s: float | None) -> ChatRequest:
+    """Return ``request`` with its thinking capped in tokens at that speed."""
+    tokens = token_limit(request.reasoning, tokens_per_s)
+    if tokens is None:
+        return request
+    return replace(request, reasoning_tokens=tokens)

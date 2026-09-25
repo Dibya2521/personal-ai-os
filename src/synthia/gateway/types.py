@@ -161,11 +161,12 @@ class ChatRequest:
     ``model`` overrides the provider's default model for this request only.
     ``response_schema`` asks for JSON matching that schema. ``reasoning`` sets
     how much the model may think; ``None`` sends no setting at all, so the
-    model's own default applies.
+    model's own default applies. ``reasoning_tokens`` caps that thinking in
+    tokens, for a server that cannot be told to stop thinking mid-answer.
 
     Raises:
-        ValueError: If there are no messages, or a sampling setting is out of
-            range.
+        ValueError: If there are no messages, or a sampling setting or token
+            limit is out of range.
     """
 
     messages: tuple[Message, ...]
@@ -175,6 +176,7 @@ class ChatRequest:
     response_schema: Mapping[str, object] | None = None
     model: str | None = None
     reasoning: Reasoning | None = None
+    reasoning_tokens: int | None = None
 
     def __post_init__(self) -> None:
         if not self.messages:
@@ -188,6 +190,9 @@ class ChatRequest:
             raise ValueError(message)
         if self.max_tokens is not None and self.max_tokens <= 0:
             message = "max_tokens must be positive"
+            raise ValueError(message)
+        if self.reasoning_tokens is not None and self.reasoning_tokens <= 0:
+            message = "reasoning_tokens must be positive"
             raise ValueError(message)
 
     @property

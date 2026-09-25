@@ -333,8 +333,23 @@ async def test_auto_reasoning_is_resolved_before_any_model_sees_it(
     assert sent == announced == [Reasoning.MEDIUM, Reasoning.MEDIUM]
 
 
+async def test_only_a_remote_request_gets_a_token_limit(setup: Setup) -> None:
+    async def speed() -> float:
+        return 40.0
+
+    remote, local = Fake(REMOTE, AuthError("bad key")), Fake(LOCAL)
+    router = Router(remote, setup.health, local, setup.publish, remote_speed=speed)
+    request = ChatRequest((Message.user("hi there"),), reasoning=Reasoning.MEDIUM)
+
+    await collect(router.stream(request))
+    await collect(router.stream(request, background=True))
+
+    assert remote.requests[0].reasoning_tokens == 20 * 40
+    assert [r.reasoning_tokens for r in local.requests] == [20 * 40, None]
+
+
 @pytest.mark.parametrize("level", [None, Reasoning.OFF, Reasoning.HIGH])
-async def test_a_level_other_than_auto_is_sent_unchanged(
+async def test_a_level_other_than_auto_is_kept(
     setup: Setup, level: Reasoning | None
 ) -> None:
     remote = Fake(REMOTE)
@@ -342,4 +357,5 @@ async def test_a_level_other_than_auto_is_sent_unchanged(
 
     await collect(setup.router(remote).stream(request))
 
-    assert remote.requests == [request]
+    assert [r.reasoning for r in remote.requests] == [level]
+    assert [r.messages for r in remote.requests] == [request.messages]

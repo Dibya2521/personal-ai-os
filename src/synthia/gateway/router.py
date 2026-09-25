@@ -20,7 +20,9 @@ After output has started nothing can switch, since those words are already on
 screen or spoken. Every decision is published as a :class:`RouteDecided`.
 
 A request asking for ``auto`` reasoning gets its level here, after the model
-is chosen, so every caller has it decided the same way.
+is chosen, so every caller has it decided the same way. A request going
+remote also gets its thinking capped in tokens, from the remote's measured
+speed, since the remote cannot be told to stop thinking once it has started.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ from typing import TYPE_CHECKING
 from synthia.gateway.circuit import CircuitBreakerModel, CircuitState
 from synthia.gateway.errors import GatewayError
 from synthia.gateway.metered import MeteredModel
-from synthia.gateway.reasoning import resolve
+from synthia.gateway.reasoning import limit, resolve
 from synthia.gateway.retry import RetryingModel
 from synthia.gateway.types import ModelInfo, Reasoning
 from synthia.kernel.bus import Event
@@ -135,23 +137,34 @@ def _always() -> bool:
     return True
 
 
+async def _unmeasured() -> float | None:
+    return None
+
+
 class Router:
     """A :class:`~synthia.gateway.protocol.ChatModel` that picks a model per request."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         remote: ChatModel,
         health: RemoteHealth,
         local: ChatModel | None = None,
         publish: Callable[[Event], Awaitable[None]] = _discard,
         local_ready: Callable[[], bool] = _always,
+        *,
+        remote_speed: Callable[[], Awaitable[float | None]] = _unmeasured,
     ) -> None:
-        """Route between ``remote`` (already guarded) and an optional ``local``."""
+        """Route between ``remote`` (already guarded) and an optional ``local``.
+
+        ``remote_speed`` returns the remote's measured tokens per second, or
+        ``None`` when nothing has been measured yet.
+        """
         self._remote = remote
         self._health = health
         self._local = local
         self._local_ready = local_ready
         self._publish = publish
+        self._remote_speed = remote_speed
 
     @property
     def info(self) -> ModelInfo:
@@ -182,6 +195,8 @@ class Router:
         """
         route, reason, model = await self._choose(request, background=background)
         request = resolve(request)
+        if route is Route.REMOTE:
+            request = limit(request, await self._remote_speed())
         await self._announce(route, reason, model, request)
         if route is Route.LOCAL:
             async with aclosing(model.stream(request)) as chunks:
