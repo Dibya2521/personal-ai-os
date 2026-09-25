@@ -271,8 +271,6 @@ MODELS: Final = (
         ),
     ),
 )
-DEFAULT_MODEL: Final = "qwen3.5-4b"
-
 _SYSTEMS: Final = {"windows": "windows", "linux": "linux", "darwin": "macos"}
 _MACHINES: Final = {
     "amd64": "x64",

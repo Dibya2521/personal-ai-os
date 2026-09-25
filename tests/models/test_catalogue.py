@@ -1,7 +1,7 @@
 import pytest
 
+from synthia.kernel.config import DEFAULT_LOCAL_MODEL
 from synthia.models.catalogue import (
-    DEFAULT_MODEL,
     LLAMA_CPP_BUILD,
     MODELS,
     RUNTIMES,
@@ -60,7 +60,7 @@ def test_model_files_come_from_the_pinned_revision() -> None:
 
 def test_this_laptops_download_is_the_recorded_total() -> None:
     builds = recommended(Target.WINDOWS_X64, nvidia=False)
-    model = find(DEFAULT_MODEL)
+    model = find(DEFAULT_LOCAL_MODEL)
 
     assert sum(b.size for b in builds) + model.size == 3_464_043_158
 
@@ -105,7 +105,7 @@ def test_recommended_puts_the_accelerator_first_and_keeps_the_cpu_floor(
 
 
 def test_find_returns_runtimes_and_models_and_refuses_unknown_names() -> None:
-    assert find(DEFAULT_MODEL).id == DEFAULT_MODEL
+    assert find(DEFAULT_LOCAL_MODEL).id == DEFAULT_LOCAL_MODEL
     assert find(RUNTIMES[0].id) is RUNTIMES[0]
     with pytest.raises(KeyError, match="gpt-5"):
         find("gpt-5")

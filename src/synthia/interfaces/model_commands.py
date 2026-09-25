@@ -23,7 +23,6 @@ from rich.progress import (
 from rich.table import Table
 
 from synthia.models.catalogue import (
-    DEFAULT_MODEL,
     MODELS,
     RUNTIMES,
     Model,
@@ -66,11 +65,23 @@ def this_machine() -> Machine:
     )
 
 
-def suggested(machine: Machine) -> tuple[Runtime | Model, ...]:
+def suggested(machine: Machine, model: Model) -> tuple[Runtime | Model, ...]:
     """Return what ``synthia models install`` installs when given no names."""
     if machine.target is None:
         return ()
-    return (*recommended(machine.target, nvidia=machine.nvidia), find(DEFAULT_MODEL))
+    return (*recommended(machine.target, nvidia=machine.nvidia), model)
+
+
+def configured(name: str) -> Model:
+    """Return the catalogue's model called ``name``, as SYNTHIA_LOCAL_MODEL names it.
+
+    Raises:
+        KeyError: If the catalogue has no model of that name.
+    """
+    for model in MODELS:
+        if model.id == name:
+            return model
+    raise KeyError(name)
 
 
 def resolve(names: Sequence[str]) -> tuple[Runtime | Model, ...]:
@@ -95,9 +106,17 @@ def _state(installer: Installer, item: Runtime | Model) -> str:
     return PARTIAL if installer.to_download(item) < item.size else MISSING
 
 
-def list_table(installer: Installer, machine: Machine) -> Table:
-    """Return every catalogue item with its size and state; * marks a pick."""
-    picks = {item.id for item in suggested(machine)}
+def list_table(installer: Installer, machine: Machine, model: str) -> Table:
+    """Return every catalogue item with its size and state; * marks a pick.
+
+    ``model`` is marked by name, so the list still shows when it names nothing.
+    """
+    picks: set[str] = (
+        set()
+        if machine.target is None
+        else {r.id for r in recommended(machine.target, nvidia=machine.nvidia)}
+        | {model}
+    )
     table = Table(box=None, pad_edge=False)
     for column in ("", "name", "size", "state"):
         table.add_column(column)

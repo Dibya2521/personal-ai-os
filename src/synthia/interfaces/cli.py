@@ -185,6 +185,19 @@ def _local(settings: Settings) -> LocalService | None:
     return None if setup is None else LocalService(setup, settings.home / SERVER_LOG)
 
 
+def _local_model(settings: Settings) -> Model:
+    try:
+        return model_commands.configured(settings.local_model)
+    except KeyError:
+        typer.echo(
+            f"error: SYNTHIA_LOCAL_MODEL={settings.local_model} is not a model "
+            "in the catalogue",
+            err=True,
+        )
+        typer.echo("see: synthia models list", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+
+
 def _yes(_: str) -> bool:
     return True
 
@@ -196,8 +209,9 @@ def _ask(question: str) -> bool:
 @models_app.command("list")
 def models_list() -> None:
     """Show everything that can be installed; * marks what suits this machine."""
+    settings = _settings()
     table = model_commands.list_table(
-        _installer(_settings()), model_commands.this_machine()
+        _installer(settings), model_commands.this_machine(), settings.local_model
     )
     Console().print(table)
 
@@ -219,7 +233,9 @@ def models_install(
     items = (
         _items(names)
         if names
-        else model_commands.suggested(model_commands.this_machine())
+        else model_commands.suggested(
+            model_commands.this_machine(), _local_model(settings)
+        )
     )
     if not items:
         typer.echo(
