@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import logging
 import signal
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
@@ -355,3 +356,23 @@ def test_the_command_hands_an_installed_local_model_to_the_chat(
     assert result.exit_code == 0
     assert len(given) == 1
     assert isinstance(given[0], LocalService)
+
+
+def test_the_command_logs_to_a_file_not_over_the_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def chat(*_: object, local: LocalService | None = None) -> None:
+        del local
+        logging.getLogger("synthia.test").warning("the vulkan build could not start")
+
+    monkeypatch.setattr(cli, "run_chat", chat)
+    # As in a real run: with no handler at all, logging prints to stderr.
+    monkeypatch.setattr(logging.getLogger(), "handlers", [])
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+
+    result = CliRunner().invoke(app, ["chat"])
+
+    assert result.exit_code == 0
+    assert "could not start" not in result.stdout + result.stderr
+    assert "could not start" in (tmp_path / cli.CHAT_LOG).read_text(encoding="utf-8")

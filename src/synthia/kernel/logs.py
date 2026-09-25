@@ -26,6 +26,7 @@ from synthia.kernel.config import LogFormat, Settings
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterable
+    from pathlib import Path
 
 REDACTED = "**********"
 HANDLER_NAME = "synthia"
@@ -167,8 +168,30 @@ def configure_logging(settings: Settings, stream: TextIO | None = None) -> Redac
     handler.setFormatter(formatter)
 
     root = logging.getLogger()
-    for existing in [h for h in root.handlers if h.get_name() == HANDLER_NAME]:
-        root.removeHandler(existing)
+    _remove_handler(root)
     root.addHandler(handler)
     root.setLevel(settings.log_level.value)
     return redactor
+
+
+@contextmanager
+def logging_to(settings: Settings, path: Path) -> Generator[Redactor]:
+    """Send every record to the file at ``path`` while inside, then restore logging.
+
+    For an interactive command, where a record written to the terminal would
+    land in the middle of what the user is typing.
+    """
+    root = logging.getLogger()
+    level = root.level
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="") as stream:
+        try:
+            yield configure_logging(settings, stream)
+        finally:
+            _remove_handler(root)
+            root.setLevel(level)
+
+
+def _remove_handler(root: logging.Logger) -> None:
+    for existing in [h for h in root.handlers if h.get_name() == HANDLER_NAME]:
+        root.removeHandler(existing)

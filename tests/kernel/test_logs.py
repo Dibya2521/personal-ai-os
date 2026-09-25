@@ -21,6 +21,7 @@ from synthia.kernel.logs import (
     configure_logging,
     correlation,
     current_correlation_id,
+    logging_to,
     secret_values,
 )
 
@@ -143,6 +144,26 @@ def test_configuring_twice_leaves_one_handler(
     ours = [h for h in logging.getLogger().handlers if h.get_name() == HANDLER_NAME]
     assert len(ours) == 1
     assert len(logging.getLogger().handlers) == len(before) + 1
+
+
+def test_logging_to_a_file_writes_there_then_restores_the_root_logger(
+    tmp_path: Path, captured: tuple[io.StringIO, list[logging.Handler]]
+) -> None:
+    _, before = captured
+    root = logging.getLogger()
+    level = root.level
+    path = tmp_path / "logs" / "synthia.log"
+    with logging_to(make_settings(LogFormat.CONSOLE), path):
+        logging.getLogger(TEST_LOGGER).warning("key %s", PLANTED)
+        inside = list(root.handlers)
+    logging.getLogger(TEST_LOGGER).warning("after")
+
+    text = path.read_text(encoding="utf-8")
+    assert f"key {REDACTED}" in text
+    assert PLANTED not in text
+    assert "after" not in text
+    assert len(inside) == len(before) + 1
+    assert (root.handlers, root.level) == (before, level)
 
 
 def test_level_filters_records(

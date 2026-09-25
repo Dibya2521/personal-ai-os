@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import asdict
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import httpx
@@ -19,6 +20,7 @@ from synthia.interfaces.chat import run_chat
 from synthia.interfaces.usage_report import budget_report
 from synthia.kernel.config import Settings, load_settings
 from synthia.kernel.errors import ConfigError, SynthiaError
+from synthia.kernel.logs import logging_to
 from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.models.service import SERVER_LOG, LocalService, find_local
 from synthia.persona.model import PersonaError
@@ -37,6 +39,8 @@ models_app = typer.Typer(
     help="Install and remove the local runtime and models.", no_args_is_help=True
 )
 app.add_typer(models_app, name="models")
+
+CHAT_LOG = Path("logs") / "synthia.log"
 
 # A generous read timeout: a slow CDN may pause between chunks of a 2.7 GB file.
 DOWNLOAD_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
@@ -118,9 +122,10 @@ def chat(
     """
     try:
         settings = load_settings()
-        run_chat(
-            settings, persona or settings.persona, Console(), local=_local(settings)
-        )
+        with logging_to(settings, settings.home / CHAT_LOG):
+            run_chat(
+                settings, persona or settings.persona, Console(), local=_local(settings)
+            )
     except (ConfigError, PersonaError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
