@@ -42,8 +42,9 @@ uv run synthia doctor
 ```
 
 `doctor` checks what the rest of the system plans around: the Python version,
-processor cores, memory, whether a CUDA GPU is present, free disk against the
-configured budget, and whether a remote model key is set (never its value). Each
+processor cores, memory, whether a CUDA GPU is present, whether the local model
+and a llama.cpp build to run it are installed, free disk against the configured
+budget, and whether a remote model key is set (never its value). Each
 check reports `ok`, `warn` or `fail`; the command exits with the worst result,
 `0`, `1` or `2`, and `--json` prints the same report for a script.
 

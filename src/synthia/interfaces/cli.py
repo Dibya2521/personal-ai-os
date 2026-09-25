@@ -92,7 +92,8 @@ def doctor(
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
 
-    checks = doctor_checks.evaluate(settings, doctor_checks.gather_facts(settings.home))
+    facts = doctor_checks.gather_facts(settings, _installer(settings))
+    checks = doctor_checks.evaluate(settings, facts)
     if as_json:
         typer.echo(
             json.dumps(

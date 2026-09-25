@@ -27,7 +27,7 @@ from synthia.models.server import Launch, LlamaServer, free_port, new_key
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
-    from synthia.kernel.config import Settings
+    from synthia.kernel.config import LocalBackend, Settings
     from synthia.models.catalogue import Target
     from synthia.models.install import Installer
 
@@ -61,6 +61,18 @@ class LocalSetup:
         )
 
 
+def installed_builds(
+    installer: Installer,
+    target: Target | None,
+    choice: LocalBackend,
+    runtimes: Iterable[Runtime] = RUNTIMES,
+) -> tuple[Runtime, ...]:
+    """Return the installed builds for ``target``, fastest first, within ``choice``."""
+    return candidates(
+        (r for r in runtimes if r.target == target and installer.installed(r)), choice
+    )
+
+
 def find_local(
     settings: Settings,
     installer: Installer,
@@ -75,12 +87,12 @@ def find_local(
     )
     if model is None or not installer.installed(model):
         return None
-    installed = (
-        r
-        for r in items
-        if isinstance(r, Runtime) and r.target == target and installer.installed(r)
+    runtimes = installed_builds(
+        installer,
+        target,
+        settings.local_backend,
+        (r for r in items if isinstance(r, Runtime)),
     )
-    runtimes = candidates(installed, settings.local_backend)
     if not runtimes:
         return None
     return LocalSetup(model, runtimes, installer, settings.local_context)
