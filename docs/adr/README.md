@@ -10,3 +10,4 @@ supersedes the old one.
 | [0002](0002-events-and-supervision.md) | an event bus and an OTP-style supervisor at the core | accepted |
 | [0003](0003-configuration-and-secrets.md) | configuration from the environment, secrets masked everywhere | accepted |
 | [0004](0004-local-first.md) | local first, optional weight, remote models behind a budget | accepted |
+| [0005](0005-model-gateway.md) | one gateway for every model; the budget is claimed before sending | accepted |
