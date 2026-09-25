@@ -25,6 +25,10 @@ a free remote model and an optional local one, under a daily budget.
   OpenRouter receives it as `reasoning.effort` (`none` for off), llama.cpp's
   server as the chat template's `enable_thinking` switch. A request without a
   level is sent exactly as before.
+- `auto` is decided by the router from the latest message, by fixed rules
+  with no extra request: a greeting or short lookup does not think; code,
+  mathematics, why and how questions, comparisons and proofs think more; a
+  long message alone adds only a little.
 - Routing per request: remote first; local for background jobs, for images or
   tools the remote cannot take, while the remote circuit is open, when 10 or
   fewer of the day's requests are left, or when the rate limit would hold a

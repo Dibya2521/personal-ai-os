@@ -25,10 +25,12 @@ from synthia.gateway.types import (
     ImagePart,
     Message,
     ModelInfo,
+    Reasoning,
     ToolSpec,
 )
 from synthia.kernel.bus import Event
 
+AUTO = Reasoning.AUTO
 PROVIDER = "openrouter"
 REMOTE = ModelInfo("openrouter/free", 128_000, vision=False, tools=True)
 LOCAL = ModelInfo("qwen3.5-4b", 32_000, vision=True, tools=True)
@@ -47,13 +49,14 @@ class Fake:
         self.errors = list(errors)
         self.fail_after_first = False
         self.calls = 0
+        self.requests: list[ChatRequest] = []
 
     @property
     def info(self) -> ModelInfo:
         return self._info
 
     async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
-        del request
+        self.requests.append(request)
         self.calls += 1
         if self.errors:
             raise self.errors.pop(0)
@@ -315,3 +318,28 @@ async def test_readiness_is_checked_for_every_request(setup: Setup) -> None:
     await collect(router.stream(HELLO, background=True))
 
     assert [route for route, _, _ in setup.routes()] == [Route.REMOTE, Route.LOCAL]
+
+
+async def test_auto_reasoning_is_resolved_before_any_model_sees_it(
+    setup: Setup,
+) -> None:
+    remote, local = Fake(REMOTE, AuthError("bad key")), Fake(LOCAL)
+    request = ChatRequest((Message.user("why is the sky blue?"),), reasoning=AUTO)
+
+    await collect(setup.router(remote, local).stream(request))
+
+    sent = [r.reasoning for r in remote.requests + local.requests]
+    announced = [e.reasoning for e in setup.events if isinstance(e, RouteDecided)]
+    assert sent == announced == [Reasoning.MEDIUM, Reasoning.MEDIUM]
+
+
+@pytest.mark.parametrize("level", [None, Reasoning.OFF, Reasoning.HIGH])
+async def test_a_level_other_than_auto_is_sent_unchanged(
+    setup: Setup, level: Reasoning | None
+) -> None:
+    remote = Fake(REMOTE)
+    request = ChatRequest((Message.user("why is the sky blue?"),), reasoning=level)
+
+    await collect(setup.router(remote).stream(request))
+
+    assert remote.requests == [request]

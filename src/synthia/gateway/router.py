@@ -18,6 +18,9 @@ With none, the remote is used while it has any budget at all.
 If the remote fails before its first chunk, the request is sent local once.
 After output has started nothing can switch, since those words are already on
 screen or spoken. Every decision is published as a :class:`RouteDecided`.
+
+A request asking for ``auto`` reasoning gets its level here, after the model
+is chosen, so every caller has it decided the same way.
 """
 
 from __future__ import annotations
@@ -31,8 +34,9 @@ from typing import TYPE_CHECKING
 from synthia.gateway.circuit import CircuitBreakerModel, CircuitState
 from synthia.gateway.errors import GatewayError
 from synthia.gateway.metered import MeteredModel
+from synthia.gateway.reasoning import resolve
 from synthia.gateway.retry import RetryingModel
-from synthia.gateway.types import ModelInfo
+from synthia.gateway.types import ModelInfo, Reasoning
 from synthia.kernel.bus import Event
 
 if TYPE_CHECKING:
@@ -73,11 +77,16 @@ class RouteReason(StrEnum):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RouteDecided(Event):
-    """A request was routed; ``model`` is the id of the model chosen."""
+    """A request was routed; ``model`` is the id of the model chosen.
+
+    ``reasoning`` is the level sent, never ``AUTO``; ``None`` when the request
+    set none.
+    """
 
     route: Route
     reason: RouteReason
     model: str
+    reasoning: Reasoning | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,7 +181,8 @@ class Router:
                 fallback: output had started, or no local model could serve.
         """
         route, reason, model = await self._choose(request, background=background)
-        await self._announce(route, reason, model)
+        request = resolve(request)
+        await self._announce(route, reason, model, request)
         if route is Route.LOCAL:
             async with aclosing(model.stream(request)) as chunks:
                 async for chunk in chunks:
@@ -194,7 +204,7 @@ class Router:
             )
         else:
             return
-        await self._announce(Route.LOCAL, RouteReason.FALLBACK, local)
+        await self._announce(Route.LOCAL, RouteReason.FALLBACK, local, request)
         async with aclosing(local.stream(request)) as chunks:
             async for chunk in chunks:
                 yield chunk
@@ -238,11 +248,21 @@ class Router:
         return None
 
     async def _announce(
-        self, route: Route, reason: RouteReason, model: ChatModel
+        self, route: Route, reason: RouteReason, model: ChatModel, request: ChatRequest
     ) -> None:
+        decided = RouteDecided(
+            route=route,
+            reason=reason,
+            model=model.info.id,
+            reasoning=request.reasoning,
+        )
         logger.info(
-            "routed", extra={"route": route, "reason": reason, "model": model.info.id}
+            "routed",
+            extra={
+                "route": route,
+                "reason": reason,
+                "model": decided.model,
+                "reasoning": decided.reasoning,
+            },
         )
-        await self._publish(
-            RouteDecided(route=route, reason=reason, model=model.info.id)
-        )
+        await self._publish(decided)
