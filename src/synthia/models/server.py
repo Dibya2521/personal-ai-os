@@ -75,7 +75,11 @@ def new_key() -> SecretStr:
 
 @dataclass(frozen=True, slots=True)
 class Launch:
-    """Everything needed to start the server once."""
+    """Everything needed to start the server once.
+
+    ``name`` is the model's catalogue id, which the server reports as the
+    answering model; without it the server reports the weights' file path.
+    """
 
     backend: Backend
     binary: Path
@@ -84,6 +88,7 @@ class Launch:
     port: int
     context: int
     key: SecretStr
+    name: str
 
     @classmethod
     def of(  # noqa: PLR0913
@@ -111,6 +116,7 @@ class Launch:
             port,
             context,
             key,
+            model.id,
         )
 
     @property
@@ -135,6 +141,8 @@ class Launch:
             str(self.port),
             "--ctx-size",
             str(self.context),
+            "--alias",
+            self.name,
             "--no-webui",
             "--offline",
         ]

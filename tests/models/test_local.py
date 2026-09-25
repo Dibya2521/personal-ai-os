@@ -53,6 +53,7 @@ def server_at(tmp_path: Path, client: httpx.AsyncClient, key: SecretStr) -> Llam
             port=free_port(),
             context=512,
             key=key,
+            name="m",
         )
 
     return LlamaServer(

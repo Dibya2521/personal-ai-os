@@ -33,6 +33,7 @@ def launch_of(runtime: Runtime) -> Launch:
         port=1,
         context=1,
         key=SecretStr("k"),
+        name="m",
     )
 
 
@@ -100,6 +101,7 @@ def serving_on(
             port=free_port(),
             context=512,
             key=new_key(),
+            name="m",
         )
 
     fallback = Fallback([LINUX[Backend.VULKAN], LINUX[Backend.CPU]], make)

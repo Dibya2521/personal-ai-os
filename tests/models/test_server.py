@@ -107,6 +107,7 @@ def test_the_command_binds_loopback_offline_without_the_web_ui(tmp_path: Path) -
     assert pairs["--mmproj"] == str(tmp_path / "model" / model.projector.name)
     assert (pairs["--host"], pairs["--port"]) == (LOOPBACK, "41234")
     assert pairs["--ctx-size"] == "8192"
+    assert pairs["--alias"] == model.id
     assert {"--no-webui", "--offline"} <= set(command)
     assert launch.base_url == f"http://{LOOPBACK}:41234/v1"
     assert launch.health_url == f"http://{LOOPBACK}:41234/health"
