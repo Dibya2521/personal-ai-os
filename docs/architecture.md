@@ -50,6 +50,9 @@ refined when its phase begins, and this file changes with it.
 
 Dependencies point down only. The kernel imports nothing else from the project.
 
+The cognition layer is built: [`gateway.md`](gateway.md) describes how a request
+is routed, guarded, metered and answered, locally or remotely.
+
 ## Concurrency
 
 One asyncio event loop owns all state. CPU-heavy inference (speech recognition,
