@@ -97,14 +97,17 @@ def _handler(
                 seen_ready()
 
         def do_POST(self) -> None:
+            # Read the body before any refusal: closing a socket with unread
+            # data resets the connection on Windows, and the client loses the
+            # answer it was about to read.
+            raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
             if self.path != "/v1/chat/completions":
                 _reply(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
             if self.headers.get("Authorization") != f"Bearer {key}":
                 _reply(self, HTTPStatus.UNAUTHORIZED, {"error": "Invalid API Key"})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
-            body = cast("dict[str, object]", json.loads(self.rfile.read(length)))
+            body = cast("dict[str, object]", json.loads(raw))
             _stream(self, f"echo: {_last_text(body)}", think=_thinking(body))
 
         @override
