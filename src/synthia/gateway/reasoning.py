@@ -113,13 +113,18 @@ def resolve(request: ChatRequest) -> ChatRequest:
     return replace(request, reasoning=choose(request))
 
 
+def allowance_s(level: Reasoning | None) -> float | None:
+    """Return how many seconds ``level`` may think; ``None`` for off, auto and unset."""
+    return ALLOWANCE_S.get(level) if level is not None else None
+
+
 def token_limit(level: Reasoning | None, tokens_per_s: float | None) -> int | None:
     """Return the thinking tokens that fit ``level``'s allowance at that speed.
 
     ``None`` for a level with no allowance (off, auto, unset). An unknown or
     non-positive speed counts as :data:`DEFAULT_TOKENS_PER_S`.
     """
-    allowance = ALLOWANCE_S.get(level) if level is not None else None
+    allowance = allowance_s(level)
     if allowance is None:
         return None
     speed = tokens_per_s if tokens_per_s and tokens_per_s > 0 else DEFAULT_TOKENS_PER_S

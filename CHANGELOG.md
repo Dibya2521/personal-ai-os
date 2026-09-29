@@ -33,6 +33,11 @@ a free remote model and an optional local one, under a daily budget.
   20 s, high 60 s. For OpenRouter it becomes `reasoning.max_tokens`: the
   allowance times the remote models' tokens per second measured over the last
   7 days, or 25 tokens/s before anything is measured.
+- The local model's thinking ends on time: once it has thought for its
+  level's allowance without starting the answer, llama.cpp's server is told
+  to end the thinking (`POST /v1/chat/completions/control`, `reasoning_end`)
+  and the answer follows, about 1 s later in a real run. If the server
+  refuses, that is logged and the answer comes when the model stops by itself.
 - Routing per request: remote first; local for background jobs, for images or
   tools the remote cannot take, while the remote circuit is open, when 10 or
   fewer of the day's requests are left, or when the rate limit would hold a

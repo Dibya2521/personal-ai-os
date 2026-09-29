@@ -253,7 +253,8 @@ class ChatChunk:
     ``model`` is the model that actually answered, which can differ from the one
     requested when a router such as ``openrouter/free`` picks it. ``reasoning``
     is a thinking model's working, kept apart from ``text`` so it is never spoken
-    or shown as the answer.
+    or shown as the answer. ``id`` names the completion the chunk belongs to,
+    which is how a server that takes commands mid-answer is told which one.
     """
 
     text: str = ""
@@ -262,6 +263,7 @@ class ChatChunk:
     finish_reason: FinishReason | None = None
     usage: Usage | None = None
     model: str | None = None
+    id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -2,21 +2,72 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from contextlib import aclosing
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final, cast
+
+import httpx
 
 from synthia.gateway.errors import ConnectionFailedError
 from synthia.gateway.openai_compat import Dialect, Endpoint, OpenAICompatibleModel
+from synthia.gateway.reasoning import allowance_s
 from synthia.gateway.types import ModelInfo
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
-    import httpx
+    from collections.abc import AsyncGenerator, Awaitable, Callable
 
     from synthia.gateway.types import ChatChunk, ChatRequest
     from synthia.models.catalogue import Model
     from synthia.models.server import LlamaServer
+
+logger = logging.getLogger(__name__)
+
+CONTROL_SUFFIX: Final = "/control"
+END_REASONING: Final = "reasoning_end"
+MAX_DETAIL: Final = 200
+
+type Sleep = Callable[[float], Awaitable[None]]
+
+
+async def end_thinking(
+    client: httpx.AsyncClient, endpoint: Endpoint, completion_id: str
+) -> bool:
+    """Tell llama-server to end ``completion_id``'s thinking now; the answer follows.
+
+    Returns whether the server did. A failure is logged, never raised: the
+    answer still comes, only when the model stops thinking by itself. The
+    server answers an unknown id with 200 and ``"success": false``, so the
+    body is read, not only the status.
+    """
+    headers: dict[str, str] = {}
+    if endpoint.api_key is not None:
+        headers["Authorization"] = f"Bearer {endpoint.api_key.get_secret_value()}"
+    body = {"id": completion_id, "action": END_REASONING}
+    try:
+        response = await client.post(
+            endpoint.completions_url + CONTROL_SUFFIX, json=body, headers=headers
+        )
+    except httpx.TransportError as error:
+        logger.warning("could not end the local thinking: %s", type(error).__name__)
+        return False
+    try:
+        answer: object = response.json()
+    except ValueError:
+        answer = None
+    if (
+        response.is_success
+        and isinstance(answer, dict)
+        and cast("dict[str, object]", answer).get("success") is True
+    ):
+        return True
+    detail = response.text[:MAX_DETAIL]
+    logger.warning(
+        "the local server did not end its thinking: HTTP %s %s",
+        response.status_code,
+        detail,
+    )
+    return False
 
 
 class LocalModel:
@@ -24,6 +75,10 @@ class LocalModel:
 
     Each request goes to the launch serving at that moment, with that launch's
     key, so a restart onto a new port and key is followed without notice.
+
+    Thinking is held to the request level's time allowance: once the model has
+    thought that long without starting its answer, the server is told to end
+    the thinking, and the answer follows. ``sleep`` waits out the allowance.
     """
 
     def __init__(
@@ -32,10 +87,13 @@ class LocalModel:
         client: httpx.AsyncClient,
         model: Model,
         context: int,
+        *,
+        sleep: Sleep = asyncio.sleep,
     ) -> None:
         self._server = server
         self._client = client
         self._info = ModelInfo(model.id, context, vision=model.vision, tools=True)
+        self._sleep = sleep
 
     @property
     def info(self) -> ModelInfo:
@@ -63,6 +121,35 @@ class LocalModel:
         adapter = OpenAICompatibleModel(
             client=self._client, endpoint=endpoint, info=self._info
         )
-        async with aclosing(adapter.stream(request)) as chunks:
-            async for chunk in chunks:
-                yield chunk
+        allowance = allowance_s(request.reasoning)
+        timer: asyncio.Task[None] | None = None
+        answering = False
+        try:
+            async with aclosing(adapter.stream(request)) as chunks:
+                async for chunk in chunks:
+                    if chunk.text or chunk.tool_calls or chunk.finish_reason:
+                        answering = True
+                        if timer is not None:
+                            timer.cancel()
+                    elif (
+                        chunk.reasoning
+                        and chunk.id
+                        and allowance is not None
+                        and timer is None
+                        and not answering
+                    ):
+                        timer = asyncio.create_task(
+                            self._end_after(allowance, endpoint, chunk.id)
+                        )
+                    yield chunk
+        finally:
+            if timer is not None:
+                timer.cancel()
+                await asyncio.wait([timer])
+
+    async def _end_after(
+        self, seconds: float, endpoint: Endpoint, completion_id: str
+    ) -> None:
+        await self._sleep(seconds)
+        if await end_thinking(self._client, endpoint, completion_id):
+            logger.info("ended the local thinking after %g s", seconds)

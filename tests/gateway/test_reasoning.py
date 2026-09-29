@@ -2,7 +2,14 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from synthia.gateway.reasoning import choose, limit, points, resolve, token_limit
+from synthia.gateway.reasoning import (
+    allowance_s,
+    choose,
+    limit,
+    points,
+    resolve,
+    token_limit,
+)
 from synthia.gateway.types import ChatRequest, Message, Reasoning
 
 OFF, LOW, MEDIUM, HIGH = Reasoning.OFF, Reasoning.LOW, Reasoning.MEDIUM, Reasoning.HIGH
@@ -113,6 +120,11 @@ def test_a_levels_allowance_becomes_tokens_at_the_measured_speed(
     level: Reasoning | None, speed: float | None, tokens: int | None
 ) -> None:
     assert token_limit(level, speed) == tokens
+
+
+def test_only_a_thinking_level_has_a_time_allowance() -> None:
+    assert [allowance_s(level) for level in (LOW, MEDIUM, HIGH)] == [5.0, 20.0, 60.0]
+    assert [allowance_s(level) for level in (OFF, Reasoning.AUTO, None)] == [None] * 3
 
 
 def test_limit_sets_tokens_only_for_a_level_with_an_allowance() -> None:

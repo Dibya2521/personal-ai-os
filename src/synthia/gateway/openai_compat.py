@@ -66,7 +66,8 @@ class Dialect(StrEnum):
     OpenRouter takes ``reasoning.effort``, where ``none`` turns thinking off,
     or ``reasoning.max_tokens`` when the request carries a token limit.
     llama.cpp's server passes ``chat_template_kwargs`` to the model's chat
-    template, and ``enable_thinking`` is the one switch Qwen3.5's template has.
+    template, and ``enable_thinking`` is the one switch Qwen3.5's template has;
+    ``reasoning_control`` lets the thinking be ended mid-answer by a command.
     """
 
     OPENROUTER = "openrouter"
@@ -78,8 +79,12 @@ def _reasoning(request: ChatRequest, dialect: Dialect) -> JSON:
     if level is None or level is Reasoning.AUTO:
         return {}
     if dialect is Dialect.LLAMA_CPP:
-        thinking = level is not Reasoning.OFF
-        return {"chat_template_kwargs": {"enable_thinking": thinking}}
+        if level is Reasoning.OFF:
+            return {"chat_template_kwargs": {"enable_thinking": False}}
+        return {
+            "chat_template_kwargs": {"enable_thinking": True},
+            "reasoning_control": True,
+        }
     if level is Reasoning.OFF:
         return {"reasoning": {"effort": "none"}}
     if request.reasoning_tokens is not None:
@@ -188,6 +193,7 @@ def parse_chunk(data: JSON) -> ChatChunk:
             finish_reason=FinishReason.parse(reason) if reason else None,
             usage=usage,
             model=data.get("model"),
+            id=data.get("id"),
         )
     except (KeyError, TypeError, ValueError, AttributeError, IndexError) as error:
         message = f"unexpected chunk shape: {type(error).__name__}"

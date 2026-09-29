@@ -149,6 +149,12 @@ def test_tools_tool_calls_and_tool_results_map_to_the_wire_shape() -> None:
     assert payload["response_format"]["json_schema"]["strict"] is True
 
 
+THINKING_UNDER_CONTROL = {
+    "chat_template_kwargs": {"enable_thinking": True},
+    "reasoning_control": True,
+}
+
+
 @pytest.mark.parametrize(
     ("level", "openrouter", "llama_cpp"),
     [
@@ -160,17 +166,17 @@ def test_tools_tool_calls_and_tool_results_map_to_the_wire_shape() -> None:
         (
             Reasoning.LOW,
             {"reasoning": {"effort": "low"}},
-            {"chat_template_kwargs": {"enable_thinking": True}},
+            THINKING_UNDER_CONTROL,
         ),
         (
             Reasoning.MEDIUM,
             {"reasoning": {"effort": "medium"}},
-            {"chat_template_kwargs": {"enable_thinking": True}},
+            THINKING_UNDER_CONTROL,
         ),
         (
             Reasoning.HIGH,
             {"reasoning": {"effort": "high"}},
-            {"chat_template_kwargs": {"enable_thinking": True}},
+            THINKING_UNDER_CONTROL,
         ),
         (Reasoning.AUTO, {}, {}),
         (None, {}, {}),
@@ -244,6 +250,7 @@ async def test_the_endpoints_dialect_shapes_what_is_sent() -> None:
 def test_parse_chunk_reads_text_reasoning_tools_finish_usage_and_model() -> None:
     chunk = parse_chunk(
         {
+            "id": "chatcmpl-7",
             "model": "qwen/qwen3.5-4b",
             "usage": {"prompt_tokens": 4, "completion_tokens": 2},
             "choices": [
@@ -271,6 +278,7 @@ def test_parse_chunk_reads_text_reasoning_tools_finish_usage_and_model() -> None
     assert chunk.finish_reason is FinishReason.TOOL_CALLS
     assert chunk.usage == Usage(4, 2)
     assert chunk.model == "qwen/qwen3.5-4b"
+    assert chunk.id == "chatcmpl-7"
 
 
 def test_openrouter_reasoning_field_is_read_too() -> None:
