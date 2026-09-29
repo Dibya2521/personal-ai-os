@@ -49,7 +49,7 @@ async def test_an_event_reaches_subscribers_of_its_type_and_its_bases() -> None:
     assert [type(e) for e in seen.events] == [Seen]
 
 
-@settings(deadline=None, max_examples=25)
+@settings(max_examples=25)
 @given(st.lists(st.text(max_size=5), max_size=40))
 def test_one_subscriber_sees_events_in_publish_order(texts: list[str]) -> None:
     async def scenario() -> list[str]:
