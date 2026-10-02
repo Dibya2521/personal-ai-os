@@ -113,6 +113,35 @@ async def test_an_unrecorded_request_fails_loudly_and_names_what_is_missing(
     assert "never recorded" not in str(caught.value)
 
 
+@pytest.mark.parametrize(
+    ("body", "kept"),
+    [
+        (
+            b'data: {"choices":[],"timings":{"prompt_ms":9.5}}\n\ndata: [DONE]\n\n',
+            b'data: {"choices":[]}\n\ndata: [DONE]\n\n',
+        ),
+        (b'{"choices":[],"timings":{"prompt_ms":9.5}}', b'{"choices":[]}'),
+        (b"not json\ndata: [1, 2]\n", b"not json\ndata: [1, 2]\n"),
+    ],
+    ids=["stream", "json", "neither"],
+)
+async def test_named_keys_are_dropped_from_a_recording(
+    tmp_path: Path, body: bytes, kept: bytes
+) -> None:
+    path = tmp_path / "local.json"
+    transport = CassetteTransport.recording(
+        path, live_server(body), dropped=["timings"]
+    )
+    async with httpx.AsyncClient(transport=transport) as client:
+        live = await client.post(URL, json={"q": 1})
+    await transport.aclose()
+
+    async with httpx.AsyncClient(transport=CassetteTransport.replaying(path)) as client:
+        replayed = await client.post(URL, json={"q": 1})
+
+    assert (live.content, replayed.content) == (kept, kept)
+
+
 async def test_a_recording_replays_at_another_origin_but_not_another_path(
     tmp_path: Path,
 ) -> None:

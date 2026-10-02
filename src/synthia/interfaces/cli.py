@@ -25,10 +25,13 @@ from synthia.kernel.config import Settings, load_settings, unknown_variables
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.kernel.logs import logging_to
 from synthia.models.install import BYTES_PER_GB, Installer
+from synthia.models.server import Launch
 from synthia.models.service import SERVER_LOG, LocalService, find_local
 from synthia.persona.model import PersonaError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from synthia.models.catalogue import Model, Runtime
 
 app = typer.Typer(
@@ -133,7 +136,7 @@ def chat(
                 settings,
                 persona or settings.persona,
                 Console(),
-                local=_local(settings),
+                local=local_service(settings),
                 use_remote=remote,
             )
     except (ConfigError, PersonaError) as error:
@@ -225,7 +228,14 @@ def _items(names: list[str]) -> tuple[Runtime | Model, ...]:
         raise typer.Exit(doctor_checks.Status.FAIL) from None
 
 
-def _local(settings: Settings) -> LocalService | None:
+def local_service(
+    settings: Settings, *, command: Callable[[Launch], list[str]] = Launch.command
+) -> LocalService | None:
+    """Return the installed local model's service, or None if none is installed.
+
+    ``command`` builds the server's command line, so a caller may add flags
+    such as a thread count.
+    """
     target = model_commands.this_machine().target
     # The remote's window, so moving a conversation to the local model never
     # shrinks what it can hold.
@@ -235,7 +245,9 @@ def _local(settings: Settings) -> LocalService | None:
         target,
         context_limit=OPENROUTER_FREE.model.context_window,
     )
-    return None if setup is None else LocalService(setup, settings.home / SERVER_LOG)
+    if setup is None:
+        return None
+    return LocalService(setup, settings.home / SERVER_LOG, command=command)
 
 
 def _local_model(settings: Settings) -> Model:

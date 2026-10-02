@@ -38,6 +38,7 @@ FORMAT_VERSION = 1
 REDACTED = "**********"
 SUMMARY_LENGTH = 120
 KEPT_RESPONSE_HEADERS = frozenset({"content-type", "retry-after"})
+_EVENT = b"data: "
 KEPT_RESPONSE_HEADER_PREFIXES = ("x-ratelimit-",)
 
 type JSON = dict[str, Any]
@@ -135,11 +136,13 @@ class CassetteTransport(httpx.AsyncBaseTransport):
         mode: Mode,
         inner: httpx.AsyncBaseTransport | None = None,
         secrets: Iterable[str] = (),
+        dropped: Iterable[str] = (),
     ) -> None:
         self.path = path
         self.mode = mode
         self._inner = inner
         self._secrets = sorted((s for s in secrets if s), key=len, reverse=True)
+        self._dropped = frozenset(dropped)
         self._recorded: list[JSON] = []
         self._queues: dict[_Key, deque[JSON]] = defaultdict(deque)
         if mode is Mode.REPLAY:
@@ -160,12 +163,17 @@ class CassetteTransport(httpx.AsyncBaseTransport):
         path: Path,
         inner: httpx.AsyncBaseTransport | None = None,
         secrets: Iterable[str] = (),
+        dropped: Iterable[str] = (),
     ) -> CassetteTransport:
         """Send requests through ``inner`` and write the exchanges to ``path`` on close.
 
-        ``secrets`` are replaced in every recorded body.
+        ``secrets`` are replaced in every recorded body. ``dropped`` names
+        top-level keys removed from a JSON body and from every JSON event of a
+        stream, such as a local server's speed measurements.
         """
-        return cls(path, Mode.RECORD, inner or httpx.AsyncHTTPTransport(), secrets)
+        return cls(
+            path, Mode.RECORD, inner or httpx.AsyncHTTPTransport(), secrets, dropped
+        )
 
     @property
     def unplayed(self) -> int:
@@ -240,7 +248,35 @@ class CassetteTransport(httpx.AsyncBaseTransport):
     def _scrub(self, body: bytes) -> bytes:
         for secret in self._secrets:
             body = body.replace(secret.encode(), REDACTED.encode())
-        return body
+        return self._drop(body) if self._dropped else body
+
+    def _drop(self, body: bytes) -> bytes:
+        """Remove the dropped keys from a JSON body or from each ``data:`` line."""
+        whole = self._without(body)
+        if whole is not None:
+            return whole
+        lines = body.split(b"\n")
+        for n, line in enumerate(lines):
+            if line.startswith(_EVENT):
+                event = self._without(line.removeprefix(_EVENT))
+                if event is not None:
+                    lines[n] = _EVENT + event
+        return b"\n".join(lines)
+
+    def _without(self, text: bytes) -> bytes | None:
+        """Return the JSON object ``text`` without the dropped keys, or None."""
+        try:
+            value: object = json.loads(text)
+        except (ValueError, UnicodeDecodeError):
+            return None
+        if not isinstance(value, dict):
+            return None
+        kept = {
+            k: v
+            for k, v in cast("dict[str, object]", value).items()
+            if k not in self._dropped
+        }
+        return json.dumps(kept, separators=(",", ":"), ensure_ascii=False).encode()
 
     def _load(self) -> None:
         try:

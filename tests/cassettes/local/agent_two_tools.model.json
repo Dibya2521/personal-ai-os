@@ -1,0 +1,5 @@
+{
+  "id": "qwen3.5-4b",
+  "context_window": 32768,
+  "vision": true
+}
