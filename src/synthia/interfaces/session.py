@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from synthia.agent.policy import Approver
+    from synthia.agent.trace import Trace
     from synthia.gateway.protocol import ChatModel
     from synthia.gateway.types import ChatResponse
     from synthia.kernel.bus import Event
@@ -127,12 +128,14 @@ class ChatSession:
         *,
         tools: Toolbox | None = None,
         approver: Approver = nobody_approves,
+        trace: Trace | None = None,
     ) -> None:
         """Start an empty conversation as ``persona``.
 
         ``routes`` is the recorder the router publishes to, so each turn's
         report can say where the turn went. ``tools`` are what the model may
-        call; a call that needs approval is put to ``approver``.
+        call; a call that needs approval is put to ``approver``. ``trace``
+        records every step of every turn, including turns that fail.
 
         Raises:
             PersonaError: If there is no such persona.
@@ -141,6 +144,7 @@ class ChatSession:
         self._library = library
         self._clock = clock
         self._approver = approver
+        self._trace = trace
         self.tools = tools or Toolbox()
         self.policy = Policy()
         self.persona: Persona = library.get(persona)
@@ -202,10 +206,16 @@ class ChatSession:
             policy=self.policy,
             approver=self._approver,
         )
+        run = agent.run(request)
+        if self._trace:
+            self._trace.begin(
+                text, self.persona.name, self.reasoning, use_remote=self.use_remote
+            )
+            run = self._trace.watch(run, lambda: self.routes.decision)
         answers: list[ChatResponse] = []
         finished: Finished | None = None
         try:
-            async with aclosing(agent.run(request)) as steps:
+            async with aclosing(run) as steps:
                 async for step in steps:
                     if isinstance(step, ModelChunk):
                         yield step.chunk

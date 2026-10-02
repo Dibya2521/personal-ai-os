@@ -34,6 +34,14 @@ budget, only when asked.
   what it may change, and whether it asks first. A tool's output reaches the
   model quoted as untrusted data, with chat markup in it defused; text in it
   shaped like an instruction is flagged on the call's line.
+- `synthia trace`: every chat records each turn, model step and tool call as
+  one JSON line in `SYNTHIA_HOME/traces/<session>.jsonl` (texts cut to 2,000
+  characters with their full length kept; the key is never in it), and
+  `synthia trace` shows the latest session as a tree: per model step the
+  route, the model, the thinking level sent, tokens and seconds; per tool
+  call its arguments, ok or failed, flags, seconds and the start of its
+  result; then the answer, or why the turn ended without one.
+  `synthia trace <session>` shows another, `synthia trace --list` lists them.
 - A model gateway: one streaming interface for every model and one adapter for
   the OpenAI-compatible chat API, used for OpenRouter's `openrouter/free`,
   which picks a free model per request, and for llama.cpp's server.

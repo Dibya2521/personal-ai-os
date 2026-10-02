@@ -14,10 +14,12 @@ from rich.console import Console
 from rich.table import Table
 
 from synthia import __version__
+from synthia.agent.trace import TRACES, read_trace, sessions
 from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.interfaces import doctor as doctor_checks
 from synthia.interfaces import model_commands
 from synthia.interfaces.chat import run_chat
+from synthia.interfaces.trace_view import build_tree, summary
 from synthia.interfaces.usage_report import budget_report
 from synthia.kernel.config import Settings, load_settings, unknown_variables
 from synthia.kernel.errors import ConfigError, SynthiaError
@@ -137,6 +139,40 @@ def chat(
     except (ConfigError, PersonaError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
+
+
+@app.command()
+def trace(
+    session: Annotated[
+        str | None,
+        typer.Argument(help="The session to show. Default: the latest."),
+    ] = None,
+    *,
+    list_all: Annotated[
+        bool, typer.Option("--list", help="List every session instead.")
+    ] = False,
+) -> None:
+    """Show what SYNTHIA did in a chat: each model step and tool call, as a tree.
+
+    Exits 2 when there is no session by that name.
+    """
+    folder = _settings().home / TRACES
+    found = sessions(folder)
+    if not found:
+        typer.echo(f"no traces yet; each chat writes one to {folder}")
+        return
+    if list_all:
+        for path in found:
+            typer.echo(summary(path))
+        return
+    by_name = {path.stem: path for path in found}
+    path = found[-1] if session is None else by_name.get(session)
+    if path is None:
+        typer.echo(f"error: no trace named {session}", err=True)
+        typer.echo("see: synthia trace --list", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL)
+    records, unreadable = read_trace(path)
+    Console().print(build_tree(path.stem, records, unreadable))
 
 
 @app.command()

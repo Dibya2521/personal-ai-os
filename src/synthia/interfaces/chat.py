@@ -19,6 +19,7 @@ from rich.text import Text
 
 from synthia.agent.loop import ToolFinished
 from synthia.agent.policy import Decision
+from synthia.agent.trace import TRACES, Trace
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.errors import GatewayError
 from synthia.gateway.providers import OPENROUTER_FREE
@@ -98,8 +99,8 @@ def read_message(read: ReadLine) -> str:
 def describe_call(finished: ToolFinished) -> str:
     """Return the dim line shown for one tool call."""
     call = finished.call
-    outcome = "ok" if finished.ok else _shorten(finished.result)
-    arguments = _shorten(call.arguments or "{}")
+    outcome = "ok" if finished.ok else shorten(finished.result)
+    arguments = shorten(call.arguments or "{}")
     flagged = f" | flagged: {', '.join(finished.flags)}" if finished.flags else ""
     return (
         f"tool {call.name} {arguments} | {outcome}{flagged} | {finished.seconds:.1f} s"
@@ -114,7 +115,7 @@ def terminal_approver(read: ReadLine) -> Approver:
     """
 
     async def approve(tool: Tool, arguments: str) -> bool:
-        question = f"run {tool.spec.name} {_shorten(arguments or '{}')}? [y/N] "
+        question = f"run {tool.spec.name} {shorten(arguments or '{}')}? [y/N] "
         try:
             answer = read(question)
         except EOFError:
@@ -124,7 +125,8 @@ def terminal_approver(read: ReadLine) -> Approver:
     return approve
 
 
-def _shorten(text: str) -> str:
+def shorten(text: str) -> str:
+    """Return ``text`` cut to :data:`MAX_SHOWN` characters, ending in ... if cut."""
     return text if len(text) <= MAX_SHOWN else text[: MAX_SHOWN - 3] + "..."
 
 
@@ -446,6 +448,7 @@ def run_chat(  # noqa: PLR0913
                 routes,
                 tools=local_tools(settings.file_roots),
                 approver=terminal_approver(read),
+                trace=Trace.start(settings.home / TRACES),
             )
             app = ChatApp(session, gateway, console)
             if local is not None:
