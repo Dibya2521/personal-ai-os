@@ -72,6 +72,11 @@ class ShowModel:
 
 
 @dataclass(frozen=True, slots=True)
+class ShowTools:
+    """Print the tools SYNTHIA may call, where each works and what it may change."""
+
+
+@dataclass(frozen=True, slots=True)
 class Reset:
     """Forget the conversation so far."""
 
@@ -102,6 +107,7 @@ type Command = (
     | UseRemote
     | ShowBudget
     | ShowModel
+    | ShowTools
     | Reset
     | Help
     | Exit
@@ -118,6 +124,7 @@ HELP: Final = """\
 /remote [on|off]           send turns to the remote model, or keep them local
 /budget                    today's remote requests
 /model                     the models behind the router, and the last route
+/tools                     the tools SYNTHIA may call, and which ask first
 /reset                     forget the conversation
 /help                      this list
 /exit                      leave (Ctrl+D works too)"""
@@ -125,6 +132,7 @@ HELP: Final = """\
 _SIMPLE: Final[dict[str, Command]] = {
     "budget": ShowBudget(),
     "model": ShowModel(),
+    "tools": ShowTools(),
     "reset": Reset(),
     "help": Help(),
     "exit": Exit(),

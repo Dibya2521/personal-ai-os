@@ -25,6 +25,13 @@ budget, only when asked.
   Ctrl+D or `/exit` leaves. An answer that failed or was stopped is dropped
   from the history, question and all. Log records go to
   `SYNTHIA_HOME/logs/synthia.log`, not into the conversation.
+- Tools in `synthia chat`: SYNTHIA can call the clock, an exact calculator,
+  and read or list files in the folders named in `SYNTHIA_FILE_ROOTS`. Each
+  call shows as one dim line (the tool, its arguments, ok or why not, the
+  seconds). A tool that would change something or reach outside the
+  machine runs only after `y` at a `run <tool> <arguments>? [y/N]`
+  question, one call at a time. `/tools` lists every tool, where it works,
+  what it may change, and whether it asks first.
 - A model gateway: one streaming interface for every model and one adapter for
   the OpenAI-compatible chat API, used for OpenRouter's `openrouter/free`,
   which picks a free model per request, and for llama.cpp's server.

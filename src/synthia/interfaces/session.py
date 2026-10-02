@@ -13,8 +13,17 @@ from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from synthia.agent.loop import (
+    Agent,
+    Finished,
+    Limits,
+    ModelChunk,
+    ModelTurn,
+    ToolFinished,
+)
+from synthia.agent.policy import Policy, nobody_approves
+from synthia.agent.tools import Toolbox
 from synthia.gateway.errors import IncompleteResponseError
-from synthia.gateway.protocol import join
 from synthia.gateway.router import RouteDecided
 from synthia.gateway.types import (
     ChatChunk,
@@ -28,6 +37,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from pathlib import Path
 
+    from synthia.agent.policy import Approver
     from synthia.gateway.protocol import ChatModel
     from synthia.gateway.types import ChatResponse
     from synthia.kernel.bus import Event
@@ -46,6 +56,9 @@ MEDIA_TYPES: Final = {
 MAX_IMAGE_BYTES: Final = 20 * 1024 * 1024
 # Each turn's depth is decided from what it asks, until the user sets a level.
 DEFAULT_REASONING: Final = Reasoning.AUTO
+# No deadline: the answer streams in view and Ctrl+C stops it when the person
+# chooses; a long local answer at 2 threads can pass the agent's 5 minutes.
+CHAT_LIMITS: Final = Limits(deadline_s=None)
 
 
 class ImageError(ValueError):
@@ -104,18 +117,22 @@ class TurnReport:
 class ChatSession:
     """A conversation with SYNTHIA through one model, usually the router."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         model: ChatModel,
         library: PersonaLibrary,
         persona: str,
         routes: LastRoute | None = None,
         clock: Callable[[], float] = time.perf_counter,
+        *,
+        tools: Toolbox | None = None,
+        approver: Approver = nobody_approves,
     ) -> None:
         """Start an empty conversation as ``persona``.
 
         ``routes`` is the recorder the router publishes to, so each turn's
-        report can say where the turn went.
+        report can say where the turn went. ``tools`` are what the model may
+        call; a call that needs approval is put to ``approver``.
 
         Raises:
             PersonaError: If there is no such persona.
@@ -123,6 +140,9 @@ class ChatSession:
         self._model = model
         self._library = library
         self._clock = clock
+        self._approver = approver
+        self.tools = tools or Toolbox()
+        self.policy = Policy()
         self.persona: Persona = library.get(persona)
         self.history: list[Message] = []
         self.routes = routes or LastRoute()
@@ -164,36 +184,61 @@ class ChatSession:
 
     async def turn(
         self, text: str, *images: ImagePart
-    ) -> AsyncGenerator[ChatChunk | TurnReport]:
-        """Yield the answer as it streams, then one :class:`TurnReport`.
+    ) -> AsyncGenerator[ChatChunk | ToolFinished | TurnReport]:
+        """Yield the answer as it streams and each tool call as it ends, then a report.
+
+        The turn runs as an agent over :attr:`tools`; with none, it is one
+        request, as it always was.
 
         Raises:
             GatewayError: If the answer failed; the history is unchanged.
         """
         request = self.request(text, *images)
         started = self._clock()
-        seen: list[ChatChunk] = []
-        async with aclosing(self._model.stream(request)) as chunks:
-            async for chunk in chunks:
-                seen.append(chunk)
-                yield chunk
+        agent = Agent(
+            self._model,
+            self.tools,
+            CHAT_LIMITS,
+            policy=self.policy,
+            approver=self._approver,
+        )
+        answers: list[ChatResponse] = []
+        finished: Finished | None = None
         try:
-            response = join(seen)
+            async with aclosing(agent.run(request)) as steps:
+                async for step in steps:
+                    if isinstance(step, ModelChunk):
+                        yield step.chunk
+                    elif isinstance(step, ToolFinished):
+                        yield step
+                    elif isinstance(step, ModelTurn):
+                        answers.append(step.response)
+                    elif isinstance(step, Finished):
+                        finished = step
         except IncompleteResponseError:
             return
-        self.history += [request.messages[-1], response.as_message()]
-        yield self._report(request, response, self._clock() - started)
+        if finished is None:  # pragma: no cover - the agent always finishes
+            return
+        # The persona's system message is rebuilt every turn, so it is not kept.
+        self.history = list(finished.messages[1:])
+        yield self._report(request, answers, self._clock() - started)
 
     def _report(
-        self, request: ChatRequest, response: ChatResponse, seconds: float
+        self, request: ChatRequest, answers: list[ChatResponse], seconds: float
     ) -> TurnReport:
         route = self.routes.decision
-        usage = response.usage
+        usages = [a.usage for a in answers]
+        counted = all(u is not None for u in usages)
+        last = answers[-1].model if answers else None
         return TurnReport(
             route=route.route if route else "direct",
-            model=response.model or (route.model if route else self._model.info.id),
-            prompt_tokens=usage.prompt_tokens if usage else None,
-            completion_tokens=usage.completion_tokens if usage else None,
+            model=last or (route.model if route else self._model.info.id),
+            prompt_tokens=sum(u.prompt_tokens for u in usages if u)
+            if counted
+            else None,
+            completion_tokens=(
+                sum(u.completion_tokens for u in usages if u) if counted else None
+            ),
             seconds=seconds,
             reasoning=route.reasoning if route else request.reasoning,
         )

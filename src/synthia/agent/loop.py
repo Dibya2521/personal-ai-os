@@ -53,18 +53,24 @@ class Limits:
     """How far one run may go.
 
     ``max_steps`` counts model turns; the last one is offered no tools, so the
-    model has to answer with what it has.
+    model has to answer with what it has. ``deadline_s`` of None sets no
+    deadline: right for a chat, where the answer streams in view and the
+    person stops it when they choose.
 
     Raises:
         ValueError: If a limit is not positive.
     """
 
     max_steps: int = DEFAULT_MAX_STEPS
-    deadline_s: float = DEFAULT_DEADLINE_S
+    deadline_s: float | None = DEFAULT_DEADLINE_S
     call_timeout_s: float = DEFAULT_CALL_TIMEOUT_S
 
     def __post_init__(self) -> None:
-        if self.max_steps < 1 or self.deadline_s <= 0 or self.call_timeout_s <= 0:
+        if (
+            self.max_steps < 1
+            or (self.deadline_s is not None and self.deadline_s <= 0)
+            or self.call_timeout_s <= 0
+        ):
             message = "every agent limit must be positive"
             raise ValueError(message)
 
@@ -148,7 +154,8 @@ class Agent:
         Raises:
             GatewayError: What the model raised.
         """
-        deadline = self._clock() + self._limits.deadline_s
+        limit = self._limits.deadline_s
+        deadline = None if limit is None else self._clock() + limit
         messages = request.messages
         for step in range(1, self._limits.max_steps + 1):
             last = step == self._limits.max_steps
@@ -178,11 +185,11 @@ class Agent:
         raise AssertionError  # pragma: no cover
 
     async def _turn(
-        self, ask: ChatRequest, deadline: float
+        self, ask: ChatRequest, deadline: float | None
     ) -> AsyncGenerator[ModelChunk | ModelTurn]:
         """Stream one model answer; no :class:`ModelTurn` if the deadline came first."""
-        remaining = deadline - self._clock()
-        if remaining <= 0:
+        remaining = None if deadline is None else deadline - self._clock()
+        if remaining is not None and remaining <= 0:
             return
         started = self._clock()
         chunks: list[ChatChunk] = []

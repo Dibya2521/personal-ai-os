@@ -310,6 +310,28 @@ async def test_cancelling_the_run_cancels_the_running_tools() -> None:
     assert cancelled.is_set()
 
 
+async def test_without_a_deadline_time_never_ends_the_run() -> None:
+    now = [0.0]
+
+    def slow_clock_tool() -> str:
+        """Use up time."""
+        now[0] += 10_000.0
+        return "late"
+
+    model = Scripted(calls(("slow_clock_tool", "{}")), says("still here"))
+    agent = Agent(
+        model,
+        Toolbox([tool(slow_clock_tool)]),
+        Limits(deadline_s=None),
+        clock=lambda: now[0],
+    )
+
+    events = await steps(agent, question())
+
+    assert end(events).outcome is Outcome.ANSWERED
+    assert end(events).text == "still here"
+
+
 @pytest.mark.parametrize(
     "limits",
     [{"max_steps": 0}, {"deadline_s": 0.0}, {"call_timeout_s": -1.0}],

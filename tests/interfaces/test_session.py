@@ -76,7 +76,7 @@ async def run(chat: ChatSession, text: str) -> tuple[str, list[TurnReport]]:
     async for item in chat.turn(text):
         if isinstance(item, TurnReport):
             reports.append(item)
-        else:
+        elif isinstance(item, ChatChunk):
             text_out.append(item.text)
     return "".join(text_out), reports
 

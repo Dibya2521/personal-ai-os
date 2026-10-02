@@ -17,6 +17,8 @@ import httpx
 from rich.status import Status
 from rich.text import Text
 
+from synthia.agent.loop import ToolFinished
+from synthia.agent.policy import Decision
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.errors import GatewayError
 from synthia.gateway.providers import OPENROUTER_FREE
@@ -32,6 +34,7 @@ from synthia.interfaces.commands import (
     ShowBudget,
     ShowImage,
     ShowModel,
+    ShowTools,
     SwitchPersona,
     Think,
     UseRemote,
@@ -46,12 +49,15 @@ from synthia.interfaces.session import (
 )
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
+from synthia.tools import local_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from rich.console import Console
 
+    from synthia.agent.policy import Approver
+    from synthia.agent.tools import Tool
     from synthia.gateway.assemble import Gateway
     from synthia.gateway.providers import RemoteProvider
     from synthia.gateway.types import ChatChunk, ImagePart
@@ -65,6 +71,13 @@ PERSONAS_DIR: Final = Path("personas")
 # OpenRouter sends keep-alive comments while a model thinks, so a minute of
 # silence mid-stream means the connection is gone, not that the model is slow.
 TIMEOUT: Final = httpx.Timeout(60.0, connect=10.0)
+YES: Final = frozenset({"y", "yes"})
+MAX_SHOWN: Final = 80
+RULE_SHOWN: Final = {
+    Decision.ALLOW: "",
+    Decision.ASK: " | asks first",
+    Decision.DENY: " | never runs",
+}
 
 type ReadLine = Callable[[str], str]
 
@@ -80,6 +93,36 @@ def read_message(read: ReadLine) -> str:
         lines[-1] = lines[-1].removesuffix(CONTINUES)
         lines.append(read(MORE))
     return "\n".join(lines)
+
+
+def describe_call(finished: ToolFinished) -> str:
+    """Return the dim line shown for one tool call."""
+    call = finished.call
+    outcome = "ok" if finished.ok else _shorten(finished.result)
+    arguments = _shorten(call.arguments or "{}")
+    return f"tool {call.name} {arguments} | {outcome} | {finished.seconds:.1f} s"
+
+
+def terminal_approver(read: ReadLine) -> Approver:
+    """Return an approver that asks in the terminal; anything but y or yes is no.
+
+    The question is read on the event loop's own thread, so calls made at the
+    same time are asked about one after another.
+    """
+
+    async def approve(tool: Tool, arguments: str) -> bool:
+        question = f"run {tool.spec.name} {_shorten(arguments or '{}')}? [y/N] "
+        try:
+            answer = read(question)
+        except EOFError:
+            return False
+        return answer.strip().lower() in YES
+
+    return approve
+
+
+def _shorten(text: str) -> str:
+    return text if len(text) <= MAX_SHOWN else text[: MAX_SHOWN - 3] + "..."
 
 
 def describe(report: TurnReport) -> str:
@@ -141,6 +184,32 @@ class ThinkingLine:
             self._status.stop()
 
 
+class AnswerLines:
+    """Print an answer as it streams, with a dim line for each tool call."""
+
+    def __init__(self, console: Console) -> None:
+        self._console = console
+        self._open = False
+        self.said = False
+
+    def text(self, text: str) -> None:
+        """Print ``text`` where the answer has got to."""
+        self._console.print(text, end="", markup=False, highlight=False)
+        self._open = self._open or bool(text)
+        self.said = self.said or bool(text)
+
+    def call(self, finished: ToolFinished) -> None:
+        """Print one finished tool call on a line of its own."""
+        self.end_line()
+        self._console.print(describe_call(finished), style="dim", markup=False)
+
+    def end_line(self) -> None:
+        """End the answer's current line, if text is on it."""
+        if self._open:
+            self._console.print()
+            self._open = False
+
+
 class ChatApp:
     """Carry out chat commands against a session, printing to a console."""
 
@@ -184,7 +253,8 @@ class ChatApp:
         return True
 
     def _show(
-        self, command: Think | UseRemote | ShowModel | Reset | Help | Invalid
+        self,
+        command: Think | UseRemote | ShowModel | ShowTools | Reset | Help | Invalid,
     ) -> None:
         match command:
             case Think(level=level):
@@ -195,6 +265,8 @@ class ChatApp:
                 self._remote(command)
             case ShowModel():
                 self._model()
+            case ShowTools():
+                self._tools()
             case Reset():
                 self.session.reset()
                 self._note("conversation forgotten")
@@ -210,26 +282,25 @@ class ChatApp:
 
     async def _answer(self, text: str, *images: ImagePart) -> None:
         report: TurnReport | None = None
-        printed = False
+        shown = AnswerLines(self.console)
         try:
             with ThinkingLine(self.console, self._clock) as thinking:
                 async for item in self.session.turn(text, *images):
                     if isinstance(item, TurnReport):
                         report = item
-                        continue
-                    thinking.see(item)
-                    self.console.print(item.text, end="", markup=False, highlight=False)
-                    printed = printed or bool(item.text)
+                    elif isinstance(item, ToolFinished):
+                        shown.call(item)
+                    else:
+                        thinking.see(item)
+                        shown.text(item.text)
         except GatewayError as error:
-            if printed:
-                self.console.print()
+            shown.end_line()
             self._error(f"no answer: {error}")
             return
-        if printed:
-            self.console.print()
+        shown.end_line()
         if report is not None:
             self.console.print(describe(report), style="dim", markup=False)
-        elif not printed:
+        elif not shown.said:
             self._note("no answer came back")
 
     async def _image(self, path: Path, text: str) -> None:
@@ -301,6 +372,18 @@ class ChatApp:
         else:
             self._note(f"last turn: {last.route} to {last.model} ({last.reason})")
 
+    def _tools(self) -> None:
+        tools = list(self.session.tools)
+        if not tools:
+            self._note("no tools")
+            return
+        for tool in tools:
+            rule = RULE_SHOWN[self.session.policy.decide(tool)]
+            self._note(
+                f"{tool.spec.name} | {tool.reach.value}, {tool.effect.value}{rule} | "
+                f"{tool.spec.description}"
+            )
+
     def _note(self, text: str) -> None:
         self.console.print(text, style="cyan", markup=False, highlight=False)
 
@@ -353,7 +436,14 @@ def run_chat(  # noqa: PLR0913
         try:
             model = None if local is None else local.model(client)
             gateway = build_gateway(settings, client, routes, model, remote=remote)
-            session = ChatSession(gateway.model, library, persona, routes)
+            session = ChatSession(
+                gateway.model,
+                library,
+                persona,
+                routes,
+                tools=local_tools(settings.file_roots),
+                approver=terminal_approver(read),
+            )
             app = ChatApp(session, gateway, console)
             if local is not None:
                 local.start()
