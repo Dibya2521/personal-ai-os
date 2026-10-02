@@ -34,7 +34,7 @@ from synthia.interfaces.commands import (
         ("/exit", Exit()),
         ("/quit", Exit()),
         ("/persona", SwitchPersona("")),
-        ("/persona edith", SwitchPersona("edith")),
+        ("/persona horizon", SwitchPersona("horizon")),
         ("/persona set wit=0.3", AdjustPersona({"wit": 0.3})),
         ("/persona set wit=0.3  warmth=1", AdjustPersona({"wit": 0.3, "warmth": 1.0})),
         ("/image cat.png", ShowImage(Path("cat.png"), DEFAULT_IMAGE_QUESTION)),
@@ -58,7 +58,7 @@ def test_each_command_parses(line: str, command: Command) -> None:
     [
         ("/dance", "unknown command /dance; /help lists them"),
         ("/budget now", "/budget takes no arguments"),
-        ("/persona edith please", "a persona name has no spaces"),
+        ("/persona horizon please", "a persona name has no spaces"),
         ("/persona set", "at least one trait=number"),
         ("/persona set wit", "'wit' is not trait=number"),
         ("/persona set wit=high", "'wit=high' is not trait=number"),

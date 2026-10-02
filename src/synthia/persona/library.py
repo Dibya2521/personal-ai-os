@@ -1,10 +1,15 @@
 """Load the built-in and the user's personas, resolving blends.
 
-Each persona is a TOML file named after the key used to pick it (``edith.toml``
-is ``/persona edith``). A file gives either ``[traits]`` or ``[blend]``: a blend
-names other personas with weights, its traits are their weighted mean, and its
-principles are its own followed by theirs, without repeats. That is how the
+Each persona is a TOML file named after the key used to pick it (``neon.toml``
+is ``/persona neon``). A file gives all five ``[traits]``, or a ``[blend]``: a
+blend names other personas with weights, its traits are their weighted mean, and
+its principles are its own followed by theirs, without repeats. That is how the
 default persona is defined, so moving one ingredient moves the default too.
+
+A blend may also give some ``[traits]``, which replace the mean for those
+sliders. A mean pulls every slider towards the middle: the default's three
+ingredients average to the middle sentence on all five, so the default sets the
+ones that make its character.
 
 Files in the user's directory replace built-ins with the same key, so a user
 can redefine even the default without touching the package.
@@ -16,11 +21,19 @@ import tomllib
 from importlib.resources import files
 from typing import TYPE_CHECKING, Annotated, Final, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from synthia.persona.model import (
     DEFAULT_TEMPLATE,
     PHRASES,
+    Level,
     Persona,
     PersonaError,
     Traits,
@@ -43,17 +56,33 @@ class PersonaFile(BaseModel):
 
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
-    traits: Traits | None = None
+    traits: dict[str, Level] | None = None
     blend: dict[str, Weight] | None = None
     principles: tuple[str, ...] = ()
     template: str = DEFAULT_TEMPLATE
 
+    @field_validator("traits")
+    @classmethod
+    def _known_traits(cls, traits: dict[str, float] | None) -> dict[str, float] | None:
+        unknown = sorted(set(traits or {}) - set(PHRASES))
+        if unknown:
+            message = (
+                f"no such trait: {', '.join(unknown)}; traits are {', '.join(PHRASES)}"
+            )
+            raise ValueError(message)
+        return traits
+
     @model_validator(mode="after")
     def _traits_or_blend(self) -> Self:
-        if (self.traits is None) == (self.blend is None):
-            message = "give exactly one of [traits] or [blend]"
-            raise ValueError(message)
-        if self.blend is not None and not self.blend:
+        if self.blend is None:
+            if self.traits is None:
+                message = "give [traits] or [blend]"
+                raise ValueError(message)
+            missing = [t for t in PHRASES if t not in self.traits]
+            if missing:
+                message = f"[traits] without a [blend] needs {', '.join(missing)}"
+                raise ValueError(message)
+        elif not self.blend:
             message = "a blend needs at least one persona"
             raise ValueError(message)
         return self
@@ -160,10 +189,10 @@ def _resolve(
         raise PersonaError(message)
     file = found[key]
     principles = list(file.principles)
-    if file.traits is not None:
-        traits = file.traits
+    if file.blend is None:
+        traits = Traits.model_validate(file.traits)
     else:
-        blend = file.blend or {}
+        blend = file.blend
         missing = sorted(set(blend) - set(found))
         if missing:
             message = (
@@ -174,7 +203,7 @@ def _resolve(
             (_resolve(part, found, resolved, (*chain, key)), weight)
             for part, weight in blend.items()
         ]
-        traits = _mean(parts)
+        traits = _mean(parts).adjusted(**(file.traits or {}))
         for part, _ in parts:
             principles += [p for p in part.principles if p not in principles]
     persona = Persona(

@@ -39,7 +39,7 @@ def test_environment_variables_are_read_with_the_prefix(
     monkeypatch.setenv("SYNTHIA_LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("SYNTHIA_LOG_FORMAT", "json")
     monkeypatch.setenv("SYNTHIA_DISK_BUDGET_GB", "2.5")
-    monkeypatch.setenv("SYNTHIA_PERSONA", "edith")
+    monkeypatch.setenv("SYNTHIA_PERSONA", "horizon")
 
     settings = load_settings(env_file=None)
 
@@ -47,7 +47,7 @@ def test_environment_variables_are_read_with_the_prefix(
     assert settings.log_level is LogLevel.DEBUG
     assert settings.log_format is LogFormat.JSON
     assert settings.disk_budget_gb == 2.5
-    assert settings.persona == "edith"
+    assert settings.persona == "horizon"
 
 
 def test_env_file_is_read_and_a_real_variable_beats_it(

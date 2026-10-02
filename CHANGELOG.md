@@ -26,9 +26,10 @@ a free remote model and an optional local one, under a daily budget.
   the OpenAI-compatible chat API, used for OpenRouter's `openrouter/free`,
   which picks a free model per request, and for llama.cpp's server.
 - A thinking level on each request: `off`, `low`, `medium`, `high` or `auto`.
-  OpenRouter receives it as `reasoning.effort` (`none` for off), llama.cpp's
-  server as the chat template's `enable_thinking` switch. A request without a
-  level is sent exactly as before.
+  OpenRouter receives `off` as `reasoning.effort` `none`, and `low` to `high`
+  as a `reasoning.max_tokens` limit (the time allowance below);
+  llama.cpp's server receives the chat template's `enable_thinking` switch. A
+  request without a level is sent exactly as before.
 - `auto` is decided by the router from the latest message, by fixed rules
   with no extra request: a greeting or short lookup does not think; code,
   mathematics, why and how questions, comparisons and proofs think more; a
@@ -72,9 +73,20 @@ a free remote model and an optional local one, under a daily budget.
   stops the answer without stopping the server and forcing a 3 GB reload. Its
   output goes to `SYNTHIA_HOME/logs/llama-server.log`.
 - Personas as TOML data, with five trait sliders (warmth, formality, wit,
-  vigilance, verbosity) and principles. Built in: `jarvis`, `companion`,
-  `edith`, and the default `synthia`, a weighted blend of the three. A file in
-  `SYNTHIA_HOME/personas` adds a persona or replaces a built-in.
+  vigilance, verbosity) and principles. Built in: three pure characters,
+  `nova` (casual, sassy, watchful, brief), `horizon` (security and privacy
+  first) and `zenith` (formal, precise, dry wit); the default `synthia`,
+  `nova` 0.5, `horizon` 0.3 and `zenith` 0.2 with warmth 0.8, wit 0.7 and
+  verbosity 0.5 pinned over the mean, so it is warm, polite, witty, watchful
+  and answers fully; three led mixes, 0.7 of the lead and 0.15 of each other,
+  `neon` (Nova), `glacier` (Horizon) and `starlight` (Zenith); `minato`, a
+  calm, humble mentor with nerves of steel and a kind heart, inspired by
+  Minato Namikaze in Naruto; and `yume`, a gentle companion for
+  conversation, inspired by Kaoruko Waguri in The Fragrant Flower Blooms with
+  Dignity. A blend may pin any trait over its mean this way. Warmth is a
+  resting tone: a warm persona turns cool when the moment calls for it, and a
+  cool one warms up. A file in `SYNTHIA_HOME/personas` adds a persona or
+  replaces a built-in.
 - Structured output validated against a pydantic model, with up to two repair
   requests, and an opt-in cache of complete answers, for callers that want
   them.

@@ -121,7 +121,7 @@ async def test_invalid_utf8_in_a_delta_becomes_a_replacement_character(
 def test_a_persona_saved_by_notepad_with_a_byte_order_mark_loads(
     tmp_path: Path,
 ) -> None:
-    text = 'name = "Notepad"\ndescription = "d."\n[blend]\njarvis = 1.0\n'
+    text = 'name = "Notepad"\ndescription = "d."\n[blend]\nzenith = 1.0\n'
     (tmp_path / "notepad.toml").write_bytes(b"\xef\xbb\xbf" + text.encode())
 
     assert PersonaLibrary(tmp_path).get("notepad").name == "Notepad"

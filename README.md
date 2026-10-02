@@ -108,9 +108,16 @@ in [`docs/gateway.md`](docs/gateway.md).
   Metal, CUDA, Vulkan, CPU, and one that fails to start falls back to the
   next.
 - **Personas.** SYNTHIA's character is data: five trait sliders rendered to
-  fixed sentences, plus principles. The default blends JARVIS, a warm
-  companion and EDITH; `/persona` switches or adjusts it mid-conversation, and
-  a TOML file in `SYNTHIA_HOME/personas` adds or replaces one.
+  fixed sentences, plus principles. Three pure characters: Nova (casual,
+  sassy, tactical), Horizon (security and privacy first) and Zenith (formal
+  and precise). The default SYNTHIA is mostly Nova, a good share of Horizon
+  and some Zenith: a warm, quick-witted companion that guards the person's
+  data. Neon, Glacier and Starlight each let one of the three lead with a
+  little of the other two. Two more characters stand on their own: Minato, a
+  calm mentor with nerves of steel and a kind heart, and Yume, a gentle
+  companion for conversation. Warmth is a resting tone the moment can move
+  either way. `/persona` switches or adjusts it mid-conversation, and a TOML
+  file in `SYNTHIA_HOME/personas` adds or replaces one.
 - **Chat.** Streaming answers with a line after each naming the route, the
   model, the tokens and the seconds taken. Ctrl+C stops an answer and keeps the
   chat; only finished exchanges enter the history. Log records go to

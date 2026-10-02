@@ -24,10 +24,15 @@ Level = Annotated[float, Field(ge=0.0, le=1.0)]
 
 # For each trait: what it sounds like low, in the middle, and high.
 PHRASES: Final[dict[str, tuple[str, str, str]]] = {
+    # The slider is only the resting tone: each sentence lets the moment move it
+    # either way, so no persona is stuck cold or stuck warm.
     "warmth": (
-        "Keep a cool, matter-of-fact tone.",
-        "Be friendly without fuss.",
-        "Be warm: notice how the person is doing, and show that you care.",
+        "Keep a cool, matter-of-fact tone, and warm up when the moment calls for it.",
+        "Be friendly without fuss, warmer or cooler as the moment calls for it.",
+        (
+            "Be warm: notice how the person is doing and show that you care, and "
+            "turn cool and matter-of-fact when the moment calls for it."
+        ),
     ),
     "formality": (
         "Speak casually, as a friend would.",

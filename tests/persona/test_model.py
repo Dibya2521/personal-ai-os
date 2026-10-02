@@ -29,7 +29,7 @@ def test_the_prompt_names_the_persona_and_lists_traits_and_principles() -> None:
     prompt = persona().system_prompt()
 
     assert prompt.startswith("You are Test, a persona for tests.")
-    assert "- Be friendly without fuss." in prompt
+    assert "- Be friendly without fuss, warmer or cooler as the moment" in prompt
     assert prompt.endswith("- Be exact.\n- Be kind.")
     assert prompt.count("\n- ") == len(PHRASES) + 2
 
@@ -64,6 +64,29 @@ def test_moving_a_slider_changes_only_that_sentence() -> None:
     ]
     assert changed == [3]
     assert before.traits.vigilance == 0.5  # the original is unchanged
+
+
+MOMENT = "when the moment calls for it."
+
+
+@pytest.mark.parametrize(
+    ("level", "sentence"),
+    [
+        (0.0, f"Keep a cool, matter-of-fact tone, and warm up {MOMENT}"),
+        (0.5, "Be friendly without fuss, warmer or cooler as the moment calls for it."),
+        (
+            1.0,
+            (
+                "Be warm: notice how the person is doing and show that you care, "
+                f"and turn cool and matter-of-fact {MOMENT}"
+            ),
+        ),
+    ],
+)
+def test_warmth_is_a_resting_tone_the_moment_can_move_either_way(
+    level: float, sentence: str
+) -> None:
+    assert MIDDLE.adjusted(warmth=level).sentences()[0] == sentence
 
 
 def test_an_unknown_trait_names_the_valid_ones() -> None:

@@ -194,16 +194,16 @@ async def test_switching_and_adjusting_persona_change_the_next_prompt_only(
     chat = session(library, model)
     await run(chat, "one")
 
-    chat.switch("edith")
+    chat.switch("horizon")
     chat.adjust({"wit": 1.0})
     await run(chat, "two")
 
     system = model.requests[1].messages[0].text
-    assert system.startswith("You are EDITH, ")
+    assert system.startswith("You are SYNTHIA Horizon, ")
     assert "Use dry wit freely" in system
     assert len(chat.history) == 4
     with pytest.raises(PersonaError):
-        chat.switch("friday")
+        chat.switch("nobody")
     with pytest.raises(PersonaError):
         chat.adjust({"charm": 0.5})
 

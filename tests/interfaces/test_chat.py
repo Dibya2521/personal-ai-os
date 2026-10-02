@@ -321,18 +321,19 @@ async def test_persona_commands_switch_list_adjust_and_report_mistakes(
         chat, out = await app_for(tmp_path, client)
         for line in [
             "/persona",
-            "/persona edith",
+            "/persona horizon",
             "/persona set wit=0.9",
-            "/persona friday",
+            "/persona nobody",
             "/persona set charm=1",
         ]:
             assert await chat.handle(parse(line))
 
     text = out.getvalue()
-    assert "personas: companion, edith, jarvis, synthia" in text
-    assert "now EDITH: warmth=0.25, formality=0.6, wit=0.15" in text
-    assert "now EDITH: warmth=0.25, formality=0.6, wit=0.9" in text
-    assert "no persona 'friday'" in text
+    personas = "glacier, horizon, minato, neon, nova, starlight, synthia, yume, zenith"
+    assert f"personas: {personas}\n" in text
+    assert "now SYNTHIA Horizon: warmth=0.25, formality=0.6, wit=0.15" in text
+    assert "now SYNTHIA Horizon: warmth=0.25, formality=0.6, wit=0.9" in text
+    assert "no persona 'nobody'" in text
     assert "no such trait: charm" in text
     assert chat.session.persona.traits.wit == 0.9
 
@@ -415,11 +416,11 @@ def test_the_command_refuses_to_start_without_a_key_or_with_an_unknown_persona(
 
     no_key = cli.invoke(app, ["chat"])
     monkeypatch.setenv("SYNTHIA_OPENROUTER_API_KEY", KEY)
-    no_persona = cli.invoke(app, ["chat", "--persona", "friday"])
+    no_persona = cli.invoke(app, ["chat", "--persona", "nobody"])
 
     assert (no_key.exit_code, no_persona.exit_code) == (2, 2)
     assert "SYNTHIA_OPENROUTER_API_KEY" in no_key.stderr
-    assert "no persona 'friday'" in no_persona.stderr
+    assert "no persona 'nobody'" in no_persona.stderr
     assert KEY not in no_persona.stderr + no_persona.stdout
 
 
