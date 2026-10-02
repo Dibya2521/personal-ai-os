@@ -308,6 +308,9 @@ async def test_the_supervisor_restarts_a_crashed_server_on_a_new_port(
     def record(launch: Launch) -> None:
         launches.append(launch)
         if len(launches) == 2:
+            # The environment is read at spawn, after this callback, so only the
+            # first server crashes and a late wake-up never sees a third launch.
+            monkeypatch.delenv("FAKE_EXIT_AFTER_S")
             relaunched.set()
 
     async with httpx.AsyncClient() as client:
