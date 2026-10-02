@@ -124,25 +124,28 @@ def test_arbitrary_bytes_never_crash_and_splitting_never_changes_the_result(
     assert parse_split(stream, cuts) == parse_all(stream)
 
 
-def seconds_to_parse_one_long_line(size: int) -> float:
-    """Return the best of three timings, to damp scheduler noise."""
+def seconds_to_parse_one_long_line(size: int, times: int) -> float:
     payload = b"data: " + b"x" * size + b"\n\n"
-    timings: list[float] = []
-    for _ in range(3):
+    started = time.perf_counter()
+    for _ in range(times):
         parser = SSEParser()
-        started = time.perf_counter()
         for i in range(0, len(payload), 4096):
             parser.feed(payload[i : i + 4096])
-        timings.append(time.perf_counter() - started)
-    return min(timings)
+    return time.perf_counter() - started
 
 
 def test_a_long_line_in_many_chunks_costs_linear_time() -> None:
-    small = seconds_to_parse_one_long_line(500_000)
-    large = seconds_to_parse_one_long_line(2_000_000)
+    # Both sides parse the same 8 MB, so the ratio is the cost per byte: about
+    # 1 when linear, about 16 when quadratic (a line 16 times longer). Each
+    # side runs tens of milliseconds and the runs alternate, so load on a
+    # busy machine slows both alike.
+    short: list[float] = []
+    long: list[float] = []
+    for _ in range(5):
+        short.append(seconds_to_parse_one_long_line(125_000, times=64))
+        long.append(seconds_to_parse_one_long_line(2_000_000, times=4))
 
-    # Four times the input: linear is about 4x, quadratic about 16x.
-    assert large / small < 8
+    assert min(long) / min(short) < 4
 
 
 async def test_aiter_events_yields_as_chunks_arrive() -> None:
