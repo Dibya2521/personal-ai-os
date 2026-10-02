@@ -132,6 +132,9 @@ budget, only when asked.
   offline. No OpenRouter key is not a problem: the remote model is optional.
 - Documentation of the gateway (`docs/gateway.md`) and decision records 0005
   to 0009.
+- An import layer check (import-linter, `uv run lint-imports`) in pre-commit
+  and CI: `interfaces`, `tools`, `agent`, `models`, `gateway`, `persona`,
+  `kernel`, each importing only the ones below it.
 
 ### Changed
 

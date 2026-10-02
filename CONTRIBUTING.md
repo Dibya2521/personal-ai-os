@@ -16,8 +16,13 @@ and Windows:
 uv run ruff format --check .
 uv run ruff check .
 uv run pyright
+uv run lint-imports
 uv run pytest --cov
 ```
+
+`lint-imports` checks the package layers declared in `pyproject.toml`: a
+package may import only the packages below it, and a new package fails the
+check until it is given a place in the list.
 
 ## Conventions
 

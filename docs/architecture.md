@@ -50,6 +50,15 @@ refined when its phase begins, and this file changes with it.
 
 Dependencies point down only. The kernel imports nothing else from the project.
 
+The packages built so far, top to bottom, are `interfaces`, `tools`, `agent`,
+`models`, `gateway`, `persona` and `kernel`. `tools` sits above `agent` because
+each tool is built from the agent's `FunctionTool`. `models` sits above
+`gateway` because the local model is an OpenAI-compatible gateway client; the
+gateway sees it only as a `LocalChatModel`, a chat model that says whether it is
+ready. `uv run lint-imports` enforces this order on every commit and in CI. An
+import that points up fails, including one made only for type checking, and so
+does a new package that has not been given a place in the list.
+
 The cognition layer is built: [`gateway.md`](gateway.md) describes how a request
 is routed, guarded, metered and answered, locally or remotely.
 

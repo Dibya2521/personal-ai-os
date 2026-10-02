@@ -47,6 +47,9 @@ jobs:
       - name: pyright
         run: uv run pyright
 
+      - name: import layers
+        run: uv run lint-imports
+
       - name: pytest
         run: uv run pytest --cov --cov-report=term-missing
 

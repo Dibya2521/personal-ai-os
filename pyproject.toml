@@ -38,6 +38,7 @@ synthia = "synthia.interfaces.cli:app"
 [dependency-groups]
 dev = [
   "hypothesis>=6.120",
+  "import-linter>=2.15",
   "pre-commit>=4.0",
   "pre-commit-uv>=4.3.0",
   "pyright>=1.1.390",
@@ -93,6 +94,24 @@ typeCheckingMode = "strict"
 extraPaths = ["scripts"]
 venvPath = "."
 venv = ".venv"
+
+[tool.importlinter]
+root_package = "synthia"
+
+[[tool.importlinter.contracts]]
+name = "packages import only the layers below them"
+type = "layers"
+containers = ["synthia"]
+layers = [
+  "interfaces",
+  "tools",
+  "agent",
+  "models",
+  "gateway",
+  "persona",
+  "kernel",
+]
+exhaustive = true
 
 [tool.pytest.ini_options]
 minversion = "8.0"

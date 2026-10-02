@@ -131,7 +131,8 @@ in [`docs/gateway.md`](docs/gateway.md).
   `SYNTHIA_HOME/logs/synthia.log`, not into the conversation.
 
 **Repository.** Every commit passes ruff with every rule enabled, pyright in
-strict mode, and the test suite at 100 percent branch coverage of the package,
+strict mode, an import check that keeps each package from importing the ones
+above it, and the test suite at 100 percent branch coverage of the package,
 enforced by pre-commit and again by CI on Linux and Windows. Secret scanning and
 a file-size limit guard the public history. Tests replay recorded model
 responses and never reach the network, so CI spends no budget.

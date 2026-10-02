@@ -50,6 +50,13 @@ repos:
         types: [python]
         pass_filenames: false
 
+      - id: import-layers
+        name: import layers
+        entry: uv run lint-imports
+        language: system
+        types: [python]
+        pass_filenames: false
+
       - id: pytest
         name: pytest
         entry: uv run pytest -q
