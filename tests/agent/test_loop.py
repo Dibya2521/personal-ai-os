@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator
 from contextlib import aclosing
 
 import pytest
@@ -17,55 +17,9 @@ from synthia.agent.loop import (
     ToolStarted,
 )
 from synthia.agent.tools import Effect, FunctionTool, Reach, Toolbox, ToolFunction
-from synthia.gateway.types import (
-    ChatChunk,
-    ChatRequest,
-    FinishReason,
-    Message,
-    ModelInfo,
-    Reasoning,
-    Role,
-    ToolCallDelta,
-)
+from synthia.gateway.types import ChatChunk, ChatRequest, Message, Reasoning, Role
+from tests.agent.scripted import Scripted, calls, says
 from tests.timing import HANG_TIMEOUT_S
-
-INFO = ModelInfo("scripted", 4096, vision=False, tools=True)
-
-
-def says(text: str) -> list[ChatChunk]:
-    return [ChatChunk(text=text), ChatChunk(finish_reason=FinishReason.STOP)]
-
-
-def calls(*wanted: tuple[str, str]) -> list[ChatChunk]:
-    return [
-        ChatChunk(
-            tool_calls=tuple(
-                ToolCallDelta(i, f"call_{i}", name, arguments)
-                for i, (name, arguments) in enumerate(wanted)
-            )
-        ),
-        ChatChunk(finish_reason=FinishReason.TOOL_CALLS),
-    ]
-
-
-class Scripted:
-    """A model that answers each request with the next scripted reply."""
-
-    def __init__(
-        self, *replies: list[ChatChunk] | Callable[[ChatRequest], list[ChatChunk]]
-    ) -> None:
-        self._replies = list(replies)
-        self.requests: list[ChatRequest] = []
-
-    @property
-    def info(self) -> ModelInfo:
-        return INFO
-
-    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
-        self.requests.append(request)
-        reply = self._replies.pop(0)
-        for chunk in reply(request) if callable(reply) else reply:
-            yield chunk
 
 
 def tool(function: ToolFunction) -> FunctionTool:

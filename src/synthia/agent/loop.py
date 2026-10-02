@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
+from synthia.agent.policy import Decision, Policy, nobody_approves
 from synthia.agent.tools import ToolError
 from synthia.gateway.protocol import join
 from synthia.gateway.types import Message
@@ -24,7 +25,8 @@ from synthia.gateway.types import Message
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
-    from synthia.agent.tools import Toolbox
+    from synthia.agent.policy import Approver
+    from synthia.agent.tools import Tool, Toolbox
     from synthia.gateway.protocol import ChatModel
     from synthia.gateway.types import ChatChunk, ChatRequest, ChatResponse, ToolCall
 
@@ -116,20 +118,26 @@ class Agent:
 
     The request's own settings (thinking level, permission to use the remote)
     apply to every step, so an agent never leaves the machine unless the
-    request allows it.
+    request allows it. ``policy`` decides each call before it runs; a call it
+    asks about runs only if ``approver`` says yes, and the default approver
+    always says no.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         model: ChatModel,
         toolbox: Toolbox,
         limits: Limits | None = None,
         *,
+        policy: Policy | None = None,
+        approver: Approver = nobody_approves,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._model = model
         self._toolbox = toolbox
         self._limits = limits or Limits()
+        self._policy = policy or Policy()
+        self._approver = approver
         self._clock = clock
 
     async def run(self, request: ChatRequest) -> AsyncGenerator[Step]:
@@ -209,11 +217,18 @@ class Agent:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _call(self, call: ToolCall) -> ToolFinished:
-        started = self._clock()
         tool = self._toolbox.get(call.name)
+        refusal = (
+            f"there is no tool named {call.name}"
+            if tool is None
+            else await self._refusal(tool, call.arguments)
+        )
+        # Started after any approval, so a person's time to answer is not
+        # counted against the tool's own limit.
+        started = self._clock()
         ok = False
-        if tool is None:
-            result = f"there is no tool named {call.name}"
+        if tool is None or refusal is not None:
+            result = refusal or ""
         else:
             try:
                 async with asyncio.timeout(self._limits.call_timeout_s):
@@ -230,3 +245,19 @@ class Agent:
                 logger.exception("tool %s failed", call.name)
                 result = f"{call.name} failed: {type(error).__name__}"
         return ToolFinished(call, result, ok, self._clock() - started)
+
+    async def _refusal(self, tool: Tool, arguments: str) -> str | None:
+        """Return why ``tool`` may not run with ``arguments``, or None if it may."""
+        name = tool.spec.name
+        decision = self._policy.decide(tool)
+        if decision is Decision.DENY:
+            return f"{name} is not permitted"
+        if decision is Decision.ASK:
+            try:
+                approved = await self._approver(tool, arguments)
+            except Exception:
+                logger.exception("asking to run %s failed", name)
+                approved = False
+            if not approved:
+                return f"running {name} was not approved"
+        return None
