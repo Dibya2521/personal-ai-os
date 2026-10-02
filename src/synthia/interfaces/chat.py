@@ -100,7 +100,10 @@ def describe_call(finished: ToolFinished) -> str:
     call = finished.call
     outcome = "ok" if finished.ok else _shorten(finished.result)
     arguments = _shorten(call.arguments or "{}")
-    return f"tool {call.name} {arguments} | {outcome} | {finished.seconds:.1f} s"
+    flagged = f" | flagged: {', '.join(finished.flags)}" if finished.flags else ""
+    return (
+        f"tool {call.name} {arguments} | {outcome}{flagged} | {finished.seconds:.1f} s"
+    )
 
 
 def terminal_approver(read: ReadLine) -> Approver:

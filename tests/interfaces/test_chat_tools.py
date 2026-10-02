@@ -6,6 +6,7 @@ import pytest
 
 from synthia.agent.loop import ToolFinished
 from synthia.agent.policy import Policy
+from synthia.agent.quoting import quote
 from synthia.agent.tools import Effect, FunctionTool, Reach, Toolbox
 from synthia.gateway.types import ChatChunk, Role, ToolCall, Usage
 from synthia.interfaces.chat import (
@@ -50,6 +51,21 @@ def test_a_tool_line_names_the_call_its_outcome_and_time() -> None:
     assert describe_call(
         finished("", ok=False, result="running note was not approved")
     ) == ("tool note {} | running note was not approved | 0.0 s")
+
+
+def test_a_flagged_result_says_so_on_its_line() -> None:
+    call = ToolFinished(
+        ToolCall("call_0", "read_file", "{}"),
+        result="text",
+        ok=True,
+        seconds=0.0,
+        flags=("asks to ignore instructions", "speaks as a role"),
+    )
+
+    assert describe_call(call) == (
+        "tool read_file {} | ok | flagged: asks to ignore instructions, "
+        "speaks as a role | 0.0 s"
+    )
 
 
 def test_long_arguments_and_results_are_shortened_to_80_characters() -> None:
@@ -109,7 +125,7 @@ async def test_a_turn_with_a_tool_shows_the_call_and_keeps_the_whole_exchange() 
         Role.TOOL,
         Role.ASSISTANT,
     ]
-    assert chat.history[2].text == "noted milk"
+    assert chat.history[2].text == quote("note", "noted milk")
     # The next turn sends the tool exchange back, after a fresh system message.
     assert model.requests[1].messages[0].role is Role.SYSTEM
     assert model.requests[1].tools == chat.tools.specs()
@@ -271,5 +287,5 @@ def test_the_chat_calls_the_calculator_and_shows_the_call(tmp_path: Path) -> Non
     assert sent[1]["messages"][-1] == {  # type: ignore[index]
         "role": "tool",
         "tool_call_id": "call_0",
-        "content": "42",
+        "content": quote("calculate", "42"),
     }

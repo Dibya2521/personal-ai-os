@@ -7,6 +7,7 @@ import pytest
 
 from synthia.agent.loop import Agent, Finished, Limits, Step, ToolFinished
 from synthia.agent.policy import Decision, Policy, nobody_approves
+from synthia.agent.quoting import quote
 from synthia.agent.tools import Effect, FunctionTool, Reach, Tool, Toolbox
 from synthia.gateway.types import ChatRequest, Message
 from tests.agent.scripted import Scripted, calls, says
@@ -123,7 +124,7 @@ async def test_a_model_asking_again_and_again_never_gets_a_denied_tool() -> None
     assert [r.result for r in results(events)] == ["act is not permitted"] * 4
     assert isinstance(events[-1], Finished)
     # The refusal reaches the model as the call's result.
-    assert model.requests[1].messages[-1].text == "act is not permitted"
+    assert model.requests[1].messages[-1].text == quote("act", "act is not permitted")
 
 
 async def test_a_failing_approver_counts_as_no_and_is_logged(

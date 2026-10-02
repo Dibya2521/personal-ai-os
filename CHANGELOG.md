@@ -31,7 +31,9 @@ budget, only when asked.
   seconds). A tool that would change something or reach outside the
   machine runs only after `y` at a `run <tool> <arguments>? [y/N]`
   question, one call at a time. `/tools` lists every tool, where it works,
-  what it may change, and whether it asks first.
+  what it may change, and whether it asks first. A tool's output reaches the
+  model quoted as untrusted data, with chat markup in it defused; text in it
+  shaped like an instruction is flagged on the call's line.
 - A model gateway: one streaming interface for every model and one adapter for
   the OpenAI-compatible chat API, used for OpenRouter's `openrouter/free`,
   which picks a free model per request, and for llama.cpp's server.

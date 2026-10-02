@@ -18,6 +18,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
 from synthia.agent.policy import Decision, Policy, nobody_approves
+from synthia.agent.quoting import flags, quote
 from synthia.agent.tools import ToolError
 from synthia.gateway.protocol import join
 from synthia.gateway.types import Message
@@ -99,12 +100,17 @@ class ToolStarted:
 
 @dataclass(frozen=True, slots=True)
 class ToolFinished:
-    """A call ended; ``result`` is what the model is told."""
+    """A call ended.
+
+    ``result`` is the tool's own text; the model receives it quoted as
+    untrusted data. ``flags`` names what in it looks like an instruction.
+    """
 
     call: ToolCall
     result: str
     ok: bool
     seconds: float
+    flags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,7 +185,11 @@ class Agent:
                 yield event
             messages = (
                 *messages,
-                *(Message.tool_result(r.call.id, r.result) for r in results if r),
+                *(
+                    Message.tool_result(r.call.id, quote(r.call.name, r.result))
+                    for r in results
+                    if r
+                ),
             )
         # Unreachable: the last step offers no tools, so it ends above.
         raise AssertionError  # pragma: no cover
@@ -251,7 +261,7 @@ class Agent:
             except Exception as error:
                 logger.exception("tool %s failed", call.name)
                 result = f"{call.name} failed: {type(error).__name__}"
-        return ToolFinished(call, result, ok, self._clock() - started)
+        return ToolFinished(call, result, ok, self._clock() - started, flags(result))
 
     async def _refusal(self, tool: Tool, arguments: str) -> str | None:
         """Return why ``tool`` may not run with ``arguments``, or None if it may."""
