@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 import httpx
@@ -267,6 +268,81 @@ async def test_an_answer_with_nothing_in_it_says_none_came_back(
 
     assert out.getvalue() == "no answer came back\n"
     assert chat.session.history == []
+
+
+def called(name: str, arguments: str) -> bytes:
+    call = {
+        "index": 0,
+        "id": "call_0",
+        "function": {"name": name, "arguments": arguments},
+    }
+    return (
+        event({"model": "vendor/free", "choices": [{"delta": {"tool_calls": [call]}}]})
+        + event({"choices": [{"delta": {}, "finish_reason": "tool_calls"}]})
+        + b"data: [DONE]\n\n"
+    )
+
+
+def test_the_chat_calls_a_tool_of_an_mcp_server_after_a_yes(tmp_path: Path) -> None:
+    server = Path(__file__).parent.parent / "mcp" / "fake_mcp_server.py"
+    command = json.dumps([sys.executable, str(server)])
+    (tmp_path / "mcp.toml").write_text(f"[servers.fake]\ncommand = {command}\n")
+    sent: list[dict[str, object]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404)
+        sent.append(json.loads(request.content))
+        reply = (
+            called("fake__echo", '{"text": "hi"}')
+            if len(sent) == 1
+            else answer("Done.")
+        )
+        return httpx.Response(200, content=reply)
+
+    screen, out = console()
+    read = scripted("say hi through the server", "y")
+
+    run_chat(
+        settings(tmp_path),
+        "synthia",
+        screen,
+        read,
+        httpx.MockTransport(respond),
+        use_remote=True,
+    )
+
+    names = [t["function"]["name"] for t in sent[0]["tools"]]  # type: ignore[index]
+    assert names[5:7] == ["fake__echo", "fake__add"]
+    assert read.prompts[1] == 'run fake__echo {"text": "hi"}? [y/N] '  # type: ignore[attr-defined]
+    assert sent[1]["messages"][-1]["content"] == quote("fake__echo", "hi")  # type: ignore[index]
+    assert "tool fake__echo" in out.getvalue()
+    assert (
+        tmp_path / "logs" / "mcp" / "fake.log"
+    ).read_text() == "fake mcp server started\n"
+
+
+def test_a_broken_server_list_is_named_and_the_chat_goes_on(tmp_path: Path) -> None:
+    (tmp_path / "mcp.toml").write_text("[servers.fake\n")
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404)
+        return httpx.Response(200, content=answer("Hello."))
+
+    screen, out = console()
+    run_chat(
+        settings(tmp_path),
+        "synthia",
+        screen,
+        scripted("hello"),
+        httpx.MockTransport(respond),
+        use_remote=True,
+    )
+
+    text = out.getvalue()
+    assert text.startswith(f"no MCP servers: {tmp_path / 'mcp.toml'} is not a valid")
+    assert "Hello." in text
 
 
 def test_the_chat_calls_the_calculator_and_shows_the_call(tmp_path: Path) -> None:

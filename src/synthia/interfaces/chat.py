@@ -49,6 +49,8 @@ from synthia.interfaces.session import (
     TurnReport,
     load_image,
 )
+from synthia.kernel.errors import ConfigError
+from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
 from synthia.tools import local_tools
@@ -59,7 +61,7 @@ if TYPE_CHECKING:
     from rich.console import Console
 
     from synthia.agent.policy import Approver
-    from synthia.agent.tools import Tool
+    from synthia.agent.tools import Tool, Toolbox
     from synthia.gateway.assemble import Gateway
     from synthia.gateway.providers import RemoteProvider
     from synthia.gateway.types import ChatChunk, ImagePart
@@ -470,20 +472,26 @@ def run_chat(  # noqa: PLR0913
         ConfigError: If no model can be reached.
         PersonaError: If a persona file is invalid or ``persona`` does not exist.
     """
-    library = PersonaLibrary(settings.home / PERSONAS_DIR)
     routes = LastRoute()
     with asyncio.Runner() as runner:
         client = httpx.AsyncClient(transport=transport, timeout=TIMEOUT)
         app: ChatApp | None = None
+        servers = McpServers([], [])
         try:
-            model = None if local is None else local.model(client)
-            gateway = build_gateway(settings, client, routes, model, remote=remote)
+            gateway = build_gateway(
+                settings,
+                client,
+                routes,
+                None if local is None else local.model(client),
+                remote=remote,
+            )
+            tools, servers = runner.run(chat_tools(settings, console))
             session = ChatSession(
                 gateway.model,
-                library,
+                PersonaLibrary(settings.home / PERSONAS_DIR),
                 persona,
                 routes,
-                tools=local_tools(settings.file_roots),
+                tools=tools,
                 approver=terminal_approver(read),
                 trace=Trace.start(settings.home / TRACES),
             )
@@ -499,4 +507,33 @@ def run_chat(  # noqa: PLR0913
             if app is not None and app.learning is not None:
                 app.learning.cancel()
                 runner.run(asyncio.wait([app.learning]))
+            runner.run(servers.stop())
             runner.run(client.aclose())
+
+
+async def chat_tools(
+    settings: Settings, console: Console
+) -> tuple[Toolbox, McpServers]:
+    """Return SYNTHIA's own tools and those of every MCP server that started."""
+    servers = await start_mcp_servers(settings, console)
+    tools = local_tools(settings.file_roots)
+    for tool in servers.tools():
+        tools.add(tool)
+    return tools, servers
+
+
+async def start_mcp_servers(settings: Settings, console: Console) -> McpServers:
+    """Start the servers in ``mcp.toml``; any that fail are named and left out."""
+    try:
+        configs = load_config(settings.home / MCP_CONFIG)
+    except ConfigError as error:
+        configs = {}
+        _warn(console, f"no MCP servers: {error}")
+    servers = await McpServers.start(configs, settings.home / MCP_LOGS)
+    for failure in servers.failures:
+        _warn(console, f"MCP server not started: {failure}")
+    return servers
+
+
+def _warn(console: Console, text: str) -> None:
+    console.print(text, style="red", markup=False, highlight=False)

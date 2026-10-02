@@ -50,8 +50,10 @@ refined when its phase begins, and this file changes with it.
 
 Dependencies point down only. The kernel imports nothing else from the project.
 
-The packages built so far, top to bottom, are `interfaces`, `tools`, `agent`,
-`models`, `gateway`, `persona` and `kernel`. `tools` sits above `agent` because
+The packages built so far, top to bottom, are `interfaces`, `mcp`, `tools`,
+`agent`, `models`, `gateway`, `persona` and `kernel`. `mcp` sits above `tools`
+because it runs each MCP server with the tools package's process tree.
+`tools` sits above `agent` because
 each tool is built from the agent's `FunctionTool`. `models` sits above
 `gateway` because the local model is an OpenAI-compatible gateway client; the
 gateway sees it only as a `LocalChatModel`, a chat model that says whether it is

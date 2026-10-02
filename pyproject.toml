@@ -104,6 +104,7 @@ type = "layers"
 containers = ["synthia"]
 layers = [
   "interfaces",
+  "mcp",
   "tools",
   "agent",
   "models",

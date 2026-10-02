@@ -43,6 +43,16 @@ budget, only when asked.
   bytes of output, and every process it started is ended with it (a Job
   Object on Windows, a process group elsewhere). It is not a sandbox: the
   code can read and change your files and reach the network.
+- MCP servers in `synthia chat`: servers listed in `SYNTHIA_HOME/mcp.toml`
+  (`[servers.<name>]` with `command`, and optional `env`, `cwd`, `reach`,
+  `effect`) start with the chat and their tools join as `<name>__<tool>`.
+  They speak MCP over stdio (protocol versions 2024-11-05, 2025-03-26 and
+  2025-06-18). A server counts as reaching outside and changing things unless
+  the file says otherwise, so every call asks first. It never sees
+  `SYNTHIA_*` variables, so no key. Its standard error goes to
+  `SYNTHIA_HOME/logs/mcp/<name>.log`. A server that will not start, answers
+  wrongly or dies costs only its own tools, and a broken `mcp.toml` is named
+  in red while the chat goes on.
 - `synthia trace`: every chat records each turn, model step and tool call as
   one JSON line in `SYNTHIA_HOME/traces/<session>.jsonl` (texts cut to 2,000
   characters with their full length kept; the key is never in it), and
@@ -142,8 +152,8 @@ budget, only when asked.
 - Documentation of the gateway (`docs/gateway.md`) and decision records 0005
   to 0009.
 - An import layer check (import-linter, `uv run lint-imports`) in pre-commit
-  and CI: `interfaces`, `tools`, `agent`, `models`, `gateway`, `persona`,
-  `kernel`, each importing only the ones below it.
+  and CI: `interfaces`, `mcp`, `tools`, `agent`, `models`, `gateway`,
+  `persona`, `kernel`, each importing only the ones below it.
 
 ### Changed
 
