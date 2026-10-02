@@ -56,8 +56,14 @@ class Mode(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class _Key:
+    """What a request is matched by: not its origin, which is configuration.
+
+    A local server gets a new port at every launch, so a cassette recorded
+    against one launch must replay against the next.
+    """
+
     method: str
-    url: str
+    target: str
     body_sha256: str
 
 
@@ -73,7 +79,12 @@ def _canonical_body(content: bytes) -> bytes:
 
 def _key(request: httpx.Request) -> _Key:
     digest = hashlib.sha256(_canonical_body(request.content)).hexdigest()
-    return _Key(request.method, str(request.url), digest)
+    return _Key(request.method, _target(request.url), digest)
+
+
+def _target(url: httpx.URL) -> str:
+    """Return the path and query of ``url``."""
+    return url.raw_path.decode("ascii")
 
 
 def _summary(content: bytes) -> str:
@@ -184,7 +195,7 @@ class CassetteTransport(httpx.AsyncBaseTransport):
         queue = self._queues.get(key)
         if not queue:
             message = (
-                f"no recording in {self.path.name} for {key.method} {key.url} "
+                f"no recording in {self.path.name} for {key.method} {key.target} "
                 f"(body sha256 {key.body_sha256[:12]}); re-record this cassette"
             )
             raise CassetteError(message)
@@ -205,6 +216,7 @@ class CassetteTransport(httpx.AsyncBaseTransport):
         body = self._scrub(await live.aread())
         await live.aclose()
         key = _key(request)
+        # The whole address is kept for the reader; matching uses the path.
         response: JSON = {
             "status": live.status_code,
             "headers": _kept_headers(live.headers),
@@ -214,7 +226,7 @@ class CassetteTransport(httpx.AsyncBaseTransport):
             {
                 "request": {
                     "method": key.method,
-                    "url": key.url,
+                    "url": str(request.url),
                     "body_sha256": key.body_sha256,
                     "summary": self._scrub(_summary(request.content).encode()).decode(),
                 },
@@ -245,7 +257,7 @@ class CassetteTransport(httpx.AsyncBaseTransport):
             recorded = cast("JSON", interaction["request"])
             key = _Key(
                 str(recorded["method"]),
-                str(recorded["url"]),
+                _target(httpx.URL(str(recorded["url"]))),
                 str(recorded["body_sha256"]),
             )
             self._queues[key].append(cast("JSON", interaction["response"]))

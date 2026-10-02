@@ -109,8 +109,31 @@ async def test_an_unrecorded_request_fails_loudly_and_names_what_is_missing(
         with pytest.raises(CassetteError) as caught:
             await client.post(URL, json={"q": "never recorded"})
 
-    assert f"POST {URL}" in str(caught.value)
+    assert "POST /api/v1/chat/completions" in str(caught.value)
     assert "never recorded" not in str(caught.value)
+
+
+async def test_a_recording_replays_at_another_origin_but_not_another_path(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "local.json"
+    transport = CassetteTransport.recording(path, live_server())
+    async with httpx.AsyncClient(transport=transport) as client:
+        await client.post("http://127.0.0.1:51000/v1/chat/completions", json={"q": 1})
+    await transport.aclose()
+
+    replay = CassetteTransport.replaying(path)
+    async with httpx.AsyncClient(transport=replay) as client:
+        moved = await client.post(
+            "http://127.0.0.1:62000/v1/chat/completions", json={"q": 1}
+        )
+        with pytest.raises(CassetteError, match="POST /v1/other"):
+            await client.post("http://127.0.0.1:62000/v1/other", json={"q": 1})
+
+    assert moved.content == STREAM
+    assert stored(path)["interactions"][0]["request"]["url"] == (  # type: ignore[index]
+        "http://127.0.0.1:51000/v1/chat/completions"
+    )
 
 
 async def test_the_key_and_request_headers_are_never_written(tmp_path: Path) -> None:
