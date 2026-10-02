@@ -31,11 +31,10 @@ if TYPE_CHECKING:
     import httpx
     from pydantic import SecretStr
 
-    from synthia.gateway.protocol import ChatModel
+    from synthia.gateway.protocol import ChatModel, LocalChatModel
     from synthia.gateway.providers import RemoteProvider
     from synthia.kernel.bus import Event
     from synthia.kernel.config import Settings
-    from synthia.models.local import LocalModel
 
 GATEWAY_DB: Final = Path("db") / "gateway.db"
 
@@ -89,7 +88,7 @@ def build_gateway(
     settings: Settings,
     client: httpx.AsyncClient,
     publish: Callable[[Event], Awaitable[None]],
-    local: LocalModel | None = None,
+    local: LocalChatModel | None = None,
     *,
     remote: RemoteProvider = OPENROUTER_FREE,
 ) -> Gateway:

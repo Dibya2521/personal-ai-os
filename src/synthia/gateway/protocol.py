@@ -40,6 +40,14 @@ class ChatModel(Protocol):
         ...
 
 
+class LocalChatModel(ChatModel, Protocol):
+    """A model that runs on this machine and may still be starting."""
+
+    def ready(self) -> bool:
+        """Return whether it can answer now."""
+        ...
+
+
 @dataclass(slots=True)
 class _PendingCall:
     id: str | None = None
