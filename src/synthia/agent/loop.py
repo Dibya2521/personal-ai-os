@@ -153,6 +153,16 @@ class Agent:
         self._approver = approver
         self._clock = clock
 
+    @property
+    def model(self) -> ChatModel:
+        """Return the model the agent asks."""
+        return self._model
+
+    @property
+    def toolbox(self) -> Toolbox:
+        """Return the tools the agent may call."""
+        return self._toolbox
+
     async def run(self, request: ChatRequest) -> AsyncGenerator[Step]:
         """Yield every step of answering ``request``, ending with :class:`Finished`.
 
