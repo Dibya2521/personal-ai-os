@@ -7,7 +7,6 @@ from pydantic import ValidationError
 from synthia.kernel.config import (
     DEFAULT_DISK_BUDGET_GB,
     DEFAULT_PERSONA,
-    DEFAULT_REMOTE_RESERVE,
     ENV_PREFIX,
     LogFormat,
     LogLevel,
@@ -30,7 +29,6 @@ def test_defaults_apply_when_nothing_is_set() -> None:
     assert settings.log_format is LogFormat.CONSOLE
     assert settings.disk_budget_gb == DEFAULT_DISK_BUDGET_GB
     assert settings.openrouter_api_key is None
-    assert settings.remote_reserve == DEFAULT_REMOTE_RESERVE == 10
     assert settings.persona == DEFAULT_PERSONA == "synthia"
 
 
@@ -41,7 +39,7 @@ def test_environment_variables_are_read_with_the_prefix(
     monkeypatch.setenv("SYNTHIA_LOG_LEVEL", "DEBUG")
     monkeypatch.setenv("SYNTHIA_LOG_FORMAT", "json")
     monkeypatch.setenv("SYNTHIA_DISK_BUDGET_GB", "2.5")
-    monkeypatch.setenv("SYNTHIA_REMOTE_RESERVE", "3")
+    monkeypatch.setenv("SYNTHIA_PERSONA", "edith")
 
     settings = load_settings(env_file=None)
 
@@ -49,7 +47,7 @@ def test_environment_variables_are_read_with_the_prefix(
     assert settings.log_level is LogLevel.DEBUG
     assert settings.log_format is LogFormat.JSON
     assert settings.disk_budget_gb == 2.5
-    assert settings.remote_reserve == 3
+    assert settings.persona == "edith"
 
 
 def test_env_file_is_read_and_a_real_variable_beats_it(
@@ -100,7 +98,6 @@ def test_a_secret_never_appears_in_repr_or_str(
         ("SYNTHIA_LOG_FORMAT", "xml-and-secret"),
         ("SYNTHIA_DISK_BUDGET_GB", "-7"),
         ("SYNTHIA_DISK_BUDGET_GB", "lots"),
-        ("SYNTHIA_REMOTE_RESERVE", "-1"),
     ],
 )
 def test_invalid_values_name_the_variable_but_not_the_value(

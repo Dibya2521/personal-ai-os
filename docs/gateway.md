@@ -53,9 +53,11 @@ so a request goes remote unless the first of these rules says otherwise:
 2. **It needs images or tools the remote model cannot take.**
 3. **The remote circuit is open.** The provider has just failed several times,
    so the answer starts at once from the local model instead of after a timeout.
-4. **The remote budget is down to the reserve** (`SYNTHIA_REMOTE_RESERVE`, 10
-   by default). The last 10 of the day's 50 requests are kept for what only
-   the remote model can do.
+4. **The remote budget is down to the reserve of 10.** The last 10 of the
+   day's requests are kept for what only the remote model can do. The reserve
+   is a count, not a share of the cap, because what it covers, images or
+   tools the local model cannot take, does not grow when the cap does. A fifth
+   of a 1000 cap would hold 200 back for nothing.
 5. **The rate limit would hold the request for more than 5 seconds.** A
    short wait for a strong model is worth it; a long one is not.
 
@@ -269,9 +271,12 @@ SHA-256 digest, within the disk budget.
   The server is started in its own process group on Windows and its own session
   on Linux and macOS, so the terminal's interrupt does not also kill it and
   force a reload of 3 GB.
-- **Context of 32,768 tokens** (`SYNTHIA_LOCAL_CONTEXT`). That is the smallest
-  window any model behind `openrouter/free` has, so adding the local model never
-  shrinks what the router can promise a caller.
+- **Context of 32,768 tokens**, the smallest window any model behind
+  `openrouter/free` has, so adding the local model never shrinks what the
+  router can promise a caller. A model trained for less gets its own maximum,
+  read from the header of its GGUF file (`synthia/models/gguf.py`, standard
+  library only); Qwen3.5-4B's header says 262,144, so it gets 32,768. A
+  larger context only costs memory, so it is never more than a caller can use.
 
 ## Accounting
 
@@ -316,10 +321,8 @@ token. `uv run python scripts/record_cassettes.py` records them again.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SYNTHIA_OPENROUTER_API_KEY` | unset | the remote model's key; without it the chat does not start |
-| `SYNTHIA_REMOTE_RESERVE` | `10` | at or below this many left, requests go local |
 | `SYNTHIA_LOCAL_MODEL` | `qwen3.5-4b` | a name from `synthia models list` |
 | `SYNTHIA_LOCAL_BACKEND` | `auto` | `auto`, `cpu`, `vulkan`, `cuda` or `metal` |
-| `SYNTHIA_LOCAL_CONTEXT` | `32768` | tokens the local model holds |
 
 A `SYNTHIA_` variable that is not a setting does nothing. Every command that
 reads the settings names each one in a warning on stderr; `.env.example` lists

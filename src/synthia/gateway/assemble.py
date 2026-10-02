@@ -104,7 +104,6 @@ def build_gateway(
         ledger,
         SlidingWindowLimiter(remote.requests_per_minute),
         CircuitBreaker(remote.name),
-        reserve=settings.remote_reserve,
     )
     adapter = OpenAICompatibleModel(
         client=client, endpoint=remote.endpoint(key), info=remote.model

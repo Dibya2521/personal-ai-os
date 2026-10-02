@@ -21,6 +21,7 @@ import httpx
 from synthia.kernel.supervisor import RestartPolicy, Supervisor, SupervisorGaveUpError
 from synthia.models.backends import Fallback, candidates
 from synthia.models.catalogue import MODELS, RUNTIMES, Model, Runtime
+from synthia.models.gguf import context_length
 from synthia.models.local import LocalModel
 from synthia.models.server import Launch, LlamaServer, free_port, new_key
 
@@ -78,8 +79,15 @@ def find_local(
     installer: Installer,
     target: Target | None,
     catalogue: Iterable[Runtime | Model] = (*RUNTIMES, *MODELS),
+    *,
+    context_limit: int,
 ) -> LocalSetup | None:
-    """Return the configured local model and its builds, or None if not installed."""
+    """Return the configured local model and its builds, or None if not installed.
+
+    The model holds ``context_limit`` tokens, or fewer if its file says it was
+    trained for fewer. Memory grows with the context, so it is never more than
+    a caller can use.
+    """
     items = tuple(catalogue)
     model = next(
         (m for m in items if isinstance(m, Model) and m.id == settings.local_model),
@@ -95,7 +103,9 @@ def find_local(
     )
     if not runtimes:
         return None
-    return LocalSetup(model, runtimes, installer, settings.local_context)
+    trained = context_length(installer.path_of(model) / model.weights.name)
+    context = context_limit if trained is None else min(context_limit, trained)
+    return LocalSetup(model, runtimes, installer, context)
 
 
 class LocalService:

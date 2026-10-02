@@ -26,12 +26,8 @@ APP_NAME = "synthia"
 ENV_PREFIX = "SYNTHIA_"
 DEFAULT_ENV_FILE = Path(".env")
 DEFAULT_DISK_BUDGET_GB = 10.0
-# Requests kept back for what only the remote can serve, once chat has gone local.
-DEFAULT_REMOTE_RESERVE = 10
 DEFAULT_PERSONA = "synthia"
 DEFAULT_LOCAL_MODEL = "qwen3.5-4b"
-# The smallest window the remote may have, so going local never shrinks a request.
-DEFAULT_LOCAL_CONTEXT = 32_768
 
 
 class LocalBackend(StrEnum):
@@ -86,11 +82,9 @@ class Settings(BaseSettings):
     log_format: LogFormat = LogFormat.CONSOLE
     disk_budget_gb: float = Field(default=DEFAULT_DISK_BUDGET_GB, gt=0)
     openrouter_api_key: SecretStr | None = None
-    remote_reserve: int = Field(default=DEFAULT_REMOTE_RESERVE, ge=0)
     persona: str = Field(default=DEFAULT_PERSONA, min_length=1)
     local_model: str = Field(default=DEFAULT_LOCAL_MODEL, min_length=1)
     local_backend: LocalBackend = LocalBackend.AUTO
-    local_context: int = Field(default=DEFAULT_LOCAL_CONTEXT, gt=0)
 
 
 def load_settings(env_file: Path | None = DEFAULT_ENV_FILE) -> Settings:

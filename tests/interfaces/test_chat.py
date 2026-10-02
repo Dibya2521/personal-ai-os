@@ -429,7 +429,7 @@ NO_REMOTE = replace(OPENROUTER_FREE, base_url="http://127.0.0.1:9/api/v1", daily
 
 
 def remote_spent(tmp_path: Path, **values: object) -> Settings:
-    return Settings.model_validate({"home": tmp_path, "remote_reserve": 0} | values)
+    return Settings.model_validate({"home": tmp_path} | values)
 
 
 def test_with_the_remote_budget_spent_the_local_model_answers(tmp_path: Path) -> None:
@@ -484,7 +484,7 @@ def test_the_command_hands_an_installed_local_model_to_the_chat(
     def chat(*_: object, local: LocalService | None = None) -> None:
         given.append(local)
 
-    def find_local(*_: object) -> LocalSetup | None:
+    def find_local(*_: object, **__: object) -> LocalSetup | None:
         return setup
 
     monkeypatch.setattr(cli, "find_local", find_local)

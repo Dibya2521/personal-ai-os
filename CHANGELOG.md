@@ -78,9 +78,11 @@ a free remote model and an optional local one, under a daily budget.
 - Structured output validated against a pydantic model, with up to two repair
   requests, and an opt-in cache of complete answers, for callers that want
   them.
-- Settings `SYNTHIA_REMOTE_RESERVE`,
-  `SYNTHIA_PERSONA`, `SYNTHIA_LOCAL_MODEL`, `SYNTHIA_LOCAL_BACKEND` and
-  `SYNTHIA_LOCAL_CONTEXT`, each documented in `.env.example`.
+- Settings `SYNTHIA_PERSONA`, `SYNTHIA_LOCAL_MODEL` and
+  `SYNTHIA_LOCAL_BACKEND`, each documented in `.env.example`. Provider facts
+  are not settings: the rate limit, the daily cap, the 10-request reserve and
+  the local context (the remote's 32,768-token window, or less if the model's
+  GGUF header says it was trained for less) are derived or fixed in code.
 - A warning on stderr naming every `SYNTHIA_` variable, in the environment or
   `.env`, that is not a setting and so does nothing; an empty one counts too.
 - `synthia doctor` reports whether the local model can run: which model and

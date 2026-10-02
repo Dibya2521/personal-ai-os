@@ -54,6 +54,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_WAIT_S = 5.0
+# Requests kept back for what only the remote can serve, once chat has gone
+# local. A count, not a share of the cap: the demand it covers (images or
+# tools the local model cannot take) does not grow when the cap does.
+DEFAULT_RESERVE = 10
 ROUTER_ID = "auto"
 
 
@@ -103,7 +107,7 @@ class RemoteHealth:
     ledger: BudgetLedger
     limiter: SlidingWindowLimiter
     breaker: CircuitBreaker
-    reserve: int
+    reserve: int = DEFAULT_RESERVE
     max_wait_s: float = DEFAULT_MAX_WAIT_S
 
     def __post_init__(self) -> None:

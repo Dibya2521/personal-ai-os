@@ -11,6 +11,7 @@ from synthia.gateway.assemble import GATEWAY_DB
 from synthia.gateway.budget import BudgetLedger
 from synthia.gateway.errors import GatewayError
 from synthia.gateway.providers import OPENROUTER_FREE
+from synthia.gateway.router import DEFAULT_RESERVE
 from synthia.gateway.usage import UsageLog, free_requests_today
 
 if TYPE_CHECKING:
@@ -42,7 +43,7 @@ async def budget_report(
     summary = (
         f"remote requests today ({status.day} UTC): {status.used} of "
         f"{status.cap} used, {status.remaining} left, "
-        f"{settings.remote_reserve} kept in reserve"
+        f"{DEFAULT_RESERVE} kept in reserve"
     )
     report = Report([summary])
     totals = await UsageLog(path).today()

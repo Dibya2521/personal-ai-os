@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import struct
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -16,6 +18,7 @@ from synthia.models.catalogue import Backend, Download, Model, Runtime, Target
 from synthia.models.install import COMPLETE_MARKER, Installer
 from synthia.models.service import THREAD_NAME, LocalService, LocalSetup, find_local
 from tests.models import fake_llama_server
+from tests.models.test_gguf import STRING, UINT32, gguf, pair, text
 from tests.timing import HANG_TIMEOUT_S
 
 URL = "https://example.com/file"
@@ -45,16 +48,23 @@ def install(installer: Installer, *items: Runtime | Model) -> None:
             (path / COMPLETE_MARKER).write_bytes(b"")
 
 
+CONTEXT_LIMIT = 512
+
+
 def settings(tmp_path: Path, backend: LocalBackend = LocalBackend.AUTO) -> Settings:
-    return Settings(
-        home=tmp_path, local_model=TINY.id, local_backend=backend, local_context=512
-    )
+    return Settings(home=tmp_path, local_model=TINY.id, local_backend=backend)
 
 
 def setup_at(tmp_path: Path, *items: Runtime | Model) -> LocalSetup | None:
     installer = Installer(tmp_path, 1 << 30)
     install(installer, *items)
-    return find_local(settings(tmp_path), installer, Target.WINDOWS_X64, CATALOGUE)
+    return find_local(
+        settings(tmp_path),
+        installer,
+        Target.WINDOWS_X64,
+        CATALOGUE,
+        context_limit=CONTEXT_LIMIT,
+    )
 
 
 def test_the_installed_builds_for_this_machine_are_used_fastest_first(
@@ -78,12 +88,42 @@ def test_without_the_model_or_a_build_it_stays_remote_only(
     assert setup_at(tmp_path, *items) is None
 
 
+def test_the_context_is_the_limit_unless_the_model_was_trained_for_less(
+    tmp_path: Path,
+) -> None:
+    unreadable = setup_at(tmp_path / "a", CPU, TINY)
+    header = gguf(
+        pair("general.architecture", STRING, text("tiny")),
+        pair("tiny.context_length", UINT32, struct.pack("<I", 256)),
+    )
+    sized = replace(TINY, weights=replace(TINY.weights, size=len(header)))
+    small = Installer(tmp_path / "b", 1 << 30)
+    install(small, CPU, sized)
+    (small.path_of(sized) / sized.weights.name).write_bytes(header)
+
+    found = find_local(
+        settings(tmp_path / "b"),
+        small,
+        Target.WINDOWS_X64,
+        (CPU, sized),
+        context_limit=CONTEXT_LIMIT,
+    )
+
+    assert unreadable is not None
+    assert found is not None
+    assert (unreadable.context, found.context) == (CONTEXT_LIMIT, 256)
+
+
 def test_a_model_not_in_the_catalogue_stays_remote_only(tmp_path: Path) -> None:
     installer = Installer(tmp_path, 1 << 30)
     install(installer, CPU, TINY)
     unknown = Settings(home=tmp_path, local_model="not-catalogued")
 
-    assert find_local(unknown, installer, Target.WINDOWS_X64, CATALOGUE) is None
+    found = find_local(
+        unknown, installer, Target.WINDOWS_X64, CATALOGUE, context_limit=CONTEXT_LIMIT
+    )
+
+    assert found is None
 
 
 def test_a_chosen_backend_that_is_not_installed_stays_remote_only(
@@ -93,7 +133,11 @@ def test_a_chosen_backend_that_is_not_installed_stays_remote_only(
     install(installer, CPU, TINY)
     cuda = settings(tmp_path, LocalBackend.CUDA)
 
-    assert find_local(cuda, installer, Target.WINDOWS_X64, CATALOGUE) is None
+    found = find_local(
+        cuda, installer, Target.WINDOWS_X64, CATALOGUE, context_limit=CONTEXT_LIMIT
+    )
+
+    assert found is None
 
 
 def test_a_launch_uses_the_installed_paths_and_a_fresh_port_and_key(

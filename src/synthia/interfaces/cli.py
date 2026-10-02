@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.table import Table
 
 from synthia import __version__
+from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.interfaces import doctor as doctor_checks
 from synthia.interfaces import model_commands
 from synthia.interfaces.chat import run_chat
@@ -179,7 +180,14 @@ def _items(names: list[str]) -> tuple[Runtime | Model, ...]:
 
 def _local(settings: Settings) -> LocalService | None:
     target = model_commands.this_machine().target
-    setup = find_local(settings, _installer(settings), target)
+    # The remote's window, so moving a conversation to the local model never
+    # shrinks what it can hold.
+    setup = find_local(
+        settings,
+        _installer(settings),
+        target,
+        context_limit=OPENROUTER_FREE.model.context_window,
+    )
     return None if setup is None else LocalService(setup, settings.home / SERVER_LOG)
 
 
