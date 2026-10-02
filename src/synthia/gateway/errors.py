@@ -60,6 +60,14 @@ class ProviderError(GatewayError):
     retryable: ClassVar[bool] = True
 
 
+class LocalUnavailableError(GatewayError):
+    """A request that may not leave the machine has no local model to serve it."""
+
+
+class RemoteUnavailableError(GatewayError):
+    """A request asked for the remote model, and none is configured."""
+
+
 class ConnectionFailedError(GatewayError):
     """The request never got a response: no connection, a timeout, a reset."""
 

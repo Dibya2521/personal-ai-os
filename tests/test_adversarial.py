@@ -31,7 +31,7 @@ from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
 
 KEY = "sk-or-v1-adversarial-test-key-000"  # pragma: allowlist secret
-HELLO = ChatRequest((Message.user("hello"),))
+HELLO = ChatRequest((Message.user("hello"),), use_remote=True)
 PORTAL = b"<html><body><h1>Welcome to Hotel Wi-Fi</h1><form>Log in</form></body></html>"
 
 
@@ -97,6 +97,7 @@ async def test_a_connection_lost_mid_tool_call_is_not_sent_again(
         gateway = build_gateway(settings(tmp_path), client, _ignore)
         with pytest.raises(ConnectionFailedError):
             await collect(gateway.model.stream(HELLO))
+        assert gateway.health is not None
         status = await gateway.health.ledger.status(OPENROUTER)
 
     assert len(sent) == 1  # output had started, so a retry would repeat it
@@ -146,6 +147,7 @@ async def chat_with(
         remote=replace(OPENROUTER_FREE, daily_cap=cap),
     )
     session = ChatSession(gateway.model, PersonaLibrary(), "synthia", routes)
+    session.use_remote = True
     out = io.StringIO()
     return (
         ChatApp(session, gateway, Console(file=out, width=200, color_system=None)),

@@ -6,15 +6,18 @@ All notable changes are recorded here. The format follows
 
 ## [Unreleased]
 
-SYNTHIA can think: a terminal chat through a model gateway that routes between
-a free remote model and an optional local one, under a daily budget.
+SYNTHIA can think: a terminal chat through a model gateway that answers from a
+local model on the machine, and from a free remote model, under a daily
+budget, only when asked.
 
 ### Added
 
 - `synthia chat`: streaming answers from SYNTHIA, with `/persona`, `/persona
-  set`, `/image`, `/think`, `/budget`, `/model`, `/reset`, `/help` and
-  `/exit`. `/think off|low|medium|high|auto` sets how much each answer may
-  think (default `auto`); `/think` alone shows it. While the model thinks, a
+  set`, `/image`, `/think`, `/remote`, `/budget`, `/model`, `/reset`, `/help`
+  and `/exit`. Every turn stays on the machine until `/remote on` (or
+  `synthia chat --remote`) lets turns go to the remote model; `/remote off`
+  keeps them local again. `/think off|low|medium|high|auto` sets how much
+  each answer may think (default `auto`); `/think` alone shows it. While the model thinks, a
   dim "thinking N s" line counts the seconds and disappears when the answer
   starts; the thinking itself is never shown. After each answer one line
   names the route, the model, the thinking level sent, the tokens and the
@@ -43,18 +46,25 @@ a free remote model and an optional local one, under a daily budget.
   to end the thinking (`POST /v1/chat/completions/control`, `reasoning_end`)
   and the answer follows, about 1 s later in a real run. If the server
   refuses, that is logged and the answer comes when the model stops by itself.
-- Routing per request: remote first; local for background jobs, for images or
-  tools the remote cannot take, while the remote circuit is open, when 10 or
-  fewer of the day's requests are left, or when the rate limit would hold a
-  request over 5 seconds. When the remote fails before its first chunk, the
-  request is sent to the local model once; after that nothing switches.
+- Routing per request: local first. A request leaves the machine only when
+  it asks for the remote model; otherwise it goes to the local model, waits
+  for one that is still starting, or fails saying why (none installed, or it
+  cannot take images or tools), and is never sent out instead. So SYNTHIA
+  works with no key and no network, and a remote outage changes nothing
+  unless remote was asked for. A request that asks gets the remote first;
+  local for background jobs, for images or tools the remote cannot take,
+  while the remote circuit is open, when 10 or fewer of the day's requests
+  are left, or when the rate limit would hold a request over 5 seconds. When
+  the remote fails before its first chunk, the request is sent to the local
+  model once; after that nothing switches.
 - Remote guards: retry of transient failures (3 attempts, full-jitter backoff,
   `Retry-After` honoured up to 30 s), a circuit breaker (opens after 3
   failures in a row, probes after 30 s), a sliding-window rate limit (20 in any
   60 s) and a daily budget claimed before each request is sent and refused
   locally once spent. The budget's cap is the one OpenRouter reports for the
   key (50 on the free tier, 1000 once 10 credits are bought), asked in the
-  background when a chat starts and by `synthia budget --check`, and stored so
+  background when remote is first switched on in a chat, and by `synthia
+  budget --check`, never before, and stored so
   it holds across restarts; 50 until OpenRouter has answered.
 - `synthia budget`: today's remote requests, tokens and time per model;
   `--check` also asks OpenRouter for its own count, which costs no request,
@@ -68,8 +78,9 @@ a free remote model and an optional local one, under a daily budget.
   refuses to go over the disk budget or leave less than 1 GB free.
 - The chat starts the local model when it is installed, on loopback with a
   fresh port and key per launch, trying builds in the order Metal, CUDA,
-  Vulkan, CPU and falling back when one fails to start. Until it has loaded,
-  requests go remote. It runs in its own process group, so Ctrl+C in the chat
+  Vulkan, CPU and falling back when one fails to start. A turn sent before it
+  has loaded waits for it, up to the 180 s start timeout. It runs in its own
+  process group, so Ctrl+C in the chat
   stops the answer without stopping the server and forcing a 3 GB reload. Its
   output goes to `SYNTHIA_HOME/logs/llama-server.log`.
 - Personas as TOML data, with five trait sliders (warmth, formality, wit,
@@ -98,8 +109,9 @@ a free remote model and an optional local one, under a daily budget.
 - A warning on stderr naming every `SYNTHIA_` variable, in the environment or
   `.env`, that is not a setting and so does nothing; an empty one counts too.
 - `synthia doctor` reports whether the local model can run: which model and
-  builds are installed, a warning when they are not (the remote model alone
-  still works), and a failure when `SYNTHIA_LOCAL_MODEL` names no known model.
+  builds are installed, and a failure when they are not, or when
+  `SYNTHIA_LOCAL_MODEL` names no known model, since SYNTHIA then cannot answer
+  offline. No OpenRouter key is not a problem: the remote model is optional.
 - Documentation of the gateway (`docs/gateway.md`) and decision records 0005
   to 0007.
 

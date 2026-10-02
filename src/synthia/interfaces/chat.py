@@ -34,6 +34,7 @@ from synthia.interfaces.commands import (
     ShowModel,
     SwitchPersona,
     Think,
+    UseRemote,
     parse,
 )
 from synthia.interfaces.session import (
@@ -154,6 +155,7 @@ class ChatApp:
         self.gateway = gateway
         self.console = console
         self._clock = clock
+        self.learning: asyncio.Task[int | None] | None = None
 
     def greet(self) -> None:
         """Print who is listening and how to get help."""
@@ -181,12 +183,16 @@ class ChatApp:
                 self._show(command)
         return True
 
-    def _show(self, command: Think | ShowModel | Reset | Help | Invalid) -> None:
+    def _show(
+        self, command: Think | UseRemote | ShowModel | Reset | Help | Invalid
+    ) -> None:
         match command:
             case Think(level=level):
                 if level is not None:
                     self.session.reasoning = level
                 self._note(f"thinking: {self.session.reasoning.value}")
+            case UseRemote():
+                self._remote(command)
             case ShowModel():
                 self._model()
             case Reset():
@@ -252,8 +258,30 @@ class ChatApp:
         )
         self._note(f"now {persona.name}: {sliders}")
 
+    def _remote(self, command: UseRemote) -> None:
+        if command.on and self.gateway.router.remote is None:
+            self._error(
+                "no remote model is configured: set SYNTHIA_OPENROUTER_API_KEY in .env"
+            )
+            return
+        if command.on is not None:
+            self.session.use_remote = command.on
+        if self.session.use_remote and self.learning is None:
+            # Not before remote is on, so the key never leaves unasked; beside
+            # the turns, so no answer waits for it.
+            self.learning = asyncio.get_running_loop().create_task(
+                self.gateway.learn_daily_cap()
+            )
+        if self.session.use_remote:
+            self._note("remote: on, turns may leave this machine")
+        else:
+            self._note("remote: off, every turn stays on this machine")
+
     async def _budget(self) -> None:
         health = self.gateway.health
+        if health is None:
+            self._note("no remote model is configured, so there is no budget")
+            return
         status = await health.ledger.status(health.provider)
         self._note(
             f"{status.used} of {status.cap} remote requests used today (UTC); "
@@ -305,10 +333,13 @@ def run_chat(  # noqa: PLR0913
     *,
     local: LocalService | None = None,
     remote: RemoteProvider = OPENROUTER_FREE,
+    use_remote: bool = False,
 ) -> None:
     """Hold a chat in the terminal until the user leaves.
 
-    ``local`` starts once the chat can begin and loads while it goes on.
+    ``local`` starts once the chat can begin and loads while it goes on; a
+    turn sent before it is ready waits for it. ``use_remote`` starts the chat
+    with turns allowed to go to the remote model, as ``/remote on`` does.
 
     Raises:
         ConfigError: If no model can be reached.
@@ -318,20 +349,21 @@ def run_chat(  # noqa: PLR0913
     routes = LastRoute()
     with asyncio.Runner() as runner:
         client = httpx.AsyncClient(transport=transport, timeout=TIMEOUT)
-        learning: asyncio.Task[int | None] | None = None
+        app: ChatApp | None = None
         try:
             model = None if local is None else local.model(client)
             gateway = build_gateway(settings, client, routes, model, remote=remote)
             session = ChatSession(gateway.model, library, persona, routes)
-            # Runs while the first turns run, so the answer never waits for it.
-            learning = runner.get_loop().create_task(gateway.learn_daily_cap())
+            app = ChatApp(session, gateway, console)
             if local is not None:
                 local.start()
-            converse(runner, ChatApp(session, gateway, console), read)
+            if use_remote:
+                runner.run(app.handle(UseRemote(on=True)))
+            converse(runner, app, read)
         finally:
             if local is not None:
                 local.stop()
-            if learning is not None:
-                learning.cancel()
-                runner.run(asyncio.wait([learning]))
+            if app is not None and app.learning is not None:
+                app.learning.cancel()
+                runner.run(asyncio.wait([app.learning]))
             runner.run(client.aclose())

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from contextlib import aclosing
 from typing import TYPE_CHECKING, Final, cast
 
@@ -19,13 +20,14 @@ if TYPE_CHECKING:
 
     from synthia.gateway.types import ChatChunk, ChatRequest
     from synthia.models.catalogue import Model
-    from synthia.models.server import LlamaServer
+    from synthia.models.server import Launch, LlamaServer
 
 logger = logging.getLogger(__name__)
 
 CONTROL_SUFFIX: Final = "/control"
 END_REASONING: Final = "reasoning_end"
 MAX_DETAIL: Final = 200
+READY_POLL_S: Final = 0.25
 
 type Sleep = Callable[[float], Awaitable[None]]
 
@@ -78,7 +80,8 @@ class LocalModel:
 
     Thinking is held to the request level's time allowance: once the model has
     thought that long without starting its answer, the server is told to end
-    the thinking, and the answer follows. ``sleep`` waits out the allowance.
+    the thinking, and the answer follows. A request that arrives while the
+    server is still starting waits for it. ``sleep`` waits out both.
     """
 
     def __init__(
@@ -105,16 +108,14 @@ class LocalModel:
         return self._server.running is not None
 
     async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
-        """Yield the local model's answer.
+        """Yield the local model's answer, once its server is serving.
 
         Raises:
-            ConnectionFailedError: If the server is not serving.
+            ConnectionFailedError: If the server is not serving within its
+                start timeout.
             GatewayError: What the server's answer raised.
         """
-        launch = self._server.running
-        if launch is None:
-            message = "the local model is not running"
-            raise ConnectionFailedError(message)
+        launch = await self._serving()
         endpoint = Endpoint(
             launch.base_url, self._info.id, launch.key, dialect=Dialect.LLAMA_CPP
         )
@@ -146,6 +147,21 @@ class LocalModel:
             if timer is not None:
                 timer.cancel()
                 await asyncio.wait([timer])
+
+    async def _serving(self) -> Launch:
+        # Polled, not awaited as an event: the server runs on another thread's
+        # loop, and its asyncio.Event cannot be awaited from this one.
+        timeout = self._server.start_timeout_s
+        for _ in range(math.ceil(timeout / READY_POLL_S)):
+            launch = self._server.running
+            if launch is not None:
+                return launch
+            await self._sleep(READY_POLL_S)
+        launch = self._server.running
+        if launch is None:
+            message = f"the local model did not start within {timeout:g} s"
+            raise ConnectionFailedError(message)
+        return launch
 
     async def _end_after(
         self, seconds: float, endpoint: Endpoint, completion_id: str

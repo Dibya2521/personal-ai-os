@@ -206,6 +206,11 @@ class LlamaServer:
         """Return the launch that is serving now, if any."""
         return self._running
 
+    @property
+    def start_timeout_s(self) -> float:
+        """Return how long one launch may take to become ready."""
+        return self._start_timeout_s
+
     async def run(self, stop: asyncio.Event) -> None:
         """Start the server, serve until ``stop`` is set, then stop it.
 

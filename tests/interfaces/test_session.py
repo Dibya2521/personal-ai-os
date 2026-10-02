@@ -175,7 +175,7 @@ async def test_each_turn_asks_for_the_sessions_level_and_reports_the_one_sent(
     await routes(
         RouteDecided(
             route=Route.REMOTE,
-            reason=RouteReason.PREFERRED,
+            reason=RouteReason.REMOTE_ASKED,
             model="m",
             reasoning=Reasoning.MEDIUM,
         )
@@ -185,6 +185,21 @@ async def test_each_turn_asks_for_the_sessions_level_and_reports_the_one_sent(
     assert [r.reasoning for r in model.requests] == [Reasoning.AUTO, Reasoning.HIGH]
     assert direct.reasoning is Reasoning.AUTO
     assert routed.reasoning is Reasoning.MEDIUM
+
+
+async def test_a_turn_may_leave_the_machine_only_after_remote_is_switched_on(
+    library: PersonaLibrary,
+) -> None:
+    model = Echo()
+    chat = session(library, model)
+
+    await run(chat, "one")
+    chat.use_remote = True
+    await run(chat, "two")
+    chat.use_remote = False
+    await run(chat, "three")
+
+    assert [r.use_remote for r in model.requests] == [False, True, False]
 
 
 async def test_switching_and_adjusting_persona_change_the_next_prompt_only(

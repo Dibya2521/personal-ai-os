@@ -256,7 +256,7 @@ def test_install_with_no_build_for_this_machine_exits_2(
     result = runner.invoke(app, ["models", "install"])
 
     assert result.exit_code == 2
-    assert "SYNTHIA runs remote only" in result.stderr
+    assert "SYNTHIA cannot answer offline here" in result.stderr
 
 
 @pytest.mark.usefixtures("home")

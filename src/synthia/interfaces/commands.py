@@ -8,9 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from synthia.gateway.types import Reasoning
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 PREFIX: Final = "/"
 
@@ -52,6 +55,13 @@ class Think:
 
 
 @dataclass(frozen=True, slots=True)
+class UseRemote:
+    """Allow, or stop, sending turns off the machine; ``None`` shows which."""
+
+    on: bool | None
+
+
+@dataclass(frozen=True, slots=True)
 class ShowBudget:
     """Print today's remote budget."""
 
@@ -89,6 +99,7 @@ type Command = (
     | AdjustPersona
     | ShowImage
     | Think
+    | UseRemote
     | ShowBudget
     | ShowModel
     | Reset
@@ -104,6 +115,7 @@ HELP: Final = """\
 /persona set wit=0.3 ...   move sliders: warmth formality wit vigilance verbosity
 /image <path> [question]   send an image; quote a path that has spaces
 /think [level]             how much to think: off low medium high auto, or show it
+/remote [on|off]           send turns to the remote model, or keep them local
 /budget                    today's remote requests
 /model                     the models behind the router, and the last route
 /reset                     forget the conversation
@@ -129,13 +141,20 @@ def parse(line: str) -> Command:
     rest = rest.strip()
     if name in _SIMPLE:
         return _SIMPLE[name] if not rest else Invalid(f"/{name} takes no arguments")
-    if name == "persona":
-        return _persona(rest)
-    if name == "image":
-        return _image(rest)
-    if name == "think":
-        return _think(rest)
+    if name in _WITH_ARGUMENTS:
+        return _WITH_ARGUMENTS[name](rest)
     return Invalid(f"unknown command /{name}; /help lists them")
+
+
+_SWITCH: Final = {"on": True, "off": False}
+
+
+def _remote(rest: str) -> Command:
+    if not rest:
+        return UseRemote(None)
+    if rest.lower() not in _SWITCH:
+        return Invalid(f"{rest!r} is not on or off")
+    return UseRemote(_SWITCH[rest.lower()])
 
 
 def _think(rest: str) -> Command:
@@ -177,3 +196,11 @@ def _image(rest: str) -> Command:
     if not path:
         return Invalid("/image needs a path")
     return ShowImage(Path(path), text.strip() or DEFAULT_IMAGE_QUESTION)
+
+
+_WITH_ARGUMENTS: Final[dict[str, Callable[[str], Command]]] = {
+    "persona": _persona,
+    "image": _image,
+    "think": _think,
+    "remote": _remote,
+}

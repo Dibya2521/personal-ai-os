@@ -127,6 +127,7 @@ class ChatSession:
         self.history: list[Message] = []
         self.routes = routes or LastRoute()
         self.reasoning = DEFAULT_REASONING
+        self.use_remote = False
 
     def persona_names(self) -> tuple[str, ...]:
         """Return the keys of every persona the session can switch to."""
@@ -158,6 +159,7 @@ class ChatSession:
         return ChatRequest(
             (system, *self.history, Message.user(text, *images)),
             reasoning=self.reasoning,
+            use_remote=self.use_remote,
         )
 
     async def turn(

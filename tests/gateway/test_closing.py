@@ -20,7 +20,7 @@ from synthia.gateway.openai_compat import Endpoint, OpenAICompatibleModel
 from synthia.gateway.protocol import ChatModel
 from synthia.gateway.ratelimit import SlidingWindowLimiter
 from synthia.gateway.retry import RetryingModel
-from synthia.gateway.router import RemoteHealth, Router
+from synthia.gateway.router import Remote, RemoteHealth, Router
 from synthia.gateway.types import (
     ChatChunk,
     ChatRequest,
@@ -31,6 +31,7 @@ from synthia.gateway.types import (
 
 INFO = ModelInfo("tracked", 1000, vision=False, tools=False)
 HELLO = ChatRequest((Message.user("hello"),))
+ASK = ChatRequest((Message.user("hello"),), use_remote=True)
 
 
 class Tracked:
@@ -78,7 +79,11 @@ def routing(inner: ChatModel, tmp: Path) -> ChatModel:
     health = RemoteHealth(
         "remote", ledger, SlidingWindowLimiter(5), CircuitBreaker("remote"), reserve=0
     )
-    return Router(inner, health)
+    return Router(None, Remote(inner, health))
+
+
+def routing_local(inner: ChatModel, _: Path) -> ChatModel:
+    return Router(inner)
 
 
 def full_stack(inner: ChatModel, tmp: Path) -> ChatModel:
@@ -87,13 +92,22 @@ def full_stack(inner: ChatModel, tmp: Path) -> ChatModel:
 
 
 @pytest.mark.parametrize(
-    "wrap", [retrying, breaking, caching, metering, routing, full_stack]
+    ("wrap", "request_"),
+    [
+        (retrying, HELLO),
+        (breaking, HELLO),
+        (caching, HELLO),
+        (metering, HELLO),
+        (routing, ASK),
+        (routing_local, HELLO),
+        (full_stack, ASK),
+    ],
 )
 async def test_closing_the_outer_stream_closes_the_innermost_at_once(
-    wrap: Wrap, tmp_path: Path
+    wrap: Wrap, request_: ChatRequest, tmp_path: Path
 ) -> None:
     inner = Tracked()
-    stream = wrap(inner, tmp_path).stream(HELLO)
+    stream = wrap(inner, tmp_path).stream(request_)
     first = await anext(stream)
     assert first.text == "a"
     assert not inner.closed

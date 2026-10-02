@@ -17,6 +17,7 @@ from synthia.interfaces.commands import (
     ShowModel,
     SwitchPersona,
     Think,
+    UseRemote,
     parse,
 )
 
@@ -47,6 +48,9 @@ from synthia.interfaces.commands import (
         ("/think high", Think(Reasoning.HIGH)),
         ("/think  OFF ", Think(Reasoning.OFF)),
         ("/think auto", Think(Reasoning.AUTO)),
+        ("/remote", UseRemote(None)),
+        ("/remote on", UseRemote(on=True)),
+        ("/remote  OFF ", UseRemote(on=False)),
     ],
 )
 def test_each_command_parses(line: str, command: Command) -> None:
@@ -67,6 +71,8 @@ def test_each_command_parses(line: str, command: Command) -> None:
         ('/image "" what?', "/image needs a path"),
         ("/think max", "'max' is not a thinking level; use one of off, low, medium"),
         ("/think high now", "'high now' is not a thinking level"),
+        ("/remote yes", "'yes' is not on or off"),
+        ("/remote on now", "'on now' is not on or off"),
     ],
 )
 def test_mistakes_say_what_is_wrong(line: str, reason: str) -> None:

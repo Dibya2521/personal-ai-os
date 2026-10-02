@@ -98,23 +98,29 @@ def test_each_fact_moves_its_own_check(
         (
             replace(INSTALLED, model_installed=False, builds=()),
             LocalBackend.AUTO,
-            Status.WARN,
+            Status.FAIL,
             (
-                "qwen3.5-4b and a llama.cpp build not installed, remote only; "
-                "see synthia models list"
+                "qwen3.5-4b and a llama.cpp build not installed, so SYNTHIA cannot "
+                "answer offline; run synthia models install"
             ),
         ),
         (
             replace(INSTALLED, builds=()),
             LocalBackend.CUDA,
-            Status.WARN,
-            "the cuda build not installed, remote only; see synthia models list",
+            Status.FAIL,
+            (
+                "the cuda build not installed, so SYNTHIA cannot answer offline; "
+                "run synthia models install"
+            ),
         ),
         (
             replace(INSTALLED, target=None),
             LocalBackend.AUTO,
-            Status.WARN,
-            "no llama.cpp build suits this machine, remote only",
+            Status.FAIL,
+            (
+                "no llama.cpp build suits this machine, so SYNTHIA cannot answer "
+                "offline; only the remote model, on command"
+            ),
         ),
         (
             replace(INSTALLED, model_known=False),
@@ -140,12 +146,15 @@ def test_the_local_model_check_says_what_runs_or_what_is_missing(
     assert (check.status, check.detail) == (status, detail)
 
 
-def test_a_missing_key_is_a_warning_and_its_value_never_shows(tmp_path: Path) -> None:
+def test_a_missing_key_is_fine_and_its_value_never_shows(tmp_path: Path) -> None:
     unset = evaluate(settings(tmp_path, key=None), HEALTHY)
     planted = "sk-or-v1-doctor-planted-key"  # pragma: allowlist secret
     report = evaluate(settings(tmp_path, key=planted), HEALTHY)
 
-    assert overall(unset) is Status.WARN
+    assert overall(unset) is Status.OK
+    assert [c.detail for c in unset if c.name == "openrouter"] == [
+        "no key, so no remote model; optional, everything runs locally"
+    ]
     assert all(planted not in c.detail for c in report)
 
 

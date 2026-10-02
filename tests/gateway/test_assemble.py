@@ -8,6 +8,7 @@ from pydantic import SecretStr
 
 from synthia.gateway.assemble import GATEWAY_DB, build_gateway
 from synthia.gateway.budget import BudgetLedger
+from synthia.gateway.errors import RemoteUnavailableError
 from synthia.gateway.protocol import collect
 from synthia.gateway.providers import APP_TITLE, APP_URL, OPENROUTER, OPENROUTER_FREE
 from synthia.gateway.router import Route, RouteDecided, RouteReason
@@ -15,9 +16,10 @@ from synthia.gateway.types import ChatRequest, Message, ModelInfo, Reasoning, Us
 from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings
 from synthia.kernel.errors import ConfigError
+from tests.models.test_service import service_at
 
 KEY = "sk-or-v1-assemble-test-key-000"  # pragma: allowlist secret
-HELLO = ChatRequest((Message.user("hello"),))
+HELLO = ChatRequest((Message.user("hello"),), use_remote=True)
 
 
 def answer(_: httpx.Request) -> httpx.Response:
@@ -65,6 +67,7 @@ async def test_the_daily_cap_is_learned_from_the_key_and_stored(tmp_path: Path) 
     settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
     async with httpx.AsyncClient(transport=key_record(1000)) as client:
         gateway = build_gateway(settings, client, _ignore)
+        assert gateway.health is not None
         before = await gateway.health.ledger.status(OPENROUTER)
 
         learned = await gateway.learn_daily_cap()
@@ -85,6 +88,7 @@ async def test_a_key_record_that_cannot_be_read_keeps_the_cap(
         gateway = build_gateway(settings, client, _ignore)
 
         learned = await gateway.learn_daily_cap()
+        assert gateway.health is not None
         status = await gateway.health.ledger.status(OPENROUTER)
 
     assert (learned, status.cap) == (None, 50)
@@ -92,12 +96,37 @@ async def test_a_key_record_that_cannot_be_read_keeps_the_cap(
     assert KEY not in caplog.text
 
 
-async def test_without_a_key_there_is_no_gateway_and_the_variable_is_named(
+async def test_without_a_key_or_a_local_model_there_is_no_gateway(
     tmp_path: Path,
 ) -> None:
     async with httpx.AsyncClient() as client:
-        with pytest.raises(ConfigError, match="SYNTHIA_OPENROUTER_API_KEY"):
+        with pytest.raises(ConfigError) as raised:
             build_gateway(Settings(home=tmp_path), client, publish=_ignore)
+
+    assert "synthia models install" in str(raised.value)
+    assert "SYNTHIA_OPENROUTER_API_KEY" in str(raised.value)
+
+
+async def test_without_a_key_the_gateway_is_local_only_and_never_goes_out(
+    tmp_path: Path,
+) -> None:
+    sent: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return answer(request)
+
+    service = service_at(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        gateway = build_gateway(
+            Settings(home=tmp_path), client, _ignore, service.model(client)
+        )
+        learned = await gateway.learn_daily_cap()
+        with pytest.raises(RemoteUnavailableError):
+            await collect(gateway.model.stream(HELLO))
+
+    assert (gateway.health, gateway.router.remote, learned) == (None, None, None)
+    assert sent == []
 
 
 async def _ignore(_: Event) -> None:
@@ -138,6 +167,7 @@ async def test_a_request_is_metered_routed_and_accounted(tmp_path: Path) -> None
     async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as client:
         gateway = build_gateway(settings, client, publish)
         await collect(gateway.model.stream(HELLO))
+        assert gateway.health is not None
         status = await gateway.health.ledger.status(OPENROUTER)
         (used,) = await gateway.usage.today()
 
@@ -147,7 +177,7 @@ async def test_a_request_is_metered_routed_and_accounted(tmp_path: Path) -> None
     assert [type(e).__name__ for e in events] == ["RouteDecided", "UsageRecorded"]
     decided = [e for e in events if isinstance(e, RouteDecided)]
     assert [(e.route, e.reason) for e in decided] == [
-        (Route.REMOTE, RouteReason.PREFERRED)
+        (Route.REMOTE, RouteReason.REMOTE_ASKED)
     ]
 
 
@@ -161,7 +191,7 @@ async def test_remote_thinking_is_capped_from_the_speed_measured_so_far(
         return answer(request)
 
     settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
-    low = ChatRequest(HELLO.messages, reasoning=Reasoning.LOW)
+    low = ChatRequest(HELLO.messages, reasoning=Reasoning.LOW, use_remote=True)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         gateway = build_gateway(settings, client, _ignore)
         await gateway.usage.record("vendor/free-model", Usage(9, 400), 10.0)

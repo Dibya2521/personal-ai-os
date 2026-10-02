@@ -283,8 +283,8 @@ _MACHINES: Final = {
 def target_of(system: str, machine: str) -> Target | None:
     """Return the build target for ``platform.system()`` and ``platform.machine()``.
 
-    ``None`` means no build is catalogued for this machine, so SYNTHIA runs
-    remote only.
+    ``None`` means no build is catalogued for this machine, so SYNTHIA cannot
+    answer offline there.
     """
     os_name = _SYSTEMS.get(system.lower())
     cpu = _MACHINES.get(machine.lower())

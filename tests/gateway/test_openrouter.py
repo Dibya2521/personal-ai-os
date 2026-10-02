@@ -92,6 +92,7 @@ async def test_the_assembled_gateway_sends_what_was_recorded(
     async with httpx.AsyncClient(transport=cassette) as client:
         gateway = build_gateway(settings, client, _ignore)
         await collect(gateway.model.stream(SCENARIOS[name]))
+        assert gateway.health is not None
         status = await gateway.health.ledger.status(OPENROUTER)
 
     assert cassette.unplayed == 0

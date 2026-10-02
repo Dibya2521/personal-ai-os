@@ -112,16 +112,27 @@ def chat(
         str | None,
         typer.Option(help="Persona to start as. Default: SYNTHIA_PERSONA."),
     ] = None,
+    remote: Annotated[
+        bool,
+        typer.Option(
+            help="Let turns go to the remote model from the start, as /remote on does."
+        ),
+    ] = False,
 ) -> None:
     """Talk to SYNTHIA in the terminal.
 
+    Every turn stays on this machine unless remote is switched on.
     Ctrl+C stops an answer; Ctrl+C at the prompt, Ctrl+D or /exit leaves.
     """
     settings = _settings()
     try:
         with logging_to(settings, settings.home / CHAT_LOG):
             run_chat(
-                settings, persona or settings.persona, Console(), local=_local(settings)
+                settings,
+                persona or settings.persona,
+                Console(),
+                local=_local(settings),
+                use_remote=remote,
             )
     except (ConfigError, PersonaError) as error:
         typer.echo(f"error: {error}", err=True)
@@ -245,7 +256,8 @@ def models_install(
     )
     if not items:
         typer.echo(
-            "error: no llama.cpp build suits this machine; SYNTHIA runs remote only",
+            "error: no llama.cpp build suits this machine, so SYNTHIA cannot "
+            "answer offline here",
             err=True,
         )
         raise typer.Exit(doctor_checks.Status.FAIL)

@@ -1,7 +1,14 @@
-"""Choose, for each request, between the remote model and the local one.
+"""Choose, for each request, between the local model and the remote one.
 
-Remote comes first, because the free remote models are far stronger than a
-small local one. A request goes local instead when the first of these holds:
+Local comes first: a request goes to the remote model only when it asks for
+it with ``use_remote``, so SYNTHIA keeps working, and keeps conversations on
+the machine, whatever happens to the remote service. A request that may not
+leave the machine is never sent out, even when no local model can serve it:
+it fails with the reason instead.
+
+A request that asks for the remote model gets it first, because the free
+remote models are far stronger than a small local one. It goes local instead
+when the first of these holds:
 
 1. it is a background job, since the daily remote budget is kept for talking;
 2. it needs images or tools the remote model cannot take;
@@ -11,9 +18,9 @@ small local one. A request goes local instead when the first of these holds:
    the remote can serve;
 5. the remote rate limit would hold the request longer than ``max_wait_s``.
 
-Each rule sends a request local only if a local model exists, is ready, and can
-serve it: a local server still loading its model is treated as absent.
-With none, the remote is used while it has any budget at all.
+Each of these rules sends a request local only if a local model exists, is
+ready, and can serve it: a local server still loading its model is treated as
+absent. With none, the remote is used while it has any budget at all.
 
 If the remote fails before its first chunk, the request is sent local once.
 After output has started nothing can switch, since those words are already on
@@ -34,7 +41,11 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from synthia.gateway.circuit import CircuitBreakerModel, CircuitState
-from synthia.gateway.errors import GatewayError
+from synthia.gateway.errors import (
+    GatewayError,
+    LocalUnavailableError,
+    RemoteUnavailableError,
+)
 from synthia.gateway.metered import MeteredModel
 from synthia.gateway.reasoning import limit, resolve
 from synthia.gateway.retry import RetryingModel
@@ -71,7 +82,8 @@ class Route(StrEnum):
 class RouteReason(StrEnum):
     """Why a request was sent where it was."""
 
-    PREFERRED = "remote first"
+    LOCAL_FIRST = "local first"
+    REMOTE_ASKED = "remote asked for"
     BACKGROUND = "background job"
     CAPABILITY = "remote cannot serve this request"
     CIRCUIT_OPEN = "remote circuit open"
@@ -116,6 +128,14 @@ class RemoteHealth:
             raise ValueError(message)
 
 
+@dataclass(frozen=True, slots=True)
+class Remote:
+    """The remote model, already guarded, with the guards the router reads."""
+
+    model: ChatModel
+    health: RemoteHealth
+
+
 def guard_remote(
     model: ChatModel, health: RemoteHealth, policy: RetryPolicy | None = None
 ) -> ChatModel:
@@ -148,32 +168,42 @@ async def _unmeasured() -> float | None:
 class Router:
     """A :class:`~synthia.gateway.protocol.ChatModel` that picks a model per request."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
-        remote: ChatModel,
-        health: RemoteHealth,
-        local: ChatModel | None = None,
+        local: ChatModel | None,
+        remote: Remote | None = None,
         publish: Callable[[Event], Awaitable[None]] = _discard,
         local_ready: Callable[[], bool] = _always,
         *,
         remote_speed: Callable[[], Awaitable[float | None]] = _unmeasured,
     ) -> None:
-        """Route between ``remote`` (already guarded) and an optional ``local``.
+        """Route between ``local`` and ``remote``; either may be missing.
 
         ``remote_speed`` returns the remote's measured tokens per second, or
         ``None`` when nothing has been measured yet.
+
+        Raises:
+            ValueError: If both models are missing.
         """
-        self._remote = remote
-        self._health = health
+        if local is None and remote is None:
+            message = "a router needs a local model, a remote one, or both"
+            raise ValueError(message)
         self._local = local
+        self._remote = remote
         self._local_ready = local_ready
         self._publish = publish
         self._remote_speed = remote_speed
 
     @property
+    def remote(self) -> Remote | None:
+        """Return the remote model and its guards, or ``None`` without one."""
+        return self._remote
+
+    @property
     def info(self) -> ModelInfo:
         """Return what a request sent here may use: the union of both models."""
-        models = [self._remote.info] + ([self._local.info] if self._local else [])
+        remote = None if self._remote is None else self._remote.model
+        models = [m.info for m in (self._local, remote) if m is not None]
         return ModelInfo(
             ROUTER_ID,
             min(m.context_window for m in models),
@@ -194,6 +224,10 @@ class Router:
         """Yield the answer from the model the rules choose.
 
         Raises:
+            LocalUnavailableError: If the request may not leave the machine and
+                no local model can serve it.
+            RemoteUnavailableError: If the request asks for the remote model
+                and none is configured.
             GatewayError: What the chosen model raised, when there was no
                 fallback: output had started, or no local model could serve.
         """
@@ -209,7 +243,7 @@ class Router:
             return
         started = False
         try:
-            async with aclosing(self._remote.stream(request)) as chunks:
+            async with aclosing(model.stream(request)) as chunks:
                 async for chunk in chunks:
                     started = True
                     yield chunk
@@ -231,13 +265,41 @@ class Router:
     async def _choose(
         self, request: ChatRequest, *, background: bool
     ) -> tuple[Route, RouteReason, ChatModel]:
-        reason = await self._reason_for_local(request, background=background)
+        if not request.use_remote:
+            return Route.LOCAL, RouteReason.LOCAL_FIRST, self._local_only(request)
+        remote = self._remote
+        if remote is None:
+            message = (
+                "no remote model is configured: set SYNTHIA_OPENROUTER_API_KEY "
+                "in .env to ask one"
+            )
+            raise RemoteUnavailableError(message)
+        reason = await self._reason_for_local(request, remote, background=background)
         if reason is None:
-            return Route.REMOTE, RouteReason.PREFERRED, self._remote
+            return Route.REMOTE, RouteReason.REMOTE_ASKED, remote.model
         local = self._local_for(request)
         if local is not None:
             return Route.LOCAL, reason, local
-        return Route.REMOTE, RouteReason.NO_LOCAL, self._remote
+        return Route.REMOTE, RouteReason.NO_LOCAL, remote.model
+
+    def _local_only(self, request: ChatRequest) -> ChatModel:
+        # Readiness is not checked: a starting local model is waited for,
+        # since sending the request out instead is not allowed.
+        local = self._local
+        if local is None:
+            message = (
+                "no local model is installed: install one with "
+                "`synthia models install`, or ask for the remote model"
+            )
+            raise LocalUnavailableError(message)
+        if not can_serve(local.info, request):
+            needs = "images" if request.has_images else "tools"
+            message = (
+                f"the local model cannot take {needs}: ask for the remote model "
+                "to send this request off the machine"
+            )
+            raise LocalUnavailableError(message)
+        return local
 
     def _local_for(self, request: ChatRequest) -> ChatModel | None:
         local = self._local
@@ -250,12 +312,12 @@ class Router:
         return local
 
     async def _reason_for_local(
-        self, request: ChatRequest, *, background: bool
+        self, request: ChatRequest, remote: Remote, *, background: bool
     ) -> RouteReason | None:
-        health = self._health
+        health = remote.health
         if background:
             return RouteReason.BACKGROUND
-        if not can_serve(self._remote.info, request):
+        if not can_serve(remote.model.info, request):
             return RouteReason.CAPABILITY
         if health.breaker.state is CircuitState.OPEN:
             return RouteReason.CIRCUIT_OPEN

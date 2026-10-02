@@ -163,6 +163,8 @@ class ChatRequest:
     how much the model may think; ``None`` sends no setting at all, so the
     model's own default applies. ``reasoning_tokens`` caps that thinking in
     tokens, for a server that cannot be told to stop thinking mid-answer.
+    ``use_remote`` allows the request to leave the machine for the remote
+    model; without it a router sends the request to the local model only.
 
     Raises:
         ValueError: If there are no messages, or a sampling setting or token
@@ -177,6 +179,7 @@ class ChatRequest:
     model: str | None = None
     reasoning: Reasoning | None = None
     reasoning_tokens: int | None = None
+    use_remote: bool = False
 
     def __post_init__(self) -> None:
         if not self.messages:

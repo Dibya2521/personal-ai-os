@@ -92,19 +92,24 @@ class Capital(BaseModel):
 
 
 SCENARIOS: Final = {
-    "plain": ChatRequest(_ask(TextPart("Say hello in one short sentence."))),
+    "plain": ChatRequest(
+        _ask(TextPart("Say hello in one short sentence.")), use_remote=True
+    ),
     "image": ChatRequest(
         _ask(
             TextPart("What colour fills this image? Answer with one word."),
             ImagePart(solid_png(RED), "image/png"),
-        )
+        ),
+        use_remote=True,
     ),
     "tool": ChatRequest(
         _ask(TextPart("What is the weather in Paris right now? Use the tool.")),
         tools=(WEATHER_TOOL,),
+        use_remote=True,
     ),
     "structured": ChatRequest(
-        _ask(TextPart("Name the capital of France and its country."))
+        _ask(TextPart("Name the capital of France and its country.")),
+        use_remote=True,
     ),
 }
 # Scenarios sent through structured.generate, which adds the schema itself.

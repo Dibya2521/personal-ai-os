@@ -164,8 +164,11 @@ def _local(settings: Settings, facts: Facts) -> Check:
         detail = f"SYNTHIA_LOCAL_MODEL={name} is not a model in the catalogue"
         return Check(LOCAL_MODEL, Status.FAIL, detail)
     if local.target is None:
-        detail = "no llama.cpp build suits this machine, remote only"
-        return Check(LOCAL_MODEL, Status.WARN, detail)
+        detail = (
+            "no llama.cpp build suits this machine, so SYNTHIA cannot answer "
+            "offline; only the remote model, on command"
+        )
+        return Check(LOCAL_MODEL, Status.FAIL, detail)
     choice = settings.local_backend
     build = (
         "a llama.cpp build" if choice is LocalBackend.AUTO else f"the {choice} build"
@@ -180,10 +183,10 @@ def _local(settings: Settings, facts: Facts) -> Check:
     ]
     if missing:
         detail = (
-            f"{' and '.join(missing)} not installed, remote only; "
-            "see synthia models list"
+            f"{' and '.join(missing)} not installed, so SYNTHIA cannot answer "
+            "offline; run synthia models install"
         )
-        return Check(LOCAL_MODEL, Status.WARN, detail)
+        return Check(LOCAL_MODEL, Status.FAIL, detail)
     return Check(LOCAL_MODEL, Status.OK, f"{name} on {', then '.join(local.builds)}")
 
 
@@ -207,10 +210,10 @@ def _openrouter(settings: Settings) -> Check:
     if settings.openrouter_api_key is None:
         return Check(
             "openrouter",
-            Status.WARN,
-            "SYNTHIA_OPENROUTER_API_KEY not set, remote models disabled",
+            Status.OK,
+            "no key, so no remote model; optional, everything runs locally",
         )
-    return Check("openrouter", Status.OK, "API key set")
+    return Check("openrouter", Status.OK, "API key set; used only on /remote on")
 
 
 def overall(checks: list[Check]) -> Status:

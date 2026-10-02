@@ -163,7 +163,7 @@ class LocalService:
             try:
                 runner.run(self._run())
             except SupervisorGaveUpError:
-                logger.exception("the local model is not restarted again; remote only")
+                logger.exception("the local model is not restarted again")
 
     async def _run(self) -> None:
         try:

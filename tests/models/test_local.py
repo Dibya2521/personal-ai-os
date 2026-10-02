@@ -16,7 +16,7 @@ from synthia.gateway.openai_compat import Dialect, Endpoint
 from synthia.gateway.protocol import collect
 from synthia.gateway.ratelimit import SlidingWindowLimiter
 from synthia.gateway.reasoning import ALLOWANCE_S
-from synthia.gateway.router import RemoteHealth, Route, Router, RouteReason
+from synthia.gateway.router import Remote, RemoteHealth, Route, Router, RouteReason
 from synthia.gateway.types import (
     ChatChunk,
     ChatRequest,
@@ -284,15 +284,22 @@ async def test_the_server_refuses_a_request_without_its_key(tmp_path: Path) -> N
     assert refused.status_code == HTTPStatus.UNAUTHORIZED
 
 
-async def test_a_stopped_server_is_not_ready_and_refuses_requests(
+async def test_a_server_that_never_starts_is_waited_for_then_refused(
     tmp_path: Path,
 ) -> None:
-    async with httpx.AsyncClient() as client:
-        local = LocalModel(server_at(tmp_path, client, new_key()), client, QWEN, 4096)
+    waits: list[float] = []
 
-        with pytest.raises(ConnectionFailedError, match="not running"):
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    async with httpx.AsyncClient() as client:
+        server = server_at(tmp_path, client, new_key())
+        local = LocalModel(server, client, QWEN, 4096, sleep=sleep)
+
+        with pytest.raises(ConnectionFailedError, match="did not start within"):
             await collect(local.stream(HELLO))
 
+    assert sum(waits) == server.start_timeout_s
     assert not local.ready()
     assert (local.info.id, local.info.context_window) == (QWEN_ID, 4096)
     assert local.info.vision
@@ -309,7 +316,24 @@ class Unused:
         yield ChatChunk()
 
 
-async def test_the_router_sends_a_background_job_to_the_served_model(
+async def test_a_request_sent_while_the_server_starts_is_answered_once_it_serves(
+    tmp_path: Path,
+) -> None:
+    async with httpx.AsyncClient() as client:
+        server = server_at(tmp_path, client, new_key())
+        local = LocalModel(server, client, QWEN, 4096)
+        asked = asyncio.create_task(collect(local.stream(HELLO)))
+        await asyncio.sleep(0)
+        stop = asyncio.Event()
+        task = asyncio.create_task(server.run(stop))
+        reply = await asyncio.wait_for(asked, HANG_TIMEOUT_S)
+        stop.set()
+        await asyncio.wait_for(task, HANG_TIMEOUT_S)
+
+    assert reply.text == "echo: hello"
+
+
+async def test_the_router_sends_a_local_request_to_the_served_model(
     tmp_path: Path,
 ) -> None:
     health = RemoteHealth(
@@ -322,14 +346,14 @@ async def test_the_router_sends_a_background_job_to_the_served_model(
     async with httpx.AsyncClient() as client:
         server = server_at(tmp_path, client, new_key())
         local = LocalModel(server, client, QWEN, 4096)
-        router = Router(Unused(), health, local, local_ready=local.ready)
+        router = Router(local, Remote(Unused(), health), local_ready=local.ready)
         stop = asyncio.Event()
         task = asyncio.create_task(server.run(stop))
         await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)
-        route = await router.decide(HELLO, background=True)
-        reply = await collect(router.stream(HELLO, background=True))
+        route = await router.decide(HELLO)
+        reply = await collect(router.stream(HELLO))
         stop.set()
         await asyncio.wait_for(task, HANG_TIMEOUT_S)
 
-    assert route == (Route.LOCAL, RouteReason.BACKGROUND)
+    assert route == (Route.LOCAL, RouteReason.LOCAL_FIRST)
     assert reply.text == "echo: hello"
