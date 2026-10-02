@@ -69,6 +69,15 @@ class Tool(Protocol):
         """Return whether the tool changes anything."""
         ...
 
+    @property
+    def time_limit_s(self) -> float | None:
+        """Return how long one call may run, or None for the agent's own limit.
+
+        Set by the code that builds the tool, never by the model, so a model
+        cannot buy itself more time.
+        """
+        ...
+
     async def run(self, arguments: str) -> str:
         """Run with ``arguments``, the JSON text the model produced.
 
@@ -92,6 +101,7 @@ class FunctionTool:
     effect: Effect
     function: ToolFunction
     parameters: type[BaseModel]
+    time_limit_s: float | None = None
 
     @classmethod
     def of(
@@ -101,17 +111,22 @@ class FunctionTool:
         reach: Reach,
         effect: Effect,
         name: str | None = None,
+        time_limit_s: float | None = None,
     ) -> FunctionTool:
         """Return the tool that calls ``function``.
 
         The description is the first paragraph of its docstring.
 
         Raises:
-            ValueError: If the function has no docstring, or a parameter that
-                is positional-only, variadic, without a type hint, or hinted
-                with a name its module does not define at run time.
+            ValueError: If the function has no docstring, a parameter that is
+                positional-only, variadic, without a type hint, or hinted with
+                a name its module does not define at run time, or a time
+                limit that is not positive.
         """
         name = function.__name__ if name is None else name
+        if time_limit_s is not None and time_limit_s <= 0:
+            message = f"{name}: a time limit must be positive"
+            raise ValueError(message)
         doc = inspect.getdoc(function)
         if not doc:
             message = f"{name} needs a docstring: it is the description the model reads"
@@ -133,7 +148,7 @@ class FunctionTool:
         spec = ToolSpec(
             name, doc.split("\n\n")[0], _untitled(model.model_json_schema())
         )
-        return cls(spec, reach, effect, function, model)
+        return cls(spec, reach, effect, function, model, time_limit_s)
 
     async def run(self, arguments: str) -> str:
         """Check ``arguments`` against the parameters, then call the function.

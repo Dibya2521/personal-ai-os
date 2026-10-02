@@ -54,7 +54,8 @@ class Limits:
     """How far one run may go.
 
     ``max_steps`` counts model turns; the last one is offered no tools, so the
-    model has to answer with what it has. ``deadline_s`` of None sets no
+    model has to answer with what it has. ``call_timeout_s`` bounds a tool
+    call unless the tool sets its own ``time_limit_s``. ``deadline_s`` of None sets no
     deadline: right for a chat, where the answer streams in view and the
     person stops it when they choose.
 
@@ -247,16 +248,16 @@ class Agent:
         if tool is None or refusal is not None:
             result = refusal or ""
         else:
+            limit = tool.time_limit_s or self._limits.call_timeout_s
             try:
-                async with asyncio.timeout(self._limits.call_timeout_s):
+                async with asyncio.timeout(limit):
                     result = await tool.run(call.arguments)
                 ok = True
             except ToolError as error:
                 result = str(error)
             except TimeoutError:
                 result = (
-                    f"{call.name} did not finish within "
-                    f"{self._limits.call_timeout_s:g} s and was stopped"
+                    f"{call.name} did not finish within {limit:g} s and was stopped"
                 )
             except Exception as error:
                 logger.exception("tool %s failed", call.name)

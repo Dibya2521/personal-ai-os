@@ -221,6 +221,48 @@ async def test_a_call_that_runs_too_long_is_stopped() -> None:
     assert stopped.is_set()
 
 
+async def test_a_tool_with_its_own_time_limit_gets_that_time() -> None:
+    async def patient() -> str:
+        """Take longer than the agent's own limit."""
+        await asyncio.sleep(0.2)
+        return "done"
+
+    def slow_tool(limit: float) -> FunctionTool:
+        return FunctionTool.of(
+            patient, reach=Reach.LOCAL, effect=Effect.READ, time_limit_s=limit
+        )
+
+    model = Scripted(calls(("patient", "{}")), says("ok"))
+    given = Agent(
+        model, Toolbox([slow_tool(HANG_TIMEOUT_S)]), Limits(call_timeout_s=0.01)
+    )
+    (allowed,) = finished_calls(await steps(given, question()))
+
+    model = Scripted(calls(("patient", "{}")), says("ok"))
+    held = Agent(
+        model, Toolbox([slow_tool(0.01)]), Limits(call_timeout_s=HANG_TIMEOUT_S)
+    )
+    (stopped,) = finished_calls(await steps(held, question()))
+
+    assert (allowed.ok, allowed.result) == (True, "done")
+    assert (stopped.ok, stopped.result) == (
+        False,
+        "patient did not finish within 0.01 s and was stopped",
+    )
+
+
+@pytest.mark.parametrize("limit", [0.0, -1.0])
+def test_a_tool_time_limit_must_be_positive(limit: float) -> None:
+    def quick() -> str:
+        """Answer at once."""
+        return ""
+
+    with pytest.raises(ValueError, match="time limit must be positive"):
+        FunctionTool.of(
+            quick, reach=Reach.LOCAL, effect=Effect.READ, time_limit_s=limit
+        )
+
+
 async def test_the_last_step_offers_no_tools_so_the_model_must_answer() -> None:
     def again() -> str:
         """Again."""

@@ -104,6 +104,7 @@ class McpTool:
     effect: Effect
     server: McpServer
     remote_name: str
+    time_limit_s: float | None = None
 
     async def run(self, arguments: str) -> str:
         """Call the tool on its server with ``arguments`` (a JSON object).
