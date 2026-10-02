@@ -12,9 +12,13 @@ a free remote model and an optional local one, under a daily budget.
 ### Added
 
 - `synthia chat`: streaming answers from SYNTHIA, with `/persona`, `/persona
-  set`, `/image`, `/budget`, `/model`, `/reset`, `/help` and `/exit`. After
-  each answer one line names the route, the model, the tokens and the seconds
-  taken. Ctrl+C stops an answer and keeps the chat; at the prompt, Ctrl+C,
+  set`, `/image`, `/think`, `/budget`, `/model`, `/reset`, `/help` and
+  `/exit`. `/think off|low|medium|high|auto` sets how much each answer may
+  think (default `auto`); `/think` alone shows it. While the model thinks, a
+  dim "thinking N s" line counts the seconds and disappears when the answer
+  starts; the thinking itself is never shown. After each answer one line
+  names the route, the model, the thinking level sent, the tokens and the
+  seconds taken. Ctrl+C stops an answer and keeps the chat; at the prompt, Ctrl+C,
   Ctrl+D or `/exit` leaves. An answer that failed or was stopped is dropped
   from the history, question and all. Log records go to
   `SYNTHIA_HOME/logs/synthia.log`, not into the conversation.

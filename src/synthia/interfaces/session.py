@@ -16,7 +16,13 @@ from typing import TYPE_CHECKING, Final
 from synthia.gateway.errors import IncompleteResponseError
 from synthia.gateway.protocol import join
 from synthia.gateway.router import RouteDecided
-from synthia.gateway.types import ChatChunk, ChatRequest, ImagePart, Message
+from synthia.gateway.types import (
+    ChatChunk,
+    ChatRequest,
+    ImagePart,
+    Message,
+    Reasoning,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -38,6 +44,8 @@ MEDIA_TYPES: Final = {
 # Inline images grow a third as base64; a wrong path (a video renamed .png)
 # should fail here, not as a request of hundreds of megabytes.
 MAX_IMAGE_BYTES: Final = 20 * 1024 * 1024
+# Each turn's depth is decided from what it asks, until the user sets a level.
+DEFAULT_REASONING: Final = Reasoning.AUTO
 
 
 class ImageError(ValueError):
@@ -79,13 +87,18 @@ class LastRoute:
 
 @dataclass(frozen=True, slots=True)
 class TurnReport:
-    """What one finished turn cost and where it went."""
+    """What one finished turn cost and where it went.
+
+    ``reasoning`` is the thinking level the model was sent, with ``auto``
+    already decided when a router answered; ``None`` when none was sent.
+    """
 
     route: str
     model: str
     prompt_tokens: int | None
     completion_tokens: int | None
     seconds: float
+    reasoning: Reasoning | None = None
 
 
 class ChatSession:
@@ -113,6 +126,7 @@ class ChatSession:
         self.persona: Persona = library.get(persona)
         self.history: list[Message] = []
         self.routes = routes or LastRoute()
+        self.reasoning = DEFAULT_REASONING
 
     def persona_names(self) -> tuple[str, ...]:
         """Return the keys of every persona the session can switch to."""
@@ -141,7 +155,10 @@ class ChatSession:
     def request(self, text: str, *images: ImagePart) -> ChatRequest:
         """Return the request a turn saying ``text`` would send."""
         system = Message.system(self.persona.system_prompt())
-        return ChatRequest((system, *self.history, Message.user(text, *images)))
+        return ChatRequest(
+            (system, *self.history, Message.user(text, *images)),
+            reasoning=self.reasoning,
+        )
 
     async def turn(
         self, text: str, *images: ImagePart
@@ -163,9 +180,11 @@ class ChatSession:
         except IncompleteResponseError:
             return
         self.history += [request.messages[-1], response.as_message()]
-        yield self._report(response, self._clock() - started)
+        yield self._report(request, response, self._clock() - started)
 
-    def _report(self, response: ChatResponse, seconds: float) -> TurnReport:
+    def _report(
+        self, request: ChatRequest, response: ChatResponse, seconds: float
+    ) -> TurnReport:
         route = self.routes.decision
         usage = response.usage
         return TurnReport(
@@ -174,4 +193,5 @@ class ChatSession:
             prompt_tokens=usage.prompt_tokens if usage else None,
             completion_tokens=usage.completion_tokens if usage else None,
             seconds=seconds,
+            reasoning=route.reasoning if route else request.reasoning,
         )

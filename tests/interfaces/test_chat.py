@@ -13,11 +13,14 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from synthia.gateway.assemble import build_gateway
+from synthia.gateway.types import ChatChunk, Reasoning
 from synthia.interfaces import cli
 from synthia.interfaces.chat import (
     MORE,
     PROMPT,
     ChatApp,
+    ThinkingLine,
+    ThinkingTimer,
     describe,
     read_message,
     run_chat,
@@ -99,12 +102,87 @@ def test_the_end_of_input_ends_a_message() -> None:
         read_message(scripted())
 
 
-def test_the_report_line_says_route_model_tokens_and_time() -> None:
-    known = TurnReport("remote", "vendor/free", 30, 2, 1.26)
+def test_the_report_line_says_route_model_level_tokens_and_time() -> None:
+    known = TurnReport("remote", "vendor/free", 30, 2, 1.26, Reasoning.MEDIUM)
     unknown = TurnReport("local", "qwen", None, 2, 0.5)
 
-    assert describe(known) == "remote | vendor/free | 30 in, 2 out | 1.3 s"
+    assert describe(known) == (
+        "remote | vendor/free | thinking medium | 30 in, 2 out | 1.3 s"
+    )
     assert describe(unknown) == "local | qwen | tokens not reported | 0.5 s"
+
+
+def test_the_thinking_line_counts_seconds_from_when_thinking_began() -> None:
+    now = iter([100.0, 100.4, 103.6])
+    timer = ThinkingTimer(lambda: next(now))
+
+    assert [timer.__rich__().plain for _ in range(2)] == [
+        "thinking 0 s",
+        "thinking 4 s",
+    ]
+
+
+def test_a_thought_after_the_answer_began_does_not_bring_the_line_back() -> None:
+    out = io.StringIO()
+    terminal = Console(file=out, width=80, force_terminal=True, color_system=None)
+    line = ThinkingLine(terminal, lambda: 0.0)
+
+    line.see(ChatChunk(text="an answer that did not think first"))
+    line.see(ChatChunk(reasoning="a late thought"))
+    line.close()
+
+    assert out.getvalue() == ""
+
+
+def thinking_then(text: str) -> bytes:
+    thought: dict[str, object] = {
+        "model": "vendor/free",
+        "choices": [{"delta": {"reasoning": "hmm"}}],
+    }
+    return event(thought) + answer(text)
+
+
+def test_a_level_set_with_think_is_sent_and_reported(tmp_path: Path) -> None:
+    bodies: list[dict[str, object]] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, content=thinking_then("Done."))
+
+    screen, out = console()
+    read = scripted(
+        "/think", "/think high", "hello", "/think auto", "hello", "/think max"
+    )
+
+    run_chat(settings(tmp_path), "synthia", screen, read, httpx.MockTransport(reply))
+
+    text = out.getvalue()
+    assert text.count("thinking: auto") == 2
+    assert "thinking: high" in text
+    assert "'max' is not a thinking level" in text
+    # High first, while no speed is measured: 60 s at the assumed 25 tokens/s.
+    # Then auto decides a greeting needs no thinking.
+    reasoning = [b["reasoning"] for b in bodies]
+    assert reasoning == [{"max_tokens": 1500}, {"effort": "none"}]
+    assert "remote | vendor/free | thinking high | 30 in, 2 out |" in text
+    assert "remote | vendor/free | thinking off | 30 in, 2 out |" in text
+
+
+def test_the_thinking_line_shows_while_thinking_and_leaves_only_the_answer(
+    tmp_path: Path,
+) -> None:
+    out = io.StringIO()
+    terminal = Console(file=out, width=80, force_terminal=True, color_system=None)
+    transport = httpx.MockTransport(
+        lambda _: httpx.Response(200, content=thinking_then("Done."))
+    )
+
+    run_chat(settings(tmp_path), "synthia", terminal, scripted("why?"), transport)
+
+    text = out.getvalue()
+    assert "thinking 0 s" in text
+    assert text.index("thinking 0 s") < text.index("Done.")
+    assert "hmm" not in text
 
 
 def test_a_whole_chat_answers_reports_and_leaves_on_exit(tmp_path: Path) -> None:
@@ -115,7 +193,7 @@ def test_a_whole_chat_answers_reports_and_leaves_on_exit(tmp_path: Path) -> None
 
     text = out.getvalue()
     assert text.startswith("SYNTHIA is listening.")
-    assert "Hello, Dibya.\nremote | vendor/free | 30 in, 2 out |" in text
+    assert "Hello, Dibya.\nremote | vendor/free | thinking off | 30 in, 2 out |" in text
     assert (
         "1 of 50 remote requests used today (UTC); 49 left, 10 kept in reserve" in text
     )
@@ -316,7 +394,7 @@ def test_with_the_remote_budget_spent_the_local_model_answers(tmp_path: Path) ->
     )
 
     text = out.getvalue()
-    assert "echo: hello\nlocal | local | 3 in, 2 out |" in text
+    assert "echo: hello\nlocal | local | thinking off | 3 in, 2 out |" in text
     assert "context 512 tokens" in text
     assert "last turn: local to tiny (remote budget at the reserve)" in text
     assert not service_threads()

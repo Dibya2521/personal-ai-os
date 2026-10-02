@@ -9,10 +9,13 @@ cancels that task, every stream beneath it closes, and the prompt returns.
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Self
 
 import httpx
+from rich.status import Status
+from rich.text import Text
 
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.errors import GatewayError
@@ -29,6 +32,7 @@ from synthia.interfaces.commands import (
     ShowImage,
     ShowModel,
     SwitchPersona,
+    Think,
     parse,
 )
 from synthia.interfaces.session import (
@@ -47,7 +51,7 @@ if TYPE_CHECKING:
     from rich.console import Console
 
     from synthia.gateway.assemble import Gateway
-    from synthia.gateway.types import ImagePart
+    from synthia.gateway.types import ChatChunk, ImagePart
     from synthia.kernel.config import Settings
     from synthia.models.service import LocalService
 
@@ -81,18 +85,73 @@ def describe(report: TurnReport) -> str:
         tokens = "tokens not reported"
     else:
         tokens = f"{report.prompt_tokens} in, {report.completion_tokens} out"
-    return f"{report.route} | {report.model} | {tokens} | {report.seconds:.1f} s"
+    level = [] if report.reasoning is None else [f"thinking {report.reasoning.value}"]
+    parts = [report.route, report.model, *level, tokens, f"{report.seconds:.1f} s"]
+    return " | ".join(parts)
+
+
+class ThinkingTimer:
+    """Seconds since thinking began, read again each time the line is drawn."""
+
+    def __init__(self, clock: Callable[[], float]) -> None:
+        self._clock = clock
+        self._started = clock()
+
+    def __rich__(self) -> Text:
+        """Return the line as it reads now."""
+        return Text(f"thinking {self._clock() - self._started:.0f} s", style="dim")
+
+
+class ThinkingLine:
+    """Show a :class:`ThinkingTimer` from the first thought until the answer starts.
+
+    The line is transient: it leaves nothing on screen once closed, and closing
+    it on leaving the ``with`` block also covers a failed or stopped answer.
+    """
+
+    def __init__(self, console: Console, clock: Callable[[], float]) -> None:
+        self._console = console
+        self._clock = clock
+        self._status: Status | None = None
+        self._answering = False
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def see(self, chunk: ChatChunk) -> None:
+        """Start the line at the first thought; close it once the answer begins."""
+        if chunk.text or chunk.tool_calls:
+            self._answering = True
+            self.close()
+        elif chunk.reasoning and self._status is None and not self._answering:
+            self._status = Status(
+                ThinkingTimer(self._clock), console=self._console, spinner_style="dim"
+            )
+            self._status.start()
+
+    def close(self) -> None:
+        """Remove the line, if it is showing."""
+        if self._status is not None:
+            self._status.stop()
 
 
 class ChatApp:
     """Carry out chat commands against a session, printing to a console."""
 
     def __init__(
-        self, session: ChatSession, gateway: Gateway, console: Console
+        self,
+        session: ChatSession,
+        gateway: Gateway,
+        console: Console,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.session = session
         self.gateway = gateway
         self.console = console
+        self._clock = clock
 
     def greet(self) -> None:
         """Print who is listening and how to get help."""
@@ -120,8 +179,12 @@ class ChatApp:
                 self._show(command)
         return True
 
-    def _show(self, command: ShowModel | Reset | Help | Invalid) -> None:
+    def _show(self, command: Think | ShowModel | Reset | Help | Invalid) -> None:
         match command:
+            case Think(level=level):
+                if level is not None:
+                    self.session.reasoning = level
+                self._note(f"thinking: {self.session.reasoning.value}")
             case ShowModel():
                 self._model()
             case Reset():
@@ -141,10 +204,12 @@ class ChatApp:
         report: TurnReport | None = None
         printed = False
         try:
-            async for item in self.session.turn(text, *images):
-                if isinstance(item, TurnReport):
-                    report = item
-                else:
+            with ThinkingLine(self.console, self._clock) as thinking:
+                async for item in self.session.turn(text, *images):
+                    if isinstance(item, TurnReport):
+                        report = item
+                        continue
+                    thinking.see(item)
                     self.console.print(item.text, end="", markup=False, highlight=False)
                     printed = printed or bool(item.text)
         except GatewayError as error:

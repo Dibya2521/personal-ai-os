@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+from synthia.gateway.types import Reasoning
+
 PREFIX: Final = "/"
 
 
@@ -40,6 +42,13 @@ class ShowImage:
 
     path: Path
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class Think:
+    """Think at ``level`` from the next turn on; ``None`` shows the level."""
+
+    level: Reasoning | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +88,7 @@ type Command = (
     | SwitchPersona
     | AdjustPersona
     | ShowImage
+    | Think
     | ShowBudget
     | ShowModel
     | Reset
@@ -93,6 +103,7 @@ HELP: Final = """\
 /persona [name]            switch persona, or list them
 /persona set wit=0.3 ...   move sliders: warmth formality wit vigilance verbosity
 /image <path> [question]   send an image; quote a path that has spaces
+/think [level]             how much to think: off low medium high auto, or show it
 /budget                    today's remote requests
 /model                     the models behind the router, and the last route
 /reset                     forget the conversation
@@ -122,7 +133,19 @@ def parse(line: str) -> Command:
         return _persona(rest)
     if name == "image":
         return _image(rest)
+    if name == "think":
+        return _think(rest)
     return Invalid(f"unknown command /{name}; /help lists them")
+
+
+def _think(rest: str) -> Command:
+    if not rest:
+        return Think(None)
+    try:
+        return Think(Reasoning(rest.lower()))
+    except ValueError:
+        levels = ", ".join(level.value for level in Reasoning)
+        return Invalid(f"{rest!r} is not a thinking level; use one of {levels}")
 
 
 def _persona(rest: str) -> Command:

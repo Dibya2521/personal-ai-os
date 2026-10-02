@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from synthia.gateway.types import Reasoning
 from synthia.interfaces.commands import (
     DEFAULT_IMAGE_QUESTION,
     AdjustPersona,
@@ -15,6 +16,7 @@ from synthia.interfaces.commands import (
     ShowImage,
     ShowModel,
     SwitchPersona,
+    Think,
     parse,
 )
 
@@ -41,6 +43,10 @@ from synthia.interfaces.commands import (
             '/image "My Pictures/cat 1.png" is it asleep?',
             ShowImage(Path("My Pictures/cat 1.png"), "is it asleep?"),
         ),
+        ("/think", Think(None)),
+        ("/think high", Think(Reasoning.HIGH)),
+        ("/think  OFF ", Think(Reasoning.OFF)),
+        ("/think auto", Think(Reasoning.AUTO)),
     ],
 )
 def test_each_command_parses(line: str, command: Command) -> None:
@@ -59,6 +65,8 @@ def test_each_command_parses(line: str, command: Command) -> None:
         ("/image", "/image needs a path"),
         ('/image "cat.png is it asleep?', "no closing quote"),
         ('/image "" what?', "/image needs a path"),
+        ("/think max", "'max' is not a thinking level; use one of off, low, medium"),
+        ("/think high now", "'high now' is not a thinking level"),
     ],
 )
 def test_mistakes_say_what_is_wrong(line: str, reason: str) -> None:

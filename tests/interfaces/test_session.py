@@ -11,6 +11,7 @@ from synthia.gateway.types import (
     FinishReason,
     ImagePart,
     ModelInfo,
+    Reasoning,
     Role,
     Usage,
 )
@@ -88,7 +89,9 @@ async def test_a_turn_streams_the_answer_then_reports_it(
     text, reports = await run(chat, "hello")
 
     assert text == "you said: hello"
-    assert reports == [TurnReport("direct", "vendor/echo", 40, 3, 0.75)]
+    assert reports == [
+        TurnReport("direct", "vendor/echo", 40, 3, 0.75, reasoning=Reasoning.AUTO)
+    ]
 
 
 async def test_every_request_starts_with_the_persona_and_carries_the_history(
@@ -159,6 +162,29 @@ async def test_the_report_names_the_route_the_router_announced(
     _, (report,) = await run(chat, "hello")
 
     assert (report.route, report.model) == (Route.LOCAL, "vendor/echo")
+
+
+async def test_each_turn_asks_for_the_sessions_level_and_reports_the_one_sent(
+    library: PersonaLibrary,
+) -> None:
+    model = Echo()
+    routes = LastRoute()
+    chat = ChatSession(model, library, "synthia", routes, clock=Ticks())
+    _, (direct,) = await run(chat, "one")
+    chat.reasoning = Reasoning.HIGH
+    await routes(
+        RouteDecided(
+            route=Route.REMOTE,
+            reason=RouteReason.PREFERRED,
+            model="m",
+            reasoning=Reasoning.MEDIUM,
+        )
+    )
+    _, (routed,) = await run(chat, "two")
+
+    assert [r.reasoning for r in model.requests] == [Reasoning.AUTO, Reasoning.HIGH]
+    assert direct.reasoning is Reasoning.AUTO
+    assert routed.reasoning is Reasoning.MEDIUM
 
 
 async def test_switching_and_adjusting_persona_change_the_next_prompt_only(
