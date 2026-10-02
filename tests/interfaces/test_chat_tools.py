@@ -11,6 +11,7 @@ from synthia.agent.tools import Effect, FunctionTool, Reach, Toolbox
 from synthia.gateway.types import ChatChunk, Role, ToolCall, Usage
 from synthia.interfaces.chat import (
     MAX_SHOWN,
+    approval_question,
     describe_call,
     run_chat,
     terminal_approver,
@@ -102,6 +103,47 @@ async def test_the_terminal_approver_says_yes_only_to_y_or_yes(
 
 async def test_the_end_of_input_at_the_question_is_no() -> None:
     assert await terminal_approver(scripted())(recorded([]), "") is False
+
+
+async def test_long_arguments_are_shown_whole_before_the_question() -> None:
+    code = "import os\n" + "\n".join(f"print({n})" for n in range(20))
+    read = scripted("y")
+
+    assert await terminal_approver(read)(recorded([]), json.dumps({"code": code}))
+    assert read.prompts == [  # type: ignore[attr-defined]
+        "run note with:\n  code:\n    import os\n"
+        + "".join(f"    print({n})\n" for n in range(20))
+        + "[y/N] "
+    ]
+
+
+def test_terminal_controls_in_arguments_are_shown_escaped() -> None:
+    hidden = '{"code": "rm()\\u001b[1A\\u001b[2Kprint(1)"}'
+    raw = '{"code": "rm()\x1b[1A\x1b[2Kprint(1)"}'
+
+    assert approval_question("note", raw) == (
+        'run note {"code": "rm()\\x1b[1A\\x1b[2Kprint(1)"}? [y/N] '
+    )
+    assert approval_question("note", hidden.replace("print(1)", "x" * 80)) == (
+        "run note with:\n  code:\n    rm()\\x1b[1A\\x1b[2K" + "x" * 80 + "\n[y/N] "
+    )
+
+
+def test_arguments_that_are_not_an_object_are_shown_as_sent() -> None:
+    sent = "[" + ", ".join(["1"] * 40) + "]"
+
+    assert approval_question("note", sent) == f"run note with:\n{sent}\n[y/N] "
+    assert approval_question("note", "x" * 90 + "{") == (
+        "run note with:\n" + "x" * 90 + "{\n[y/N] "
+    )
+
+
+def test_values_other_than_text_are_shown_as_json() -> None:
+    arguments = json.dumps({"path": "a" * 70, "limit": 5})
+
+    assert approval_question("note", arguments) == (
+        "run note with:\n  path:\n    " + "a" * 70 + "\n  limit:\n    5\n[y/N] "
+    )
 
 
 async def test_a_turn_with_a_tool_shows_the_call_and_keeps_the_whole_exchange() -> None:
@@ -283,6 +325,7 @@ def test_the_chat_calls_the_calculator_and_shows_the_call(tmp_path: Path) -> Non
         "calculate",
         "read_file",
         "list_files",
+        "run_python",
     ]
     assert sent[1]["messages"][-1] == {  # type: ignore[index]
         "role": "tool",

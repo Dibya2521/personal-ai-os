@@ -30,10 +30,19 @@ budget, only when asked.
   call shows as one dim line (the tool, its arguments, ok or why not, the
   seconds). A tool that would change something or reach outside the
   machine runs only after `y` at a `run <tool> <arguments>? [y/N]`
-  question, one call at a time. `/tools` lists every tool, where it works,
-  what it may change, and whether it asks first. A tool's output reaches the
+  question, one call at a time; arguments too long for that line are shown
+  whole above it, with terminal control characters shown escaped. `/tools`
+  lists every tool, where it works, what it may change, and whether it asks
+  first. A tool's output reaches the
   model quoted as untrusted data, with chat markup in it defused; text in it
   shaped like an instruction is flagged on the call's line.
+- `run_python` in `synthia chat`: SYNTHIA can run a Python program it
+  writes, after a `y` for each run. It runs as a separate `python -I`
+  process in a new empty directory (deleted afterwards), with none of your
+  environment variables, so no keys. It is stopped after 30 seconds or 20,000
+  bytes of output, and every process it started is ended with it (a Job
+  Object on Windows, a process group elsewhere). It is not a sandbox: the
+  code can read and change your files and reach the network.
 - `synthia trace`: every chat records each turn, model step and tool call as
   one JSON line in `SYNTHIA_HOME/traces/<session>.jsonl` (texts cut to 2,000
   characters with their full length kept; the key is never in it), and

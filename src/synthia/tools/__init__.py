@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from synthia.agent.tools import Toolbox
 from synthia.tools.basic import calculator_tool, clock_tool
 from synthia.tools.files import AllowedRoots, file_tools
+from synthia.tools.python import python_tool
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -14,7 +15,12 @@ if TYPE_CHECKING:
 
 
 def local_tools(file_roots: Iterable[Path] = ()) -> Toolbox:
-    """Return the clock, the calculator, and file tools kept inside ``file_roots``."""
+    """Return the clock, calculator, files inside ``file_roots``, and Python."""
     return Toolbox(
-        (clock_tool(), calculator_tool(), *file_tools(AllowedRoots.of(file_roots)))
+        (
+            clock_tool(),
+            calculator_tool(),
+            *file_tools(AllowedRoots.of(file_roots)),
+            python_tool(),
+        )
     )

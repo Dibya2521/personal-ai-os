@@ -9,9 +9,10 @@ cancels that task, every stream beneath it closes, and the prompt returns.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Self
+from typing import TYPE_CHECKING, Final, Self, cast
 
 import httpx
 from rich.status import Status
@@ -107,6 +108,42 @@ def describe_call(finished: ToolFinished) -> str:
     )
 
 
+def approval_question(name: str, arguments: str) -> str:
+    """Return the question asked before running ``name`` with ``arguments``.
+
+    Arguments too long for one line are shown whole, each string value on its
+    own lines, so nothing is approved unseen. Characters a terminal would act
+    on are shown escaped, so they cannot hide or rewrite what is shown.
+    """
+    shown = visible(arguments or "{}")
+    if len(shown) <= MAX_SHOWN:
+        return f"run {name} {shown}? [y/N] "
+    return f"run {name} with:\n{_whole(arguments)}\n[y/N] "
+
+
+def visible(text: str) -> str:
+    """Return ``text`` with every non-printable character but tab escaped."""
+    return "".join(
+        c if c.isprintable() or c == "\t" else c.encode("unicode_escape").decode()
+        for c in text
+    )
+
+
+def _whole(arguments: str) -> str:
+    try:
+        values: object = json.loads(arguments)
+    except json.JSONDecodeError:
+        values = None
+    if not isinstance(values, dict):
+        return visible(arguments)
+    lines: list[str] = []
+    for key, value in cast("dict[str, object]", values).items():
+        text = value if isinstance(value, str) else json.dumps(value)
+        lines.append(f"  {visible(key)}:")
+        lines.extend(f"    {visible(line)}" for line in text.split("\n"))
+    return "\n".join(lines)
+
+
 def terminal_approver(read: ReadLine) -> Approver:
     """Return an approver that asks in the terminal; anything but y or yes is no.
 
@@ -115,7 +152,7 @@ def terminal_approver(read: ReadLine) -> Approver:
     """
 
     async def approve(tool: Tool, arguments: str) -> bool:
-        question = f"run {tool.spec.name} {shorten(arguments or '{}')}? [y/N] "
+        question = approval_question(tool.spec.name, arguments)
         try:
             answer = read(question)
         except EOFError:

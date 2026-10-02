@@ -223,13 +223,15 @@ def test_a_home_relative_root_is_expanded(
     assert AllowedRoots.of([Path("~/allowed")]).roots == ((tree / "allowed").resolve(),)
 
 
-def test_the_local_tools_are_four_reads_that_need_no_approval() -> None:
+def test_the_local_tools_are_four_reads_and_python_which_asks() -> None:
     box = local_tools()
 
-    assert [s.name for s in box.specs()] == [
-        "current_time",
-        "calculate",
-        "read_file",
-        "list_files",
+    assert [
+        (s.name, Policy().decide(t)) for s, t in zip(box.specs(), box, strict=True)
+    ] == [
+        ("current_time", Decision.ALLOW),
+        ("calculate", Decision.ALLOW),
+        ("read_file", Decision.ALLOW),
+        ("list_files", Decision.ALLOW),
+        ("run_python", Decision.ASK),
     ]
-    assert {Policy().decide(t) for t in box} == {Decision.ALLOW}
