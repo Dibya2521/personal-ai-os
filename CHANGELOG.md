@@ -23,8 +23,8 @@ a free remote model and an optional local one, under a daily budget.
   from the history, question and all. Log records go to
   `SYNTHIA_HOME/logs/synthia.log`, not into the conversation.
 - A model gateway: one streaming interface for every model and one adapter for
-  the OpenAI-compatible chat API, used for OpenRouter (`openrouter/free` by
-  default) and for llama.cpp's server.
+  the OpenAI-compatible chat API, used for OpenRouter's `openrouter/free`,
+  which picks a free model per request, and for llama.cpp's server.
 - A thinking level on each request: `off`, `low`, `medium`, `high` or `auto`.
   OpenRouter receives it as `reasoning.effort` (`none` for off), llama.cpp's
   server as the chat template's `enable_thinking` switch. A request without a
@@ -75,10 +75,11 @@ a free remote model and an optional local one, under a daily budget.
 - Structured output validated against a pydantic model, with up to two repair
   requests, and an opt-in cache of complete answers, for callers that want
   them.
-- Settings `SYNTHIA_OPENROUTER_MODEL`, `SYNTHIA_OPENROUTER_BASE_URL`,
-  `SYNTHIA_REMOTE_DAILY_CAP`, `SYNTHIA_REMOTE_RPM`, `SYNTHIA_REMOTE_RESERVE`,
+- Settings `SYNTHIA_REMOTE_DAILY_CAP`, `SYNTHIA_REMOTE_RESERVE`,
   `SYNTHIA_PERSONA`, `SYNTHIA_LOCAL_MODEL`, `SYNTHIA_LOCAL_BACKEND` and
   `SYNTHIA_LOCAL_CONTEXT`, each documented in `.env.example`.
+- A warning on stderr naming every `SYNTHIA_` variable, in the environment or
+  `.env`, that is not a setting and so does nothing; an empty one counts too.
 - `synthia doctor` reports whether the local model can run: which model and
   builds are installed, a warning when they are not (the remote model alone
   still works), and a failure when `SYNTHIA_LOCAL_MODEL` names no known model.

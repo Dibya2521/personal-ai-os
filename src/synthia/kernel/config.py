@@ -13,7 +13,12 @@ from pathlib import Path
 
 import platformdirs
 from pydantic import Field, SecretStr, ValidationError
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    SettingsConfigDict,
+)
 
 from synthia.kernel.errors import ConfigError
 
@@ -23,13 +28,9 @@ DEFAULT_ENV_FILE = Path(".env")
 DEFAULT_DISK_BUDGET_GB = 10.0
 # OpenRouter's free-model limit per UTC day for accounts with under 10 credits.
 DEFAULT_REMOTE_DAILY_CAP = 50
-# OpenRouter's documented rate limit for free models.
-DEFAULT_REMOTE_RPM = 20
 # Requests kept back for what only the remote can serve, once chat has gone local.
 DEFAULT_REMOTE_RESERVE = 10
 DEFAULT_PERSONA = "synthia"
-DEFAULT_OPENROUTER_MODEL = "openrouter/free"
-DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_LOCAL_MODEL = "qwen3.5-4b"
 # The smallest window the remote may have, so going local never shrinks a request.
 DEFAULT_LOCAL_CONTEXT = 32_768
@@ -87,10 +88,7 @@ class Settings(BaseSettings):
     log_format: LogFormat = LogFormat.CONSOLE
     disk_budget_gb: float = Field(default=DEFAULT_DISK_BUDGET_GB, gt=0)
     openrouter_api_key: SecretStr | None = None
-    openrouter_model: str = Field(default=DEFAULT_OPENROUTER_MODEL, min_length=1)
-    openrouter_base_url: str = Field(default=DEFAULT_OPENROUTER_BASE_URL, min_length=1)
     remote_daily_cap: int = Field(default=DEFAULT_REMOTE_DAILY_CAP, ge=0)
-    remote_rpm: int = Field(default=DEFAULT_REMOTE_RPM, gt=0)
     remote_reserve: int = Field(default=DEFAULT_REMOTE_RESERVE, ge=0)
     persona: str = Field(default=DEFAULT_PERSONA, min_length=1)
     local_model: str = Field(default=DEFAULT_LOCAL_MODEL, min_length=1)
@@ -114,3 +112,20 @@ def load_settings(env_file: Path | None = DEFAULT_ENV_FILE) -> Settings:
         )
         message = f"invalid configuration: {problems}"
         raise ConfigError(message) from None
+
+
+def unknown_variables(env_file: Path | None = DEFAULT_ENV_FILE) -> list[str]:
+    """Return the ``SYNTHIA_`` variables that are set but are not settings.
+
+    The environment and ``env_file`` are parsed exactly as :class:`Settings`
+    parses them. A name with an empty value is reported too: given a value
+    later, it would still do nothing.
+    """
+    prefix = ENV_PREFIX.lower()
+    known = {prefix + name for name in Settings.model_fields}
+    process = EnvSettingsSource(Settings, env_ignore_empty=False).env_vars
+    dotenv = DotEnvSettingsSource(
+        Settings, env_file=env_file, env_ignore_empty=False
+    ).env_vars
+    found = process.keys() | dotenv.keys()
+    return sorted(n.upper() for n in found if n.startswith(prefix) and n not in known)

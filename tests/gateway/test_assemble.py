@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -7,17 +8,9 @@ from pydantic import SecretStr
 
 from synthia.gateway.assemble import GATEWAY_DB, build_gateway
 from synthia.gateway.protocol import collect
-from synthia.gateway.providers import (
-    APP_TITLE,
-    APP_URL,
-    OPENROUTER,
-    OPENROUTER_FREE,
-    OPENROUTER_FREE_CONTEXT,
-    openrouter_endpoint,
-    openrouter_info,
-)
+from synthia.gateway.providers import APP_TITLE, APP_URL, OPENROUTER, OPENROUTER_FREE
 from synthia.gateway.router import Route, RouteDecided, RouteReason
-from synthia.gateway.types import ChatRequest, Message, Reasoning, Usage
+from synthia.gateway.types import ChatRequest, Message, ModelInfo, Reasoning, Usage
 from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings
 from synthia.kernel.errors import ConfigError
@@ -36,23 +29,20 @@ def answer(_: httpx.Request) -> httpx.Response:
 
 
 def test_the_openrouter_endpoint_sends_the_attribution_headers() -> None:
-    endpoint = openrouter_endpoint(SecretStr(KEY))
+    endpoint = OPENROUTER_FREE.endpoint(SecretStr(KEY))
 
     assert endpoint.completions_url == "https://openrouter.ai/api/v1/chat/completions"
-    assert endpoint.model == OPENROUTER_FREE == "openrouter/free"
+    assert endpoint.model == "openrouter/free"
+    assert endpoint.api_key == SecretStr(KEY)
     assert dict(endpoint.headers) == {"HTTP-Referer": APP_URL, "X-Title": APP_TITLE}
 
 
-def test_the_free_router_sees_and_calls_tools_and_others_get_text_only() -> None:
-    free = openrouter_info()
-    other = openrouter_info("vendor/some-model")
-
-    assert (free.vision, free.tools, free.context_window) == (
-        True,
-        True,
-        OPENROUTER_FREE_CONTEXT,
+def test_the_free_router_is_described_once_with_its_limits() -> None:
+    assert OPENROUTER_FREE.name == OPENROUTER
+    assert OPENROUTER_FREE.model == ModelInfo(
+        "openrouter/free", 32_768, vision=True, tools=True
     )
-    assert (other.id, other.vision, other.tools) == ("vendor/some-model", False, False)
+    assert OPENROUTER_FREE.requests_per_minute == 20
 
 
 async def test_without_a_key_there_is_no_gateway_and_the_variable_is_named(
@@ -67,7 +57,7 @@ async def _ignore(_: Event) -> None:
     return None
 
 
-async def test_a_request_goes_to_openrouter_with_the_key_only_in_its_header(
+async def test_a_request_goes_to_the_provider_with_the_key_only_in_its_header(
     tmp_path: Path,
 ) -> None:
     sent: list[httpx.Request] = []
@@ -76,18 +66,19 @@ async def test_a_request_goes_to_openrouter_with_the_key_only_in_its_header(
         sent.append(request)
         return answer(request)
 
+    proxied = replace(OPENROUTER_FREE, base_url="https://proxy.example/api/v1")
     settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        gateway = build_gateway(settings, client, _ignore)
+        gateway = build_gateway(settings, client, _ignore, remote=proxied)
         reply = await collect(gateway.model.stream(HELLO))
 
     assert (reply.text, reply.model) == ("hi", "vendor/free-model")
     (request,) = sent
-    assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
+    assert str(request.url) == "https://proxy.example/api/v1/chat/completions"
     assert request.headers["Authorization"] == f"Bearer {KEY}"
     assert request.headers["X-Title"] == APP_TITLE
     assert KEY not in request.content.decode()
-    assert json.loads(request.content)["model"] == OPENROUTER_FREE
+    assert json.loads(request.content)["model"] == "openrouter/free"
 
 
 async def test_a_request_is_metered_routed_and_accounted(tmp_path: Path) -> None:

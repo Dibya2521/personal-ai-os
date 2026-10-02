@@ -1,45 +1,52 @@
-"""The remote providers SYNTHIA can reach: an endpoint, and what its model can do."""
+"""The remote providers SYNTHIA can reach, each described by one record."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from synthia.gateway.openai_compat import Endpoint
 from synthia.gateway.types import ModelInfo
-from synthia.kernel.config import DEFAULT_OPENROUTER_BASE_URL, DEFAULT_OPENROUTER_MODEL
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from pydantic import SecretStr
 
 OPENROUTER: Final = "openrouter"
-OPENROUTER_BASE_URL: Final = DEFAULT_OPENROUTER_BASE_URL
-OPENROUTER_FREE: Final = DEFAULT_OPENROUTER_MODEL
-# openrouter/free sends each request to a free model picked at random. The
-# smallest context window among the free models it may pick is all a request
-# can rely on: 32,768 tokens in OpenRouter's model list on 2026-09-23.
-OPENROUTER_FREE_CONTEXT: Final = 32_768
 # OpenRouter's app attribution headers: who is calling, shown on its dashboards.
 APP_URL: Final = "https://github.com/Dibya2521/personal-ai-os"
 APP_TITLE: Final = "SYNTHIA"
 
 
-def openrouter_endpoint(
-    api_key: SecretStr,
-    model: str = OPENROUTER_FREE,
-    base_url: str = OPENROUTER_BASE_URL,
-) -> Endpoint:
-    """Return the OpenRouter endpoint for ``model``, with the attribution headers."""
-    headers = {"HTTP-Referer": APP_URL, "X-Title": APP_TITLE}
-    return Endpoint(base_url, model, api_key, headers)
+@dataclass(frozen=True, slots=True)
+class RemoteProvider:
+    """A remote provider: where it is, the model asked for, and its rate limit.
 
-
-def openrouter_info(model: str = OPENROUTER_FREE) -> ModelInfo:
-    """Return what ``model`` on OpenRouter can be assumed to do.
-
-    ``openrouter/free`` filters for a free model that supports what a request
-    needs, images and tools included. Any other model is assumed to take text
-    only until it is described here, so nothing is sent that it may refuse.
+    ``name`` is the key the daily budget is counted under.
     """
-    if model == OPENROUTER_FREE:
-        return ModelInfo(model, OPENROUTER_FREE_CONTEXT, vision=True, tools=True)
-    return ModelInfo(model, OPENROUTER_FREE_CONTEXT, vision=False, tools=False)
+
+    name: str
+    base_url: str
+    model: ModelInfo
+    requests_per_minute: int
+    headers: Mapping[str, str]
+
+    def endpoint(self, api_key: SecretStr) -> Endpoint:
+        """Return the endpoint that sends ``api_key`` and the headers to this model."""
+        return Endpoint(self.base_url, self.model.id, api_key, dict(self.headers))
+
+
+OPENROUTER_FREE: Final = RemoteProvider(
+    name=OPENROUTER,
+    base_url="https://openrouter.ai/api/v1",
+    # openrouter/free sends each request to a free model picked at random, so a
+    # request can rely only on the smallest window among them: 32,768 tokens in
+    # OpenRouter's model list on 2026-09-23. It filters for one that takes the
+    # request's images and tools.
+    model=ModelInfo("openrouter/free", 32_768, vision=True, tools=True),
+    # OpenRouter's documented rate limit for free models.
+    requests_per_minute=20,
+    headers=MappingProxyType({"HTTP-Referer": APP_URL, "X-Title": APP_TITLE}),
+)

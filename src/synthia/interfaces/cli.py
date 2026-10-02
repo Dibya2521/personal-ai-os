@@ -18,7 +18,7 @@ from synthia.interfaces import doctor as doctor_checks
 from synthia.interfaces import model_commands
 from synthia.interfaces.chat import run_chat
 from synthia.interfaces.usage_report import budget_report
-from synthia.kernel.config import Settings, load_settings
+from synthia.kernel.config import Settings, load_settings, unknown_variables
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.kernel.logs import logging_to
 from synthia.models.install import BYTES_PER_GB, Installer
@@ -86,12 +86,7 @@ def doctor(
 
     Exits 0 when every check passes, 1 on a warning and 2 on a failure.
     """
-    try:
-        settings = load_settings()
-    except ConfigError as error:
-        typer.echo(f"error: {error}", err=True)
-        raise typer.Exit(doctor_checks.Status.FAIL) from None
-
+    settings = _settings()
     facts = doctor_checks.gather_facts(settings, _installer(settings))
     checks = doctor_checks.evaluate(settings, facts)
     if as_json:
@@ -121,8 +116,8 @@ def chat(
 
     Ctrl+C stops an answer; Ctrl+C at the prompt, Ctrl+D or /exit leaves.
     """
+    settings = _settings()
     try:
-        settings = load_settings()
         with logging_to(settings, settings.home / CHAT_LOG):
             run_chat(
                 settings, persona or settings.persona, Console(), local=_local(settings)
@@ -147,12 +142,7 @@ def budget(
 
     Exits 1 when --check could not be completed.
     """
-    try:
-        settings = load_settings()
-    except ConfigError as error:
-        typer.echo(f"error: {error}", err=True)
-        raise typer.Exit(doctor_checks.Status.FAIL) from None
-    report = asyncio.run(budget_report(settings, check=check))
+    report = asyncio.run(budget_report(_settings(), check=check))
     for line in report.lines:
         typer.echo(line)
     if not report.complete:
@@ -160,6 +150,13 @@ def budget(
 
 
 def _settings() -> Settings:
+    unknown = unknown_variables()
+    if unknown:
+        typer.echo(
+            f"warning: not a setting, ignored: {', '.join(unknown)} "
+            "(.env.example lists every setting)",
+            err=True,
+        )
     try:
         return load_settings()
     except ConfigError as error:

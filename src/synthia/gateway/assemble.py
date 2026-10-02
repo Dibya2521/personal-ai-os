@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Final
 from synthia.gateway.budget import BudgetLedger
 from synthia.gateway.circuit import CircuitBreaker
 from synthia.gateway.openai_compat import OpenAICompatibleModel
-from synthia.gateway.providers import OPENROUTER, openrouter_endpoint, openrouter_info
+from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.gateway.ratelimit import SlidingWindowLimiter
 from synthia.gateway.router import RemoteHealth, Router, guard_remote
 from synthia.gateway.usage import AccountingModel, UsageLog
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     import httpx
 
     from synthia.gateway.protocol import ChatModel
+    from synthia.gateway.providers import RemoteProvider
     from synthia.kernel.bus import Event
     from synthia.kernel.config import Settings
     from synthia.models.local import LocalModel
@@ -54,6 +55,8 @@ def build_gateway(
     client: httpx.AsyncClient,
     publish: Callable[[Event], Awaitable[None]],
     local: LocalModel | None = None,
+    *,
+    remote: RemoteProvider = OPENROUTER_FREE,
 ) -> Gateway:
     """Assemble the gateway; ``client`` carries every remote request.
 
@@ -66,21 +69,16 @@ def build_gateway(
     if key is None:
         message = "no model is available: set SYNTHIA_OPENROUTER_API_KEY in .env"
         raise ConfigError(message)
-    caps = {OPENROUTER: settings.remote_daily_cap}
+    caps = {remote.name: settings.remote_daily_cap}
     health = RemoteHealth(
-        OPENROUTER,
+        remote.name,
         BudgetLedger(settings.home / GATEWAY_DB, caps),
-        SlidingWindowLimiter(settings.remote_rpm),
-        CircuitBreaker(OPENROUTER),
+        SlidingWindowLimiter(remote.requests_per_minute),
+        CircuitBreaker(remote.name),
         reserve=settings.remote_reserve,
     )
-    endpoint = openrouter_endpoint(
-        key, settings.openrouter_model, settings.openrouter_base_url
-    )
     adapter = OpenAICompatibleModel(
-        client=client,
-        endpoint=endpoint,
-        info=openrouter_info(settings.openrouter_model),
+        client=client, endpoint=remote.endpoint(key), info=remote.model
     )
     usage = UsageLog(settings.home / GATEWAY_DB)
     local_ids = frozenset[str]() if local is None else frozenset({local.info.id})

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from typer.testing import CliRunner
 
 from synthia.gateway.assemble import GATEWAY_DB
 from synthia.gateway.budget import BudgetLedger
-from synthia.gateway.providers import OPENROUTER
+from synthia.gateway.providers import OPENROUTER, OPENROUTER_FREE
 from synthia.gateway.types import Usage
 from synthia.gateway.usage import UsageLog
 from synthia.interfaces.cli import app
@@ -93,6 +94,24 @@ async def test_the_check_compares_with_openrouters_own_count(
     )
     assert report.lines[3:] == expected
     assert report.complete
+
+
+async def test_the_check_asks_the_provider_it_is_given(tmp_path: Path) -> None:
+    asked: list[str] = []
+    says = provider_says(0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        return says.handle_request(request)
+
+    await budget_report(
+        Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY)),
+        check=True,
+        transport=httpx.MockTransport(handler),
+        remote=replace(OPENROUTER_FREE, base_url="https://proxy.example/api/v1"),
+    )
+
+    assert asked == ["https://proxy.example/api/v1/key"]
 
 
 async def test_a_check_without_a_key_or_an_answer_is_incomplete(tmp_path: Path) -> None:

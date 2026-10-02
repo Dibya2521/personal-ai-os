@@ -6,18 +6,16 @@ from pydantic import ValidationError
 
 from synthia.kernel.config import (
     DEFAULT_DISK_BUDGET_GB,
-    DEFAULT_OPENROUTER_BASE_URL,
-    DEFAULT_OPENROUTER_MODEL,
     DEFAULT_PERSONA,
     DEFAULT_REMOTE_DAILY_CAP,
     DEFAULT_REMOTE_RESERVE,
-    DEFAULT_REMOTE_RPM,
     ENV_PREFIX,
     LogFormat,
     LogLevel,
     Settings,
     default_home,
     load_settings,
+    unknown_variables,
 )
 from synthia.kernel.errors import ConfigError, SynthiaError
 
@@ -33,10 +31,7 @@ def test_defaults_apply_when_nothing_is_set() -> None:
     assert settings.log_format is LogFormat.CONSOLE
     assert settings.disk_budget_gb == DEFAULT_DISK_BUDGET_GB
     assert settings.openrouter_api_key is None
-    assert settings.openrouter_model == DEFAULT_OPENROUTER_MODEL == "openrouter/free"
-    assert settings.openrouter_base_url == DEFAULT_OPENROUTER_BASE_URL
     assert settings.remote_daily_cap == DEFAULT_REMOTE_DAILY_CAP == 50
-    assert settings.remote_rpm == DEFAULT_REMOTE_RPM == 20
     assert settings.remote_reserve == DEFAULT_REMOTE_RESERVE == 10
     assert settings.persona == DEFAULT_PERSONA == "synthia"
 
@@ -108,7 +103,6 @@ def test_a_secret_never_appears_in_repr_or_str(
         ("SYNTHIA_DISK_BUDGET_GB", "-7"),
         ("SYNTHIA_DISK_BUDGET_GB", "lots"),
         ("SYNTHIA_REMOTE_DAILY_CAP", "-3"),
-        ("SYNTHIA_REMOTE_RPM", "-7777"),
         ("SYNTHIA_REMOTE_RESERVE", "-1"),
     ],
 )
@@ -124,6 +118,37 @@ def test_invalid_values_name_the_variable_but_not_the_value(
     assert value not in str(caught.value)
     assert isinstance(caught.value, SynthiaError)
     assert caught.value.__cause__ is None
+
+
+def test_variables_that_are_not_settings_are_named_once_each(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "# SYNTHIA_IN_A_COMMENT=1\n"
+        "SYNTHIA_LOG_LEVEL=DEBUG\n"
+        "SYNTHIA_REMOTE_RPM=\n"
+        "export SYNTHIA_TYPO=1\n"
+        "OTHER_TOOL_SETTING=1\n"
+    )
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.setenv("SYNTHIA_OPENROUTER_MODEL", "vendor/model")
+    monkeypatch.setenv("SYNTHIA_TYPO", "2")
+
+    assert unknown_variables(env_file) == [
+        "SYNTHIA_OPENROUTER_MODEL",
+        "SYNTHIA_REMOTE_RPM",
+        "SYNTHIA_TYPO",
+    ]
+
+
+def test_without_stray_variables_nothing_is_named(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("SYNTHIA_LOG_LEVEL", "DEBUG")
+
+    assert unknown_variables(tmp_path / "absent.env") == []
+    assert unknown_variables(None) == []
 
 
 def test_settings_are_immutable() -> None:

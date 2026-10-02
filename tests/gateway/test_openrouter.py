@@ -11,7 +11,7 @@ from synthia.gateway.assemble import GATEWAY_DB, build_gateway
 from synthia.gateway.cassette import CassetteTransport
 from synthia.gateway.openai_compat import OpenAICompatibleModel
 from synthia.gateway.protocol import collect
-from synthia.gateway.providers import OPENROUTER, openrouter_endpoint, openrouter_info
+from synthia.gateway.providers import OPENROUTER, OPENROUTER_FREE
 from synthia.gateway.structured import generate
 from synthia.gateway.types import ChatResponse, FinishReason
 from synthia.kernel.bus import Event
@@ -33,8 +33,8 @@ async def replay(name: str) -> ChatResponse:
     async with httpx.AsyncClient(transport=cassette) as client:
         model = OpenAICompatibleModel(
             client=client,
-            endpoint=openrouter_endpoint(SecretStr(KEY)),
-            info=openrouter_info(),
+            endpoint=OPENROUTER_FREE.endpoint(SecretStr(KEY)),
+            info=OPENROUTER_FREE.model,
         )
         response = await collect(model.stream(SCENARIOS[name]))
     assert cassette.unplayed == 0
@@ -74,8 +74,8 @@ async def test_a_structured_reply_validates_against_its_schema() -> None:
     async with httpx.AsyncClient(transport=cassette) as client:
         model = OpenAICompatibleModel(
             client=client,
-            endpoint=openrouter_endpoint(SecretStr(KEY)),
-            info=openrouter_info(),
+            endpoint=OPENROUTER_FREE.endpoint(SecretStr(KEY)),
+            info=OPENROUTER_FREE.model,
         )
         answer = await generate(model, SCENARIOS["structured"], Capital)
 

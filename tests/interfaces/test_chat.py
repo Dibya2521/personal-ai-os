@@ -4,6 +4,7 @@ import json
 import logging
 import signal
 from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -13,6 +14,7 @@ from rich.console import Console
 from typer.testing import CliRunner
 
 from synthia.gateway.assemble import build_gateway
+from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.gateway.types import ChatChunk, Reasoning
 from synthia.interfaces import cli
 from synthia.interfaces.chat import (
@@ -363,16 +365,13 @@ def test_the_command_refuses_to_start_without_a_key_or_with_an_unknown_persona(
     assert KEY not in no_persona.stderr + no_persona.stdout
 
 
+# Nothing listens on port 9, so a request wrongly sent remote fails fast.
+UNREACHABLE = replace(OPENROUTER_FREE, base_url="http://127.0.0.1:9/api/v1")
+
+
 def remote_spent(tmp_path: Path, **values: object) -> Settings:
-    # Nothing listens on port 9, so a request wrongly sent remote fails fast.
     return Settings.model_validate(
-        {
-            "home": tmp_path,
-            "openrouter_base_url": "http://127.0.0.1:9/api/v1",
-            "remote_daily_cap": 0,
-            "remote_reserve": 0,
-        }
-        | values
+        {"home": tmp_path, "remote_daily_cap": 0, "remote_reserve": 0} | values
     )
 
 
@@ -391,6 +390,7 @@ def test_with_the_remote_budget_spent_the_local_model_answers(tmp_path: Path) ->
         screen,
         read,
         local=service,
+        remote=UNREACHABLE,
     )
 
     text = out.getvalue()
@@ -406,7 +406,13 @@ def test_the_local_model_is_not_started_when_the_chat_cannot_begin(
     service = service_at(tmp_path)
 
     with pytest.raises(ConfigError):
-        run_chat(remote_spent(tmp_path), "synthia", console()[0], local=service)
+        run_chat(
+            remote_spent(tmp_path),
+            "synthia",
+            console()[0],
+            local=service,
+            remote=UNREACHABLE,
+        )
 
     assert service.server.running is None
     assert not service_threads()

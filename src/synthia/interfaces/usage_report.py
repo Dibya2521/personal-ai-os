@@ -10,11 +10,12 @@ import httpx
 from synthia.gateway.assemble import GATEWAY_DB
 from synthia.gateway.budget import BudgetLedger
 from synthia.gateway.errors import GatewayError
-from synthia.gateway.providers import OPENROUTER
+from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.gateway.usage import UsageLog, free_requests_today
 
 if TYPE_CHECKING:
     from synthia.gateway.budget import BudgetStatus
+    from synthia.gateway.providers import RemoteProvider
     from synthia.gateway.usage import ProviderCount
     from synthia.kernel.config import Settings
 
@@ -32,11 +33,12 @@ async def budget_report(
     *,
     check: bool,
     transport: httpx.AsyncBaseTransport | None = None,
+    remote: RemoteProvider = OPENROUTER_FREE,
 ) -> Report:
     """Describe today's use; with ``check``, compare with OpenRouter's own count."""
     path = settings.home / GATEWAY_DB
-    ledger = BudgetLedger(path, {OPENROUTER: settings.remote_daily_cap})
-    status = await ledger.status(OPENROUTER)
+    ledger = BudgetLedger(path, {remote.name: settings.remote_daily_cap})
+    status = await ledger.status(remote.name)
     summary = (
         f"remote requests today ({status.day} UTC): {status.used} of "
         f"{status.cap} used, {status.remaining} left, "
@@ -52,7 +54,7 @@ async def budget_report(
             f"and {t.completion_tokens} out, {t.seconds:.1f} s"
         )
     if check:
-        await _check(settings, status, report, transport)
+        await _check(settings, status, report, transport, remote)
     return report
 
 
@@ -61,6 +63,7 @@ async def _check(
     status: BudgetStatus,
     report: Report,
     transport: httpx.AsyncBaseTransport | None,
+    remote: RemoteProvider,
 ) -> None:
     key = settings.openrouter_api_key
     if key is None:
@@ -69,7 +72,7 @@ async def _check(
         return
     async with httpx.AsyncClient(transport=transport) as client:
         try:
-            count = await free_requests_today(client, key, settings.openrouter_base_url)
+            count = await free_requests_today(client, key, remote.base_url)
         except GatewayError as error:
             report.lines.append(f"could not ask OpenRouter: {error}")
             report.complete = False

@@ -19,6 +19,7 @@ from rich.text import Text
 
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.errors import GatewayError
+from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.interfaces.commands import (
     HELP,
     AdjustPersona,
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
     from rich.console import Console
 
     from synthia.gateway.assemble import Gateway
+    from synthia.gateway.providers import RemoteProvider
     from synthia.gateway.types import ChatChunk, ImagePart
     from synthia.kernel.config import Settings
     from synthia.models.service import LocalService
@@ -302,6 +304,7 @@ def run_chat(  # noqa: PLR0913
     transport: httpx.AsyncBaseTransport | None = None,
     *,
     local: LocalService | None = None,
+    remote: RemoteProvider = OPENROUTER_FREE,
 ) -> None:
     """Hold a chat in the terminal until the user leaves.
 
@@ -317,7 +320,7 @@ def run_chat(  # noqa: PLR0913
         client = httpx.AsyncClient(transport=transport, timeout=TIMEOUT)
         try:
             model = None if local is None else local.model(client)
-            gateway = build_gateway(settings, client, routes, model)
+            gateway = build_gateway(settings, client, routes, model, remote=remote)
             session = ChatSession(gateway.model, library, persona, routes)
             if local is not None:
                 local.start()

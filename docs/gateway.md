@@ -22,9 +22,13 @@ one provider's wire format; nothing above the adapter ever sees that format.
 Both providers SYNTHIA uses today, OpenRouter and the llama.cpp server, speak
 the OpenAI-compatible chat API, so a single adapter serves both
 (`synthia/gateway/openai_compat.py`). A provider is a base URL, headers and a
-record of what its model can do: context window, images, tools. A third
-provider speaking another protocol would be one more adapter behind the same
-interface.
+record of what its model can do: context window, images, tools. The remote
+provider is one record, `OPENROUTER_FREE` in `synthia/gateway/providers.py`.
+It asks for `openrouter/free` at `https://openrouter.ai/api/v1` and holds the
+rate limit of 20 requests a minute. Provider facts live in that record, so
+`.env` holds only what belongs to the person running SYNTHIA, such as the key.
+A second remote provider would be a second record. A provider speaking another
+protocol would be one more adapter behind the same interface.
 
 ## The path of a request
 
@@ -156,7 +160,7 @@ one's reason is below.
 | --- | --- | --- |
 | retry | send again after a transient failure, never once output has started | 3 attempts; wait drawn from 0 to min(8 s, 0.5 s x 2^(n-1)); a `Retry-After` up to 30 s is honoured, a longer one fails at once |
 | circuit breaker | after repeated failures, stop calling the provider for a while | opens after 3 failures in a row; one probe after 30 s |
-| rate limit | at most N requests in any 60 seconds | 20 (`SYNTHIA_REMOTE_RPM`) |
+| rate limit | at most N requests in any 60 seconds | 20, OpenRouter's documented limit for free models |
 | budget | at most N requests per UTC day, claimed before sending | 50 (`SYNTHIA_REMOTE_DAILY_CAP`) |
 
 **Retry** (`synthia/gateway/retry.py`). Only a failure that may succeed when the
@@ -303,11 +307,12 @@ token. `uv run python scripts/record_cassettes.py` records them again.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SYNTHIA_OPENROUTER_API_KEY` | unset | the remote model's key; without it the chat does not start |
-| `SYNTHIA_OPENROUTER_MODEL` | `openrouter/free` | picks a free model per request |
-| `SYNTHIA_OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | change only to go through a proxy |
 | `SYNTHIA_REMOTE_DAILY_CAP` | `50` | remote requests per UTC day |
-| `SYNTHIA_REMOTE_RPM` | `20` | remote requests in any 60 seconds |
 | `SYNTHIA_REMOTE_RESERVE` | `10` | at or below this many left, requests go local |
 | `SYNTHIA_LOCAL_MODEL` | `qwen3.5-4b` | a name from `synthia models list` |
 | `SYNTHIA_LOCAL_BACKEND` | `auto` | `auto`, `cpu`, `vulkan`, `cuda` or `metal` |
 | `SYNTHIA_LOCAL_CONTEXT` | `32768` | tokens the local model holds |
+
+A `SYNTHIA_` variable that is not a setting does nothing. Every command that
+reads the settings names each one in a warning on stderr; `.env.example` lists
+every setting.

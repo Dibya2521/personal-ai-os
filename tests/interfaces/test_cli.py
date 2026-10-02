@@ -58,6 +58,29 @@ def test_doctor_is_ok_with_a_key_set(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "sk-test" not in result.stdout
 
 
+def test_a_variable_that_is_not_a_setting_is_named_on_stderr_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".env").write_text("SYNTHIA_REMOTE_RPM=5\n")
+    monkeypatch.setenv("SYNTHIA_OPENROUTER_MODEL", "vendor/model")
+
+    result = runner.invoke(app, ["doctor", "--json"])
+
+    assert result.stderr == (
+        "warning: not a setting, ignored: SYNTHIA_OPENROUTER_MODEL, "
+        "SYNTHIA_REMOTE_RPM (.env.example lists every setting)\n"
+    )
+    assert {c["name"] for c in json.loads(result.stdout)} >= {"python", "openrouter"}
+    assert "SYNTHIA_REMOTE_RPM" not in result.stdout
+    assert "SYNTHIA_OPENROUTER_MODEL" not in result.stdout
+
+
+def test_with_only_settings_set_there_is_no_warning() -> None:
+    result = runner.invoke(app, ["doctor", "--json"])
+
+    assert "warning" not in result.stderr
+
+
 def test_invalid_configuration_fails_without_echoing_the_value(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
