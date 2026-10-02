@@ -133,6 +133,45 @@ def test_a_negative_cap_is_rejected(tmp_path: Path) -> None:
         BudgetLedger(tmp_path / "gateway.db", {"openrouter": -1})
 
 
+async def test_a_reported_cap_replaces_the_given_one_and_survives_a_restart(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 10, 2, tzinfo=UTC)
+    ledger, _ = ledger_at(tmp_path / "gateway.db", now, cap=50)
+
+    await ledger.set_cap("openrouter", 1000)
+    reopened, _ = ledger_at(tmp_path / "gateway.db", now, cap=50)
+
+    assert (await ledger.status("openrouter")).cap == 1000
+    assert (await reopened.claim("openrouter")).remaining == 999
+
+
+async def test_a_cap_reported_to_one_ledger_holds_in_another_on_the_same_file(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 10, 2, tzinfo=UTC)
+    chat, _ = ledger_at(tmp_path / "gateway.db", now, cap=2)
+    report, _ = ledger_at(tmp_path / "gateway.db", now, cap=2)
+    await chat.claim("openrouter")
+
+    await report.set_cap("openrouter", 1)
+
+    with pytest.raises(BudgetExhaustedError, match="all 1 of"):
+        await chat.claim("openrouter")
+
+
+async def test_a_reported_cap_must_be_valid_and_for_a_known_provider(
+    tmp_path: Path,
+) -> None:
+    ledger, _ = ledger_at(tmp_path / "gateway.db", datetime(2026, 10, 2, tzinfo=UTC))
+
+    with pytest.raises(ValueError, match="negative"):
+        await ledger.set_cap("openrouter", -1)
+    with pytest.raises(KeyError):
+        await ledger.set_cap("unconfigured", 10)
+    assert (await ledger.status("openrouter")).cap == 3
+
+
 async def test_concurrent_claims_never_exceed_the_cap(tmp_path: Path) -> None:
     ledger, _ = ledger_at(
         tmp_path / "gateway.db", datetime(2026, 9, 23, tzinfo=UTC), cap=50

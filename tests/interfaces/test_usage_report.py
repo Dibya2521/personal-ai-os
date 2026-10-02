@@ -65,7 +65,7 @@ MATCHES = "that matches this machine"
 MORE = "2 more than this machine counted: something else is using this key"
 FEWER = "1 fewer than this machine counted: some requests never reached OpenRouter"
 RAISE_CAP = (
-    "OpenRouter allows 1000 a day; set SYNTHIA_REMOTE_DAILY_CAP=1000 to use them"
+    "OpenRouter allows 1000 a day, not 50; this machine uses that cap from now on"
 )
 
 
@@ -94,6 +94,15 @@ async def test_the_check_compares_with_openrouters_own_count(
     )
     assert report.lines[3:] == expected
     assert report.complete
+
+
+async def test_the_cap_the_check_learns_holds_for_later_reports(tmp_path: Path) -> None:
+    settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
+
+    await budget_report(settings, check=True, transport=provider_says(0, 1000))
+    later = await budget_report(settings, check=False)
+
+    assert later.lines[0].endswith("0 of 1000 used, 1000 left, 10 kept in reserve")
 
 
 async def test_the_check_asks_the_provider_it_is_given(tmp_path: Path) -> None:
@@ -142,10 +151,10 @@ def test_the_command_prints_the_report_and_exits_1_when_the_check_is_incomplete(
 
     plain = cli.invoke(app, ["budget"])
     checked = cli.invoke(app, ["budget", "--check"])
-    monkeypatch.setenv("SYNTHIA_REMOTE_DAILY_CAP", "-1")
+    monkeypatch.setenv("SYNTHIA_DISK_BUDGET_GB", "-1")
     broken = cli.invoke(app, ["budget"])
 
     assert (plain.exit_code, checked.exit_code, broken.exit_code) == (0, 1, 2)
     assert "0 of 50 used" in plain.stdout
     assert "set SYNTHIA_OPENROUTER_API_KEY" in checked.stdout
-    assert "SYNTHIA_REMOTE_DAILY_CAP" in broken.stderr
+    assert "SYNTHIA_DISK_BUDGET_GB" in broken.stderr

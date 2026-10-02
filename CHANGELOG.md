@@ -50,8 +50,11 @@ a free remote model and an optional local one, under a daily budget.
 - Remote guards: retry of transient failures (3 attempts, full-jitter backoff,
   `Retry-After` honoured up to 30 s), a circuit breaker (opens after 3
   failures in a row, probes after 30 s), a sliding-window rate limit (20 in any
-  60 s) and a daily budget (50 per UTC day) claimed before each request is
-  sent and refused locally once spent.
+  60 s) and a daily budget claimed before each request is sent and refused
+  locally once spent. The budget's cap is the one OpenRouter reports for the
+  key (50 on the free tier, 1000 once 10 credits are bought), asked in the
+  background when a chat starts and by `synthia budget --check`, and stored so
+  it holds across restarts; 50 until OpenRouter has answered.
 - `synthia budget`: today's remote requests, tokens and time per model;
   `--check` also asks OpenRouter for its own count, which costs no request,
   and says whether the two match.
@@ -75,7 +78,7 @@ a free remote model and an optional local one, under a daily budget.
 - Structured output validated against a pydantic model, with up to two repair
   requests, and an opt-in cache of complete answers, for callers that want
   them.
-- Settings `SYNTHIA_REMOTE_DAILY_CAP`, `SYNTHIA_REMOTE_RESERVE`,
+- Settings `SYNTHIA_REMOTE_RESERVE`,
   `SYNTHIA_PERSONA`, `SYNTHIA_LOCAL_MODEL`, `SYNTHIA_LOCAL_BACKEND` and
   `SYNTHIA_LOCAL_CONTEXT`, each documented in `.env.example`.
 - A warning on stderr naming every `SYNTHIA_` variable, in the environment or

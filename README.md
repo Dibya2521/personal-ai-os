@@ -96,8 +96,9 @@ in [`docs/gateway.md`](docs/gateway.md).
   remote circuit is open, when 10 or fewer of the day's requests are left, or
   when the rate limit would make it wait over 5 seconds. A remote failure before the first word falls back to local once.
 - **Guards.** Retry with full-jitter backoff, a circuit breaker, a
-  sliding-window rate limit (20 in any 60 seconds) and a daily budget (50 per
-  UTC day) claimed before a request leaves the machine, so the provider never
+  sliding-window rate limit (20 in any 60 seconds) and a daily budget (the cap
+  OpenRouter reports for the key, 50 on the free tier) claimed before a request
+  leaves the machine, so the provider never
   sees a request over the limit. Every call is accounted per model, and
   `synthia budget --check` compares the count with OpenRouter's own.
 - **Local model.** Qwen3.5-4B with vision, run by llama.cpp's server on

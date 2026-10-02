@@ -22,15 +22,17 @@ APP_TITLE: Final = "SYNTHIA"
 
 @dataclass(frozen=True, slots=True)
 class RemoteProvider:
-    """A remote provider: where it is, the model asked for, and its rate limit.
+    """A remote provider: where it is, the model asked for, and its limits.
 
-    ``name`` is the key the daily budget is counted under.
+    ``name`` is the key the daily budget is counted under. ``daily_cap`` is
+    used until the provider has reported the cap of the key in use.
     """
 
     name: str
     base_url: str
     model: ModelInfo
     requests_per_minute: int
+    daily_cap: int
     headers: Mapping[str, str]
 
     def endpoint(self, api_key: SecretStr) -> Endpoint:
@@ -48,5 +50,8 @@ OPENROUTER_FREE: Final = RemoteProvider(
     model=ModelInfo("openrouter/free", 32_768, vision=True, tools=True),
     # OpenRouter's documented rate limit for free models.
     requests_per_minute=20,
+    # OpenRouter's free-model limit per UTC day for a key with under 10 credits
+    # bought; 1000 once 10 are bought, which the key's own record reports.
+    daily_cap=50,
     headers=MappingProxyType({"HTTP-Referer": APP_URL, "X-Title": APP_TITLE}),
 )

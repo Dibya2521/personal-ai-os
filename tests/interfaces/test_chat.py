@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import signal
+import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -42,6 +43,7 @@ from tests.models.test_service import (
     setup_at,
     wait_until,
 )
+from tests.timing import HANG_TIMEOUT_S
 
 KEY = "sk-or-v1-chat-test-key-000"  # pragma: allowlist secret
 
@@ -148,6 +150,8 @@ def test_a_level_set_with_think_is_sent_and_reported(tmp_path: Path) -> None:
     bodies: list[dict[str, object]] = []
 
     def reply(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404)
         bodies.append(json.loads(request.content))
         return httpx.Response(200, content=thinking_then("Done."))
 
@@ -168,6 +172,54 @@ def test_a_level_set_with_think_is_sent_and_reported(tmp_path: Path) -> None:
     assert reasoning == [{"max_tokens": 1500}, {"effort": "none"}]
     assert "remote | vendor/free | thinking high | 30 in, 2 out |" in text
     assert "remote | vendor/free | thinking off | 30 in, 2 out |" in text
+
+
+def test_the_chat_asks_for_the_keys_daily_cap_while_the_first_answer_streams(
+    tmp_path: Path,
+) -> None:
+    asked: list[str] = []
+    key_asked = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            asked.append(request.url.path)
+            key_asked.set()
+            return httpx.Response(404)
+        await asyncio.wait_for(key_asked.wait(), HANG_TIMEOUT_S)
+        return httpx.Response(200, content=answer("Hello."))
+
+    screen, out = console()
+    run_chat(
+        settings(tmp_path),
+        "synthia",
+        screen,
+        scripted("hello"),
+        httpx.MockTransport(handler),
+    )
+
+    assert asked == ["/api/v1/key"]
+    assert "Hello." in out.getvalue()
+
+
+def test_a_cap_question_that_never_answers_does_not_hold_the_chat_open(
+    tmp_path: Path,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            await asyncio.Event().wait()
+        return httpx.Response(200, content=answer("Hello."))
+
+    screen, out = console()
+    chat = threading.Thread(
+        target=run_chat,
+        args=(settings(tmp_path), "synthia", screen, scripted("hello")),
+        kwargs={"transport": httpx.MockTransport(handler)},
+    )
+    chat.start()
+    chat.join(HANG_TIMEOUT_S)
+
+    assert not chat.is_alive()
+    assert "Hello." in out.getvalue()
 
 
 def test_the_thinking_line_shows_while_thinking_and_leaves_only_the_answer(
@@ -234,7 +286,13 @@ def test_ctrl_c_mid_answer_stops_it_closes_the_stream_and_keeps_chatting(
     tmp_path: Path,
 ) -> None:
     body = InterruptedBody()
-    transport = httpx.MockTransport(lambda _: httpx.Response(200, stream=body))
+    transport = httpx.MockTransport(
+        lambda request: (
+            httpx.Response(404)
+            if request.method == "GET"
+            else httpx.Response(200, stream=body)
+        )
+    )
     screen, out = console()
     read = scripted("tell me a story", "/model")
 
@@ -365,14 +423,13 @@ def test_the_command_refuses_to_start_without_a_key_or_with_an_unknown_persona(
     assert KEY not in no_persona.stderr + no_persona.stdout
 
 
-# Nothing listens on port 9, so a request wrongly sent remote fails fast.
-UNREACHABLE = replace(OPENROUTER_FREE, base_url="http://127.0.0.1:9/api/v1")
+# No budget, so every request goes local; and nothing listens on port 9, so a
+# request wrongly sent remote fails fast.
+NO_REMOTE = replace(OPENROUTER_FREE, base_url="http://127.0.0.1:9/api/v1", daily_cap=0)
 
 
 def remote_spent(tmp_path: Path, **values: object) -> Settings:
-    return Settings.model_validate(
-        {"home": tmp_path, "remote_daily_cap": 0, "remote_reserve": 0} | values
-    )
+    return Settings.model_validate({"home": tmp_path, "remote_reserve": 0} | values)
 
 
 def test_with_the_remote_budget_spent_the_local_model_answers(tmp_path: Path) -> None:
@@ -390,7 +447,7 @@ def test_with_the_remote_budget_spent_the_local_model_answers(tmp_path: Path) ->
         screen,
         read,
         local=service,
-        remote=UNREACHABLE,
+        remote=NO_REMOTE,
     )
 
     text = out.getvalue()
@@ -411,7 +468,7 @@ def test_the_local_model_is_not_started_when_the_chat_cannot_begin(
             "synthia",
             console()[0],
             local=service,
-            remote=UNREACHABLE,
+            remote=NO_REMOTE,
         )
 
     assert service.server.running is None

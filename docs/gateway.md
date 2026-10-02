@@ -161,7 +161,7 @@ one's reason is below.
 | retry | send again after a transient failure, never once output has started | 3 attempts; wait drawn from 0 to min(8 s, 0.5 s x 2^(n-1)); a `Retry-After` up to 30 s is honoured, a longer one fails at once |
 | circuit breaker | after repeated failures, stop calling the provider for a while | opens after 3 failures in a row; one probe after 30 s |
 | rate limit | at most N requests in any 60 seconds | 20, OpenRouter's documented limit for free models |
-| budget | at most N requests per UTC day, claimed before sending | 50 (`SYNTHIA_REMOTE_DAILY_CAP`) |
+| budget | at most N requests per UTC day, claimed before sending | the cap OpenRouter reports for the key; 50 until it has answered |
 
 **Retry** (`synthia/gateway/retry.py`). Only a failure that may succeed when the
 identical request is sent again is retried: HTTP 429, 408 and 5xx, a dropped
@@ -197,6 +197,15 @@ claim is one `BEGIN IMMEDIATE` transaction, which takes the write lock before
 reading, so two processes can never both see room for the last request. Days
 are UTC days because the provider's counter resets at UTC midnight; a local
 midnight would disagree with it for hours every day.
+
+The cap comes from the key itself. When a chat starts, it asks OpenRouter's
+`/key` record for the key's free-model limit in the background, so the first
+answer never waits for it, and `synthia budget --check` asks the same question.
+That question is not a model request and costs no budget. The answer is stored
+in the same database and read inside each claim, so every process uses it at
+once, and it still holds after a restart or an offline start. Until OpenRouter
+has answered once, the cap is 50, the free-tier limit. If it cannot answer, the
+cap stays as it was.
 
 **Why the limiter comes before the claim.** A rate-limit wait can be cancelled
 for free; a budget claim is never given back. Waiting first means a request
@@ -307,7 +316,6 @@ token. `uv run python scripts/record_cassettes.py` records them again.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `SYNTHIA_OPENROUTER_API_KEY` | unset | the remote model's key; without it the chat does not start |
-| `SYNTHIA_REMOTE_DAILY_CAP` | `50` | remote requests per UTC day |
 | `SYNTHIA_REMOTE_RESERVE` | `10` | at or below this many left, requests go local |
 | `SYNTHIA_LOCAL_MODEL` | `qwen3.5-4b` | a name from `synthia models list` |
 | `SYNTHIA_LOCAL_BACKEND` | `auto` | `auto`, `cpu`, `vulkan`, `cuda` or `metal` |

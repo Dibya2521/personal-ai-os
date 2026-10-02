@@ -318,14 +318,20 @@ def run_chat(  # noqa: PLR0913
     routes = LastRoute()
     with asyncio.Runner() as runner:
         client = httpx.AsyncClient(transport=transport, timeout=TIMEOUT)
+        learning: asyncio.Task[int | None] | None = None
         try:
             model = None if local is None else local.model(client)
             gateway = build_gateway(settings, client, routes, model, remote=remote)
             session = ChatSession(gateway.model, library, persona, routes)
+            # Runs while the first turns run, so the answer never waits for it.
+            learning = runner.get_loop().create_task(gateway.learn_daily_cap())
             if local is not None:
                 local.start()
             converse(runner, ChatApp(session, gateway, console), read)
         finally:
             if local is not None:
                 local.stop()
+            if learning is not None:
+                learning.cancel()
+                runner.run(asyncio.wait([learning]))
             runner.run(client.aclose())

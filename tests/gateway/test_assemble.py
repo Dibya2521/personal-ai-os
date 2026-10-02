@@ -7,6 +7,7 @@ import pytest
 from pydantic import SecretStr
 
 from synthia.gateway.assemble import GATEWAY_DB, build_gateway
+from synthia.gateway.budget import BudgetLedger
 from synthia.gateway.protocol import collect
 from synthia.gateway.providers import APP_TITLE, APP_URL, OPENROUTER, OPENROUTER_FREE
 from synthia.gateway.router import Route, RouteDecided, RouteReason
@@ -43,6 +44,52 @@ def test_the_free_router_is_described_once_with_its_limits() -> None:
         "openrouter/free", 32_768, vision=True, tools=True
     )
     assert OPENROUTER_FREE.requests_per_minute == 20
+    assert OPENROUTER_FREE.daily_cap == 50
+
+
+def key_record(limit: int) -> httpx.MockTransport:
+    body = {
+        "data": {
+            "is_free_tier": False,
+            "free_model_daily_requests": {
+                "used": 0,
+                "limit": limit,
+                "remaining": limit,
+            },
+        }
+    }
+    return httpx.MockTransport(lambda _: httpx.Response(200, json=body))
+
+
+async def test_the_daily_cap_is_learned_from_the_key_and_stored(tmp_path: Path) -> None:
+    settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
+    async with httpx.AsyncClient(transport=key_record(1000)) as client:
+        gateway = build_gateway(settings, client, _ignore)
+        before = await gateway.health.ledger.status(OPENROUTER)
+
+        learned = await gateway.learn_daily_cap()
+
+    reopened = BudgetLedger(tmp_path / GATEWAY_DB, {OPENROUTER: 50})
+    after = await reopened.status(OPENROUTER)
+    assert (before.cap, learned, after.cap) == (50, 1000, 1000)
+
+
+async def test_a_key_record_that_cannot_be_read_keeps_the_cap(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    refused = httpx.MockTransport(
+        lambda _: httpx.Response(401, json={"error": {"message": "User not found."}})
+    )
+    settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
+    async with httpx.AsyncClient(transport=refused) as client:
+        gateway = build_gateway(settings, client, _ignore)
+
+        learned = await gateway.learn_daily_cap()
+        status = await gateway.health.ledger.status(OPENROUTER)
+
+    assert (learned, status.cap) == (None, 50)
+    assert "could not learn the openrouter daily cap: HTTP 401" in caplog.text
+    assert KEY not in caplog.text
 
 
 async def test_without_a_key_there_is_no_gateway_and_the_variable_is_named(

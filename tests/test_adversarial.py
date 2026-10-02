@@ -9,6 +9,7 @@ the world.
 import io
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -19,7 +20,7 @@ from rich.console import Console
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.errors import ConnectionFailedError, MalformedStreamError
 from synthia.gateway.protocol import collect
-from synthia.gateway.providers import OPENROUTER
+from synthia.gateway.providers import OPENROUTER, OPENROUTER_FREE
 from synthia.gateway.types import ChatRequest, Message
 from synthia.interfaces.chat import ChatApp
 from synthia.interfaces.commands import parse
@@ -49,10 +50,8 @@ async def _ignore(_: Event) -> None:
     return None
 
 
-def settings(tmp_path: Path, cap: int = 50) -> Settings:
-    return Settings(
-        home=tmp_path, openrouter_api_key=SecretStr(KEY), remote_daily_cap=cap
-    )
+def settings(tmp_path: Path) -> Settings:
+    return Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
 
 
 async def test_a_login_page_instead_of_a_stream_says_what_arrived(
@@ -140,7 +139,12 @@ async def chat_with(
 ) -> tuple[ChatApp, io.StringIO, httpx.AsyncClient]:
     client = httpx.AsyncClient(transport=transport)
     routes = LastRoute()
-    gateway = build_gateway(settings(tmp_path, cap), client, routes)
+    gateway = build_gateway(
+        settings(tmp_path),
+        client,
+        routes,
+        remote=replace(OPENROUTER_FREE, daily_cap=cap),
+    )
     session = ChatSession(gateway.model, PersonaLibrary(), "synthia", routes)
     out = io.StringIO()
     return (

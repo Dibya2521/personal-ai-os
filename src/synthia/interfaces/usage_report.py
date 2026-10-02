@@ -37,7 +37,7 @@ async def budget_report(
 ) -> Report:
     """Describe today's use; with ``check``, compare with OpenRouter's own count."""
     path = settings.home / GATEWAY_DB
-    ledger = BudgetLedger(path, {remote.name: settings.remote_daily_cap})
+    ledger = BudgetLedger(path, {remote.name: remote.daily_cap})
     status = await ledger.status(remote.name)
     summary = (
         f"remote requests today ({status.day} UTC): {status.used} of "
@@ -54,13 +54,13 @@ async def budget_report(
             f"and {t.completion_tokens} out, {t.seconds:.1f} s"
         )
     if check:
-        await _check(settings, status, report, transport, remote)
+        await _check(settings, ledger, report, transport, remote)
     return report
 
 
 async def _check(
     settings: Settings,
-    status: BudgetStatus,
+    ledger: BudgetLedger,
     report: Report,
     transport: httpx.AsyncBaseTransport | None,
     remote: RemoteProvider,
@@ -77,7 +77,8 @@ async def _check(
             report.lines.append(f"could not ask OpenRouter: {error}")
             report.complete = False
             return
-    report.lines += _compare(count, status)
+    report.lines += _compare(count, await ledger.status(remote.name))
+    await ledger.set_cap(remote.name, count.limit)
 
 
 def _compare(count: ProviderCount, status: BudgetStatus) -> list[str]:
@@ -97,7 +98,7 @@ def _compare(count: ProviderCount, status: BudgetStatus) -> list[str]:
         )
     if count.limit != status.cap:
         lines.append(
-            f"OpenRouter allows {count.limit} a day; set SYNTHIA_REMOTE_DAILY_CAP="
-            f"{count.limit} to use them"
+            f"OpenRouter allows {count.limit} a day, not {status.cap}; this machine "
+            "uses that cap from now on"
         )
     return lines

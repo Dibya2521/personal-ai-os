@@ -12,6 +12,11 @@ reading, so two processes can never both see room for the last request.
 
 Days are UTC days because that is when the provider's counter resets; a local
 midnight would disagree with it for hours every day.
+
+The cap a provider reports for the key in use is stored beside the count and
+read inside each claim, so every process uses it from the moment it is known,
+and it holds across restarts and offline starts. Until one is reported, the
+cap given to the ledger applies.
 """
 
 from __future__ import annotations
@@ -25,19 +30,27 @@ from typing import TYPE_CHECKING
 from synthia.gateway.errors import GatewayError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
 BUSY_TIMEOUT_S = 5.0
 
-_SCHEMA = """
+_SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS remote_requests (
     provider TEXT NOT NULL,
     day TEXT NOT NULL,
     used INTEGER NOT NULL,
     PRIMARY KEY (provider, day)
 )
-"""
+""",
+    """
+CREATE TABLE IF NOT EXISTS remote_caps (
+    provider TEXT PRIMARY KEY,
+    cap INTEGER NOT NULL
+)
+""",
+)
 
 
 class BudgetExhaustedError(GatewayError):
@@ -71,6 +84,12 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _check_caps(caps: Iterable[int]) -> None:
+    if any(cap < 0 for cap in caps):
+        message = "a daily cap cannot be negative"
+        raise ValueError(message)
+
+
 class BudgetLedger:
     """Count remote requests per provider per UTC day, and refuse past the cap."""
 
@@ -82,15 +101,14 @@ class BudgetLedger:
     ) -> None:
         """Open the ledger at ``path``, creating it if needed.
 
-        ``caps`` maps each provider to its daily request cap. ``clock`` must
-        return an aware datetime; it is injectable so tests can cross midnight.
+        ``caps`` maps each provider to its daily request cap until the
+        provider reports its own. ``clock`` must return an aware datetime; it
+        is injectable so tests can cross midnight.
 
         Raises:
             ValueError: If a cap is negative.
         """
-        if any(cap < 0 for cap in caps.values()):
-            message = "a daily cap cannot be negative"
-            raise ValueError(message)
+        _check_caps(caps.values())
         self._path = path
         self._caps = dict(caps)
         self._clock = clock
@@ -98,7 +116,8 @@ class BudgetLedger:
         connection = self._connect()
         try:
             connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute(_SCHEMA)
+            for table in _SCHEMA:
+                connection.execute(table)
         finally:
             connection.close()
 
@@ -120,6 +139,18 @@ class BudgetLedger:
         """
         return await asyncio.to_thread(self._status, provider)
 
+    async def set_cap(self, provider: str, cap: int) -> None:
+        """Store ``cap`` as the daily cap the provider reported for ``provider``.
+
+        Raises:
+            ValueError: If ``cap`` is negative.
+            KeyError: If ``provider`` has no cap configured.
+        """
+        _check_caps([cap])
+        if provider not in self._caps:
+            raise KeyError(provider)
+        await asyncio.to_thread(self._set_cap, provider, cap)
+
     def _today(self) -> tuple[str, datetime]:
         now = self._clock().astimezone(UTC)
         midnight = datetime(now.year, now.month, now.day, tzinfo=UTC)
@@ -132,11 +163,12 @@ class BudgetLedger:
         return sqlite3.connect(self._path, timeout=BUSY_TIMEOUT_S, isolation_level=None)
 
     def _claim(self, provider: str) -> BudgetStatus:
-        cap = self._caps[provider]
+        fallback = self._caps[provider]
         day, resets_at = self._today()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            cap = self._cap(connection, provider, fallback)
             used = self._used(connection, provider, day)
             if used >= cap:
                 connection.execute("ROLLBACK")
@@ -152,15 +184,36 @@ class BudgetLedger:
         return BudgetStatus(provider, day, used + 1, cap)
 
     def _status(self, provider: str) -> BudgetStatus:
-        cap = self._caps[provider]
+        fallback = self._caps[provider]
         day, _ = self._today()
         connection = self._connect()
         try:
             return BudgetStatus(
-                provider, day, self._used(connection, provider, day), cap
+                provider,
+                day,
+                self._used(connection, provider, day),
+                self._cap(connection, provider, fallback),
             )
         finally:
             connection.close()
+
+    def _set_cap(self, provider: str, cap: int) -> None:
+        connection = self._connect()
+        try:
+            connection.execute(
+                "INSERT INTO remote_caps (provider, cap) VALUES (?, ?) "
+                "ON CONFLICT (provider) DO UPDATE SET cap = excluded.cap",
+                (provider, cap),
+            )
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _cap(connection: sqlite3.Connection, provider: str, fallback: int) -> int:
+        row = connection.execute(
+            "SELECT cap FROM remote_caps WHERE provider = ?", (provider,)
+        ).fetchone()
+        return int(row[0]) if row else fallback
 
     @staticmethod
     def _used(connection: sqlite3.Connection, provider: str, day: str) -> int:
