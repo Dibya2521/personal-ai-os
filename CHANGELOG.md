@@ -101,8 +101,9 @@ budget, only when asked.
 - Structured output validated against a pydantic model, with up to two repair
   requests, and an opt-in cache of complete answers, for callers that want
   them.
-- Settings `SYNTHIA_PERSONA`, `SYNTHIA_LOCAL_MODEL` and
-  `SYNTHIA_LOCAL_BACKEND`, each documented in `.env.example`. Provider facts
+- Settings `SYNTHIA_PERSONA`, `SYNTHIA_LOCAL_MODEL`, `SYNTHIA_LOCAL_BACKEND`
+  and `SYNTHIA_FILE_ROOTS` (the folders file tools may read; none by
+  default), each documented in `.env.example`. Provider facts
   are not settings: the rate limit, the daily cap, the 10-request reserve and
   the local context (the remote's 32,768-token window, or less if the model's
   GGUF header says it was trained for less) are derived or fixed in code.

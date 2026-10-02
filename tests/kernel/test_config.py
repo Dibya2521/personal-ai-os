@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 
@@ -30,6 +31,14 @@ def test_defaults_apply_when_nothing_is_set() -> None:
     assert settings.disk_budget_gb == DEFAULT_DISK_BUDGET_GB
     assert settings.openrouter_api_key is None
     assert settings.persona == DEFAULT_PERSONA == "synthia"
+    assert settings.file_roots == ()
+
+
+def test_file_roots_split_like_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    joined = os.pathsep.join(["first", "", "  ", "second"])
+    monkeypatch.setenv("SYNTHIA_FILE_ROOTS", joined)
+
+    assert load_settings(env_file=None).file_roots == (Path("first"), Path("second"))
 
 
 def test_environment_variables_are_read_with_the_prefix(

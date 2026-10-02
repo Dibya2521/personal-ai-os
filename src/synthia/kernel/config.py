@@ -8,15 +8,18 @@ step with this module.
 
 from __future__ import annotations
 
+import os
 from enum import StrEnum
 from pathlib import Path
+from typing import Annotated
 
 import platformdirs
-from pydantic import Field, SecretStr, ValidationError
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import (
     BaseSettings,
     DotEnvSettingsSource,
     EnvSettingsSource,
+    NoDecode,
     SettingsConfigDict,
 )
 
@@ -85,6 +88,15 @@ class Settings(BaseSettings):
     persona: str = Field(default=DEFAULT_PERSONA, min_length=1)
     local_model: str = Field(default=DEFAULT_LOCAL_MODEL, min_length=1)
     local_backend: LocalBackend = LocalBackend.AUTO
+    file_roots: Annotated[tuple[Path, ...], NoDecode] = ()
+
+    @field_validator("file_roots", mode="before")
+    @classmethod
+    def _split_paths(cls, value: object) -> object:
+        """Split a path list as PATH is split: ``;`` on Windows, ``:`` elsewhere."""
+        if isinstance(value, str):
+            return tuple(Path(p) for p in value.split(os.pathsep) if p.strip())
+        return value
 
 
 def load_settings(env_file: Path | None = DEFAULT_ENV_FILE) -> Settings:
