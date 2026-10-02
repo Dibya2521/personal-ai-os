@@ -3,7 +3,7 @@
 Killing a process leaves the processes it started running. On Windows the
 child is put in a Job Object, which ``TerminateJobObject`` ends with every
 process started inside it. On POSIX the child leads a new session, and
-``killpg`` ends its process group. The child receives its input only after it
+``killpg`` ends its process group. The child can be sent input only after it
 is contained, so nothing it starts can be outside.
 
 A descendant can still leave: on POSIX by calling ``setsid``, and on Windows by
@@ -22,8 +22,9 @@ import sys
 from typing import TYPE_CHECKING, Final, cast, override
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
+    from typing import IO
 
 KILLED_EXIT_CODE: Final = 1
 DRAIN_TIMEOUT_S: Final = 5.0
@@ -161,26 +162,22 @@ else:
             self._group = None
 
 
-class _Collector(asyncio.SubprocessProtocol):
-    """Keeps the output, and tells apart the process exiting and its output ending.
+class _Pipes(asyncio.SubprocessProtocol):
+    """Hands on the output, and tells apart the process exiting and its output ending.
 
     ``asyncio.subprocess.Process.wait`` returns only once every pipe is closed,
     so a process the child left running, holding the output open, would make
     the child look alive; ``process_exited`` comes when the child itself exits.
     """
 
-    def __init__(self, limit: int) -> None:
-        self.output = bytearray()
-        self.limit = limit
+    def __init__(self, on_output: Callable[[bytes], None]) -> None:
+        self._on_output = on_output
         self.exited = asyncio.Event()
-        self.overflowed = asyncio.Event()
         self.output_closed = asyncio.Event()
 
     @override
     def pipe_data_received(self, fd: int, data: bytes) -> None:
-        self.output += data
-        if len(self.output) > self.limit:
-            self.overflowed.set()
+        self._on_output(data)
 
     @override
     def pipe_connection_lost(self, fd: int, exc: Exception | None) -> None:
@@ -195,44 +192,46 @@ class _Collector(asyncio.SubprocessProtocol):
 class ProcessTree:
     """A running process and everything it starts, ended together.
 
-    Output and errors arrive together in ``output``, at most a little past
-    ``limit`` bytes before ``overflowed`` is set.
+    It is contained before :meth:`start` returns, so input sent with
+    :meth:`send` reaches a process that cannot start anything outside.
     """
 
     def __init__(
         self,
         transport: asyncio.SubprocessTransport,
-        collector: _Collector,
+        pipes: _Pipes,
         containment: _Containment,
     ) -> None:
         self._transport = transport
-        self._collector = collector
         self._containment = containment
-        self.output = collector.output
-        self.exited = collector.exited
-        self.overflowed = collector.overflowed
-        self.output_closed = collector.output_closed
+        self._input = cast("asyncio.WriteTransport", transport.get_pipe_transport(0))
+        self.exited = pipes.exited
+        self.output_closed = pipes.output_closed
 
     @classmethod
     async def start(
         cls,
         argv: Sequence[str],
         *,
-        stdin: bytes,
         cwd: Path,
         env: Mapping[str, str],
-        limit: int,
+        on_output: Callable[[bytes], None],
+        errors: int | IO[bytes] = subprocess.STDOUT,
     ) -> ProcessTree:
-        """Start ``argv`` contained, then send it ``stdin`` and close its input."""
+        """Start ``argv`` contained; its output goes to ``on_output`` as it comes.
+
+        ``errors`` is where its standard error goes: with the output (the
+        default), or a file.
+        """
         containment = _Containment()
         loop = asyncio.get_running_loop()
         try:
-            transport, collector = await loop.subprocess_exec(
-                lambda: _Collector(limit),
+            transport, pipes = await loop.subprocess_exec(
+                lambda: _Pipes(on_output),
                 *argv,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                stderr=errors,
                 cwd=cwd,
                 env=dict(env),
                 creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
@@ -241,17 +240,22 @@ class ProcessTree:
         except BaseException:
             containment.close()
             raise
-        tree = cls(transport, collector, containment)
+        tree = cls(transport, pipes, containment)
         try:
             containment.hold(transport.get_pid())
-            pipe = cast("asyncio.WriteTransport", transport.get_pipe_transport(0))
-            pipe.write(stdin)
-            # Closing still sends what was written, unless the child exits first.
-            pipe.close()
         except BaseException:
             await tree.end()
             raise
         return tree
+
+    def send(self, data: bytes) -> None:
+        """Write ``data`` to the process's input; ignored once the input is closed."""
+        if not self._input.is_closing():
+            self._input.write(data)
+
+    def close_input(self) -> None:
+        """Close the process's input; what was sent is still delivered."""
+        self._input.close()
 
     @property
     def exit_code(self) -> int | None:

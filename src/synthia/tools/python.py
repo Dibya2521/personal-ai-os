@@ -60,32 +60,43 @@ async def run_code(
     executable: str = sys.executable,
 ) -> Run:
     """Run ``code`` in a new Python process in a new empty directory."""
+    output = bytearray()
+    overflowed = asyncio.Event()
+
+    def take(data: bytes) -> None:
+        output.extend(data)
+        if len(output) > max_output_bytes:
+            overflowed.set()
+
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
         work = Path(directory)
         tree = await ProcessTree.start(
             [executable, *PYTHON_FLAGS],
-            stdin=code.encode(),
             cwd=work,
             env=child_environment(work),
-            limit=max_output_bytes,
+            on_output=take,
         )
         try:
-            timed_out = not await _exit_or_overflow(tree, timeout_s)
+            tree.send(code.encode())
+            tree.close_input()
+            timed_out = not await _first(tree.exited, overflowed, timeout_s)
         finally:
             # Also ends whatever the code left running, which would hold the
             # output open.
             await tree.end()
-    head = _text(tree.output[:max_output_bytes])
+    head = _text(output[:max_output_bytes])
     if timed_out:
         return Run(head, None, timed_out=True)
-    if tree.overflowed.is_set():
+    if overflowed.is_set():
         return Run(head, None, output_cut=True)
-    return Run(_text(tree.output), tree.exit_code)
+    return Run(_text(output), tree.exit_code)
 
 
-async def _exit_or_overflow(tree: ProcessTree, timeout_s: float) -> bool:
+async def _first(
+    exited: asyncio.Event, overflowed: asyncio.Event, timeout_s: float
+) -> bool:
     """Wait until the process exits or prints too much; False if time ran out."""
-    waits = [asyncio.ensure_future(e.wait()) for e in (tree.exited, tree.overflowed)]
+    waits = [asyncio.ensure_future(e.wait()) for e in (exited, overflowed)]
     try:
         _, pending = await asyncio.wait(
             waits, timeout=timeout_s, return_when=asyncio.FIRST_COMPLETED
