@@ -17,7 +17,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import shutil
 import tomllib
 from dataclasses import dataclass, field
@@ -32,6 +31,7 @@ from synthia.gateway.types import ToolSpec
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.mcp.jsonrpc import Connection, ConnectionClosedError, RpcError
 from synthia.tools.process_tree import ProcessTree
+from synthia.tools.run import environment_without_own
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -47,7 +47,6 @@ STOP_TIMEOUT_S: Final = 5.0
 MAX_RESULT_CHARS: Final = 20_000
 SEPARATOR: Final = "__"
 _SERVER_NAME: Final = r"^[A-Za-z0-9-]{1,24}$"
-_OWN_PREFIX: Final = "SYNTHIA_"
 
 logger = logging.getLogger(__name__)
 
@@ -94,16 +93,6 @@ def load_config(path: Path) -> dict[str, ServerConfig]:
 def _open_log(log_dir: Path, name: str) -> BinaryIO:
     log_dir.mkdir(parents=True, exist_ok=True)
     return (log_dir / f"{name}.log").open("ab")
-
-
-def server_environment(extra: Mapping[str, str]) -> dict[str, str]:
-    """Return the environment without SYNTHIA's own variables, plus ``extra``."""
-    inherited = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.upper().startswith(_OWN_PREFIX)
-    }
-    return inherited | dict(extra)
 
 
 @dataclass(slots=True)
@@ -182,7 +171,7 @@ class McpServer:
 
     @classmethod
     async def _launch(cls, name: str, config: ServerConfig, log_dir: Path) -> McpServer:
-        environment = server_environment(config.env)
+        environment = environment_without_own(config.env)
         program = shutil.which(config.command[0], path=environment.get("PATH"))
         if program is None:
             message = f"{name}: {config.command[0]} was not found"

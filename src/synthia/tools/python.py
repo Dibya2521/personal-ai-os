@@ -10,18 +10,16 @@ call asks first.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import sys
 import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Final
 
 from pydantic import Field
 
-from synthia.agent.tools import Effect, FunctionTool, Reach, ToolError
-from synthia.tools.process_tree import ProcessTree
+from synthia.agent.tools import Effect, FunctionTool, Reach
+from synthia.tools.run import Run, describe_run, run_once
 
 # Below the agent's 60 s limit per call, so the tool stops the code itself and
 # reports what it printed, instead of being cancelled with nothing to show.
@@ -31,16 +29,6 @@ MAX_OUTPUT_BYTES: Final = 20_000
 # -I ignores PYTHON* variables, the user site and the current directory on
 # sys.path; -X utf8 makes output UTF-8 whatever the console's code page.
 PYTHON_FLAGS: Final = ("-I", "-X", "utf8", "-")
-
-
-@dataclass(frozen=True, slots=True)
-class Run:
-    """What one run printed and how it ended."""
-
-    output: str
-    exit_code: int | None
-    timed_out: bool = False
-    output_cut: bool = False
 
 
 def child_environment(work: Path) -> dict[str, str]:
@@ -60,79 +48,16 @@ async def run_code(
     executable: str = sys.executable,
 ) -> Run:
     """Run ``code`` in a new Python process in a new empty directory."""
-    output = bytearray()
-    overflowed = asyncio.Event()
-
-    def take(data: bytes) -> None:
-        output.extend(data)
-        if len(output) > max_output_bytes:
-            overflowed.set()
-
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
         work = Path(directory)
-        tree = await ProcessTree.start(
+        return await run_once(
             [executable, *PYTHON_FLAGS],
             cwd=work,
             env=child_environment(work),
-            on_output=take,
+            stdin=code.encode(),
+            timeout_s=timeout_s,
+            max_output_bytes=max_output_bytes,
         )
-        try:
-            tree.send(code.encode())
-            tree.close_input()
-            timed_out = not await _first(tree.exited, overflowed, timeout_s)
-        finally:
-            # Also ends whatever the code left running, which would hold the
-            # output open.
-            await tree.end()
-    head = _text(output[:max_output_bytes])
-    if timed_out:
-        return Run(head, None, timed_out=True)
-    if overflowed.is_set():
-        return Run(head, None, output_cut=True)
-    return Run(_text(output), tree.exit_code)
-
-
-async def _first(
-    exited: asyncio.Event, overflowed: asyncio.Event, timeout_s: float
-) -> bool:
-    """Wait until the process exits or prints too much; False if time ran out."""
-    waits = [asyncio.ensure_future(e.wait()) for e in (exited, overflowed)]
-    try:
-        _, pending = await asyncio.wait(
-            waits, timeout=timeout_s, return_when=asyncio.FIRST_COMPLETED
-        )
-    finally:
-        for wait in waits:
-            wait.cancel()
-    return len(pending) < len(waits)
-
-
-def _text(output: bytes | bytearray) -> str:
-    # Windows text mode prints "\r\n"; the model gets the same text on every system.
-    return bytes(output).decode("utf-8", "replace").replace("\r\n", "\n")
-
-
-def describe_run(run: Run, timeout_s: float, max_output_bytes: int) -> str:
-    """Return the result text for the model.
-
-    Raises:
-        ToolError: If the code failed, ran out of time or printed too much;
-            the message carries what it printed.
-    """
-    printed = run.output or "(nothing printed)"
-    if run.timed_out:
-        message = f"stopped after {timeout_s:g} s; printed so far:\n{printed}"
-        raise ToolError(message)
-    if run.output_cut:
-        message = (
-            f"stopped: the output passed {max_output_bytes:,} bytes; "
-            f"the first {max_output_bytes:,}:\n{printed}"
-        )
-        raise ToolError(message)
-    if run.exit_code:
-        message = f"exit code {run.exit_code}:\n{printed}"
-        raise ToolError(message)
-    return printed
 
 
 def python_tool(

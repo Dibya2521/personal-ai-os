@@ -17,7 +17,6 @@ from synthia.mcp.client import (
     ServerConfig,
     load_config,
     result_text,
-    server_environment,
 )
 from tests.timing import HANG_TIMEOUT_S
 
@@ -138,21 +137,6 @@ async def test_the_server_sees_none_of_synthias_variables(
         assert json.loads(await call(started, "env")) == [[], "given"]
     finally:
         await started.stop()
-
-
-def test_the_environment_drops_only_synthias_own_variables(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("SYNTHIA_HOME", "x")
-    monkeypatch.setenv("synthia_lower", "x")
-    monkeypatch.setenv("NOT_SYNTHIA_HOME", "kept")
-
-    environment = server_environment({"ADDED": "1"})
-
-    assert "SYNTHIA_HOME" not in environment
-    assert "synthia_lower" not in environment
-    assert "SYNTHIA_LOWER" not in environment
-    assert (environment["NOT_SYNTHIA_HOME"], environment["ADDED"]) == ("kept", "1")
 
 
 async def test_long_results_are_cut_and_other_parts_are_named(
