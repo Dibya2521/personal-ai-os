@@ -108,19 +108,27 @@ class FunctionTool:
 
         Raises:
             ValueError: If the function has no docstring, or a parameter that
-                is positional-only, variadic or without a type hint.
+                is positional-only, variadic, without a type hint, or hinted
+                with a name its module does not define at run time.
         """
         name = function.__name__ if name is None else name
         doc = inspect.getdoc(function)
         if not doc:
             message = f"{name} needs a docstring: it is the description the model reads"
             raise ValueError(message)
+        try:
+            # Under ``from __future__ import annotations`` hints are strings;
+            # pydantic needs the types they name.
+            signature = inspect.signature(function, eval_str=True)
+        except NameError as error:
+            message = f"{name}: a type hint names something undefined: {error}"
+            raise ValueError(message) from None
         model = create_model(
             name,
             # A parameter may be called model_anything; that is the tool's
             # business, not pydantic's.
             __config__=ConfigDict(extra="forbid", protected_namespaces=()),
-            **_fields(name, inspect.signature(function)),
+            **_fields(name, signature),
         )
         spec = ToolSpec(
             name, doc.split("\n\n")[0], _untitled(model.model_json_schema())

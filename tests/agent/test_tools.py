@@ -163,6 +163,40 @@ async def test_a_plain_function_runs_off_the_event_loop() -> None:
     assert await local_read(where).run("{}") != str(loop_thread)
 
 
+async def test_hints_written_as_strings_are_resolved() -> None:
+    # What every hint becomes under `from __future__ import annotations`.
+    def repeat(
+        text: "str",
+        times: "Annotated[int, Field(ge=1, description='how often')]" = 2,
+    ) -> "str":
+        """Repeat text."""
+        return text * times
+
+    tool = local_read(repeat)
+
+    assert tool.spec.parameters["properties"] == {
+        "text": {"type": "string"},
+        "times": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 2,
+            "description": "how often",
+        },
+    }
+    assert await tool.run('{"text": "ab"}') == "abab"
+
+
+def test_a_hint_naming_nothing_is_refused() -> None:
+    def ghost(x: "Nowhere") -> str:  # type: ignore[name-defined]  # noqa: F821
+        """Ghost."""
+        return str(x)  # pyright: ignore[reportUnknownArgumentType]
+
+    with pytest.raises(
+        ValueError, match="ghost: a type hint names something undefined"
+    ):
+        local_read(ghost)  # pyright: ignore[reportUnknownArgumentType]
+
+
 def test_name_can_be_given() -> None:
     assert local_read(convert, name="temperature").spec.name == "temperature"
 
