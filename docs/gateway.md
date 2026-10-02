@@ -67,6 +67,86 @@ contradict them. Every decision is logged and published as a `RouteDecided`
 event with its reason, so a trace shows where each answer came from and why
 (`synthia/gateway/router.py`).
 
+## Thinking depth: as long as the question needs
+
+Thinking models reason before they answer, and the reasoning costs time and
+output tokens. The first real local run asked Qwen3.5-4B a question, and the
+model spent all 512 of its output tokens thinking, with no answer left. So
+every request can carry a thinking level in `ChatRequest.reasoning`. The levels
+are `off`, `low`, `medium`, `high` and `auto`. A request with no level sends no
+setting at all, so the provider's default applies and the request body is
+exactly what it was before levels existed.
+
+The router turns `auto` into a level by fixed rules on the latest user message
+(`synthia/gateway/reasoning.py`). The same question always gets the same
+depth, and the choice costs no extra request. Each sign adds its points once,
+however often it appears.
+
+| Sign | Points |
+| --- | --- |
+| code, such as a fenced block, a line shaped like code or a traceback | 2 |
+| mathematics words, such as solve, integral, equation or prime | 2 |
+| arithmetic between numbers, such as `17*23`, when no mathematics word appears | 1 |
+| reasoning words, such as why, how does, compare, explain or trade-off | 2 |
+| proof or depth words: prove, proof, derive, step by step, in depth, thoroughly | 3 |
+| two or more questions, or one question over a list of two or more items | 1 |
+| more than 80 words | 1 |
+
+A message with 0 points gets `off` when it has 8 words or fewer, such as a
+greeting or a quick lookup, and `low` when it is longer. 1 point is `low`, 2 is
+`medium`, and 3 or more is `high`. Length alone never goes past `low`, so a
+long pasted log with a trivial question does not buy a long think. The word
+lists are English only. The router decides `auto` after it has chosen the
+route, and the `RouteDecided` event carries the level that was sent.
+
+Each level is a time allowance, so it means the same wait on any model. Low is
+5 seconds, medium 20 and high 60. These are starting values, not measurements.
+Each provider turns the allowance into the limit it can enforce.
+
+- **A remote model gets a token limit before it starts.** OpenRouter cannot
+  stop a model mid-thought, so the router sends `reasoning.max_tokens`. The
+  limit is the allowance times the remote models' speed, rounded up. The speed
+  is completion tokens per second of whole calls over the last 7 UTC days, read
+  from the usage log, with the local model's calls left out. A whole call
+  includes the wait for the first token, so the speed reads a little below the
+  generation speed. Until the log has a call, the speed is 25 tokens/s. The
+  slowest of 4 free models measured end to end ran at 26.5 tokens/s and the
+  fastest at 73.6, and a speed at the slow end keeps the wait inside the
+  allowance. At 25 tokens/s, `high` allows 60 x 25 = 1500 thinking tokens. The
+  router sends `off` as `reasoning.effort: "none"`.
+- **The local model ends its thinking when the time is up.** The llama.cpp
+  server passes `chat_template_kwargs.enable_thinking` to the model's chat
+  template, and that flag is Qwen3.5's only thinking switch. `off` sends
+  `false`. Every other level sends `true` together with
+  `"reasoning_control": true`. The local model starts one timer at the first
+  thought (`synthia/models/local.py`). If no answer text, tool call or finish
+  has arrived when the allowance runs out, it posts
+  `{"id": <completion id>, "action": "reasoning_end"}` to
+  `/v1/chat/completions/control` with the launch key, once. The server then
+  closes the thinking, and the answer follows. The local model logs a refused
+  or failed post and never raises it, because the answer still comes, only
+  later, when the model stops thinking by itself.
+
+The two providers get different limits on purpose. Only the local server can
+end thinking on command, so only there can the limit be the time itself. The
+remote model must get its limit before it starts, and a token count is the only
+limit it takes. A token budget on both sides would mean a different wait on
+each model. Speeds range from 26.5 to 73.6 tokens/s across the free remote
+models, and a local model's speed depends on the machine. A remote model that
+ignores `reasoning` thinks as it would have anyway, and nothing fails.
+
+A run against llama-server b11130 with Qwen3.5-4B confirmed the local control.
+The completion id is the `id` field of each streamed chunk. The server answered
+the post with `{"success": true}`, and the answer began 1.2 seconds later,
+after two more thinking chunks that were already on their way. The server
+answers an unknown id with status 200 and `{"success": false}`, not with an
+error status, so the local model reads the reply body.
+
+The chat sends `auto` on every turn by default. `/think off|low|medium|high|auto`
+changes the level from the next turn on. While the model thinks, a dim
+"thinking N s" line counts the seconds, and the line after each answer names
+the level that was sent.
+
 ## The remote guards
 
 The remote adapter is wrapped in three layers. Their order matters, and each

@@ -13,3 +13,4 @@ supersedes the old one.
 | [0005](0005-model-gateway.md) | one gateway for every model; the budget is claimed before sending | accepted |
 | [0006](0006-local-runtime-and-model.md) | llama.cpp's server and Qwen3.5-4B, pinned by digest, fastest build first | accepted |
 | [0007](0007-personas-as-data.md) | personas as TOML data, five traits rendered to fixed sentences, blends | accepted |
+| [0008](0008-adaptive-reasoning.md) | thinking depth as a time allowance: token limit remote, stopped live locally | accepted |
