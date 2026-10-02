@@ -3,8 +3,9 @@
 **SYNTHIA, a personal AI operating system.** One system that listens, sees,
 remembers, reasons and acts on the computer it runs on, in the spirit of JARVIS
 rather than of a chat window. Built local-first, it runs on any device, even on a
-potato device: local models on whatever GPU or CPU the machine has, a remote
-model when the machine cannot carry one.
+potato device: local models on whatever GPU or CPU the machine has, so it keeps
+working with no network, and outside services such as a remote model only when
+you ask for them.
 
 The design takes the "LLM OS" idea literally. The language model is the
 processor, the context window is working memory, long-term memory and knowledge
@@ -24,8 +25,8 @@ peripherals, and a kernel schedules, supervises and guards all of it.
 ## Status
 
 **Phase 1 of 13: cognition.** On top of the kernel, SYNTHIA can now think:
-`synthia chat` talks through a model gateway that routes each request between
-a free remote model and a local one, under a daily budget. The rest is built
+`synthia chat` talks through a model gateway that answers from a local model,
+and from a free remote model, under a daily budget, only when asked. The rest is built
 phase by phase, and released when a capability works end to end.
 [`docs/architecture.md`](docs/architecture.md) describes the whole design and
 the order it is built in.
@@ -44,22 +45,25 @@ uv run synthia doctor
 
 `doctor` checks what the rest of the system plans around: the Python version,
 processor cores, memory, whether a CUDA GPU is present, whether the local model
-and a llama.cpp build to run it are installed, free disk against the configured
-budget, and whether a remote model key is set (never its value). Each
+and a llama.cpp build to run it are installed (without them SYNTHIA cannot
+answer offline, so that is a failure), free disk against the configured
+budget, and whether a remote model key is set (never its value; optional). Each
 check reports `ok`, `warn` or `fail`; the command exits with the worst result,
 `0`, `1` or `2`, and `--json` prints the same report for a script.
 
-To chat, put a free [OpenRouter](https://openrouter.ai/keys) key in `.env` as
-`SYNTHIA_OPENROUTER_API_KEY`, then:
+SYNTHIA answers from a model on your own machine. `uv run synthia models
+install` shows what it would download for this machine (about 3.2 GB without an
+NVIDIA GPU), asks, and installs it. Then:
 
 ```bash
 uv run synthia chat
 ```
 
-`/help` lists the chat's commands. The local model is optional: `uv run
-synthia models install` shows what it would download for this machine (about
-3.2 GB without an NVIDIA GPU), asks, and installs it; from then on the chat
-starts it too.
+Every turn stays on the machine, with no key and no network needed. A stronger
+free remote model is optional: put an [OpenRouter](https://openrouter.ai/keys)
+key in `.env` as `SYNTHIA_OPENROUTER_API_KEY`, and turns go to it only after
+`/remote on` in the chat (or `synthia chat --remote`). `/help` lists the
+chat's commands.
 
 ## Configuration
 
@@ -90,11 +94,14 @@ identical to the settings class.
 in [`docs/gateway.md`](docs/gateway.md).
 
 - **Model gateway.** One streaming interface for every model, and one adapter
-  for the OpenAI-compatible API that both OpenRouter and llama.cpp speak. Each
-  request goes to `openrouter/free` first and to the local model for
-  background jobs, for images or tools the remote cannot take, when the
-  remote circuit is open, when 10 or fewer of the day's requests are left, or
-  when the rate limit would make it wait over 5 seconds. A remote failure before the first word falls back to local once.
+  for the OpenAI-compatible API that both OpenRouter and llama.cpp speak.
+  Local first: a request goes to `openrouter/free` only when it asks, and is
+  otherwise never sent out, even when the local model cannot serve it. A
+  request that asks goes remote first, and to the local model for background
+  jobs, for images or tools the remote cannot take, when the remote circuit
+  is open, when 10 or fewer of the day's requests are left, or when the rate
+  limit would make it wait over 5 seconds. A remote failure before the first
+  word falls back to local once.
 - **Guards.** Retry with full-jitter backoff, a circuit breaker, a
   sliding-window rate limit (20 in any 60 seconds) and a daily budget (the cap
   OpenRouter reports for the key, 50 on the free tier) claimed before a request

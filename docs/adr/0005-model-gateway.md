@@ -1,6 +1,8 @@
 # 0005. One gateway for every model, and refuse before sending
 
-Status: accepted.
+Status: accepted. The routing rule, remote first, is superseded by
+[0009](0009-self-contained.md): local first, the remote only when a request
+asks for it.
 
 ## Context
 

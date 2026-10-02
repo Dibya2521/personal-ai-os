@@ -35,19 +35,41 @@ protocol would be one more adapter behind the same interface.
 ```text
 caller
   -> accounting                 records the call once it finishes
-  -> router                     picks remote or local, per request
-       remote: retry -> circuit breaker -> rate limit + budget -> adapter -> OpenRouter
+  -> router                     local, unless the request asks for the remote
        local:  adapter -> llama.cpp server on 127.0.0.1
+       remote: retry -> circuit breaker -> rate limit + budget -> adapter -> OpenRouter
 ```
 
 The chat is built this way by `build_gateway` (`synthia/gateway/assemble.py`),
 the one place that knows how the pieces fit. Everything else receives the
-finished model.
+finished model. The remote part exists only when an OpenRouter key is set;
+without one the gateway is local only. It refuses to start only when there is
+neither a key nor an installed local model.
 
-## Routing: remote first, local when it is the better answer
+## Routing: local first, the remote only when asked
 
-The free remote models are far stronger than a 4-billion-parameter local one,
-so a request goes remote unless the first of these rules says otherwise:
+SYNTHIA has to keep working whatever happens to an outside service, and keep
+conversations on the machine unless the person decides otherwise. So every
+request carries `use_remote`, false by default, and a request that does not
+ask goes to the local model:
+
+- If the local model is still loading, the request waits for it, up to the
+  server's 180-second start timeout.
+- If no local model can serve it (none is installed, or it cannot take the
+  request's images or tools), the request fails with that reason and how to
+  ask for the remote. It is never sent out instead: escalating quietly would
+  send a conversation off the machine that nobody asked to send.
+
+The permission is on the request rather than on the router, so every caller,
+the chat today and agents and voice later, inherits it with no code of its
+own. In the chat, `/remote on` and `/remote off` switch it for the session, and
+`synthia chat --remote` starts with it on. The chat asks OpenRouter for the
+key's daily cap only after the first `/remote on`, since that request also
+sends the key.
+
+A request that asks for the remote gets it first, because the free remote
+models are far stronger than a 4-billion-parameter local one. It goes local
+instead when the first of these rules says so:
 
 1. **It is a background job.** The daily remote budget is kept for talking.
 2. **It needs images or tools the remote model cannot take.**
@@ -61,10 +83,10 @@ so a request goes remote unless the first of these rules says otherwise:
 5. **The rate limit would hold the request for more than 5 seconds.** A
    short wait for a strong model is worth it; a long one is not.
 
-Each rule applies only if a local model is installed, has finished loading and
-can serve the request. While the local server is still loading, it counts as
-absent. With no local model, every request goes remote while any budget is
-left at all.
+Each of these rules applies only if a local model is installed, has finished
+loading and can serve the request. For a request that asked for the remote,
+a local server still loading counts as absent. With no local model, such a
+request goes remote while any budget is left at all.
 
 If the remote model fails before sending its first chunk, the same request is
 sent to the local model once. After the first chunk nothing switches: those
@@ -200,9 +222,10 @@ reading, so two processes can never both see room for the last request. Days
 are UTC days because the provider's counter resets at UTC midnight; a local
 midnight would disagree with it for hours every day.
 
-The cap comes from the key itself. When a chat starts, it asks OpenRouter's
-`/key` record for the key's free-model limit in the background, so the first
-answer never waits for it, and `synthia budget --check` asks the same question.
+The cap comes from the key itself. When remote is first switched on in a chat,
+it asks OpenRouter's `/key` record for the key's free-model limit in the
+background, so no answer waits for it, and `synthia budget --check` asks the
+same question. Neither asks before that, so the key never leaves unasked.
 That question is not a model request and costs no budget. The answer is stored
 in the same database and read inside each claim, so every process uses it at
 once, and it still holds after a restart or an offline start. Until OpenRouter
@@ -233,6 +256,8 @@ alone (`synthia/gateway/errors.py`).
 | `IncompleteResponseError` | the stream ended before the answer was whole | no |
 | `CircuitOpenError` | the circuit is open, so the provider was not called | no |
 | `BudgetExhaustedError` | today's requests are used up; says when the budget resets | no |
+| `LocalUnavailableError` | a request that may not leave the machine has no local model that can serve it | no |
+| `RemoteUnavailableError` | a request asked for the remote model and no key is set | no |
 
 A provider's error message is cut to 300 characters and scrubbed of the API key
 before it appears anywhere, since some providers echo the key back.

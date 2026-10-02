@@ -113,7 +113,7 @@ budget, only when asked.
   `SYNTHIA_LOCAL_MODEL` names no known model, since SYNTHIA then cannot answer
   offline. No OpenRouter key is not a problem: the remote model is optional.
 - Documentation of the gateway (`docs/gateway.md`) and decision records 0005
-  to 0007.
+  to 0009.
 
 ### Changed
 
