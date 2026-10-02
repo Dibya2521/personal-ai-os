@@ -53,7 +53,7 @@ from synthia.kernel.errors import ConfigError
 from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
-from synthia.tools import local_tools
+from synthia.tools import local_tools, outside_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -485,7 +485,7 @@ def run_chat(  # noqa: PLR0913
                 None if local is None else local.model(client),
                 remote=remote,
             )
-            tools, servers = runner.run(chat_tools(settings, console))
+            tools, servers = runner.run(chat_tools(settings, console, transport))
             session = ChatSession(
                 gateway.model,
                 PersonaLibrary(settings.home / PERSONAS_DIR),
@@ -512,12 +512,17 @@ def run_chat(  # noqa: PLR0913
 
 
 async def chat_tools(
-    settings: Settings, console: Console
+    settings: Settings,
+    console: Console,
+    transport: httpx.AsyncBaseTransport | None = None,
 ) -> tuple[Toolbox, McpServers]:
-    """Return SYNTHIA's own tools and those of every MCP server that started."""
+    """Return SYNTHIA's own tools, the outside ones, and every MCP server's.
+
+    In that order: what runs on this machine first, then what asks first.
+    """
     servers = await start_mcp_servers(settings, console)
     tools = local_tools(settings.file_roots)
-    for tool in servers.tools():
+    for tool in (*outside_tools(settings.home, transport), *servers.tools()):
         tools.add(tool)
     return tools, servers
 

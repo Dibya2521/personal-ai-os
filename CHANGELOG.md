@@ -43,6 +43,16 @@ budget, only when asked.
   bytes of output, and every process it started is ended with it (a Job
   Object on Windows, a process group elsewhere). It is not a sandbox: the
   code can read and change your files and reach the network.
+- `fetch_url` and outside agents in `synthia chat`, each asking before every
+  call. `fetch_url` reads an http or https page as text (HTML reduced to
+  what a reader sees), at most 2,000,000 bytes and 20 seconds, with a new
+  client per call, so no cookie or key is carried. Claude Code and Gemini
+  CLI, when found on PATH, become `ask_claude` and `ask_gemini`. The task
+  is sent on standard input, never as an argument, so no command line
+  re-parsing can run part of it. Each call may take up to 10 minutes, the
+  agent's progress goes to `SYNTHIA_HOME/logs/agents/<name>.log`, and it
+  sees no `SYNTHIA_*` variable. Agents that are not installed are not
+  offered.
 - MCP servers in `synthia chat`: servers listed in `SYNTHIA_HOME/mcp.toml`
   (`[servers.<name>]` with `command`, and optional `env`, `cwd`, `reach`,
   `effect`) start with the chat and their tools join as `<name>__<tool>`.

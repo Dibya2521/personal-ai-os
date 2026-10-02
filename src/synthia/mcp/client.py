@@ -31,7 +31,7 @@ from synthia.gateway.types import ToolSpec
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.mcp.jsonrpc import Connection, ConnectionClosedError, RpcError
 from synthia.tools.process_tree import ProcessTree
-from synthia.tools.run import environment_without_own
+from synthia.tools.run import environment_without_own, open_log
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -88,11 +88,6 @@ def load_config(path: Path) -> dict[str, ServerConfig]:
     except (tomllib.TOMLDecodeError, ValidationError, UnicodeDecodeError) as error:
         message = f"{path} is not a valid MCP server list: {error}"
         raise ConfigError(message) from error
-
-
-def _open_log(log_dir: Path, name: str) -> BinaryIO:
-    log_dir.mkdir(parents=True, exist_ok=True)
-    return (log_dir / f"{name}.log").open("ab")
 
 
 @dataclass(slots=True)
@@ -177,7 +172,7 @@ class McpServer:
         if program is None:
             message = f"{name}: {config.command[0]} was not found"
             raise McpError(message)
-        log = _open_log(log_dir, name)
+        log = open_log(log_dir, name)
         # The connection must exist before the first byte of output can arrive.
         started: list[ProcessTree] = []
 

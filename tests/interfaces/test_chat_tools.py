@@ -20,6 +20,7 @@ from synthia.interfaces.chat import (
 from synthia.interfaces.commands import Invalid, ShowTools, parse
 from synthia.interfaces.session import ChatSession, TurnReport
 from synthia.persona.library import PersonaLibrary
+from synthia.tools import agents
 from tests.agent.scripted import Scripted, calls, says
 from tests.interfaces.test_chat import (
     answer,
@@ -270,6 +271,16 @@ async def test_an_answer_with_nothing_in_it_says_none_came_back(
     assert chat.session.history == []
 
 
+@pytest.fixture(autouse=True)
+def no_outside_agents(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the tool lists below the same on every machine, agents or not."""
+
+    def nowhere(_: str) -> None:
+        return None
+
+    monkeypatch.setattr(agents, "which", nowhere)
+
+
 def called(name: str, arguments: str) -> bytes:
     call = {
         "index": 0,
@@ -313,7 +324,7 @@ def test_the_chat_calls_a_tool_of_an_mcp_server_after_a_yes(tmp_path: Path) -> N
     )
 
     names = [t["function"]["name"] for t in sent[0]["tools"]]  # type: ignore[index]
-    assert names[5:7] == ["fake__echo", "fake__add"]
+    assert names[5:8] == ["fetch_url", "fake__echo", "fake__add"]
     assert read.prompts[1] == 'run fake__echo {"text": "hi"}? [y/N] '  # type: ignore[attr-defined]
     assert sent[1]["messages"][-1]["content"] == quote("fake__echo", "hi")  # type: ignore[index]
     assert "tool fake__echo" in out.getvalue()
@@ -402,6 +413,7 @@ def test_the_chat_calls_the_calculator_and_shows_the_call(tmp_path: Path) -> Non
         "read_file",
         "list_files",
         "run_python",
+        "fetch_url",
     ]
     assert sent[1]["messages"][-1] == {  # type: ignore[index]
         "role": "tool",

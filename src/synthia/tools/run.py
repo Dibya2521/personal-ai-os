@@ -10,7 +10,7 @@ import asyncio
 import os
 import subprocess
 from dataclasses import dataclass
-from typing import IO, TYPE_CHECKING, Final
+from typing import IO, TYPE_CHECKING, BinaryIO, Final
 
 from synthia.agent.tools import ToolError
 from synthia.tools.process_tree import ProcessTree
@@ -43,6 +43,12 @@ def environment_without_own(extra: Mapping[str, str]) -> dict[str, str]:
         if not name.upper().startswith(_OWN_PREFIX)
     }
     return inherited | dict(extra)
+
+
+def open_log(log_dir: Path, name: str) -> BinaryIO:
+    """Open ``<log_dir>/<name>.log`` for appending, making the folder if needed."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return (log_dir / f"{name}.log").open("ab")
 
 
 async def run_once(  # noqa: PLR0913
