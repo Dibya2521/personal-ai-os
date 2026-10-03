@@ -4,7 +4,7 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-03
 
 SYNTHIA can think and act: a terminal chat through a model gateway that
 answers from a local model on the machine, and from a free remote model, under
@@ -199,5 +199,5 @@ that guards itself.
   pyright strict, pytest, secret scanning and a file-size limit.
 - Architecture overview and decision records 0001 to 0004.
 
-[Unreleased]: https://github.com/Dibya2521/personal-ai-os/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/Dibya2521/personal-ai-os/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Dibya2521/personal-ai-os/releases/tag/v0.1.0
