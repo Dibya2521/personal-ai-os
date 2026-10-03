@@ -2,6 +2,8 @@ import asyncio
 import json
 import os
 import sys
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -108,15 +110,31 @@ async def test_temporary_files_go_into_the_working_directory() -> None:
     assert await ran(code) == "True\n"
 
 
-async def _listening() -> tuple[asyncio.Server, asyncio.Queue[asyncio.StreamReader]]:
-    connected: asyncio.Queue[asyncio.StreamReader] = asyncio.Queue()
+type Connections = asyncio.Queue[asyncio.StreamReader]
+
+
+@asynccontextmanager
+async def _listening() -> AsyncGenerator[tuple[int, Connections]]:
+    """Yield a local port and a queue of the connections made to it."""
+    connected: Connections = asyncio.Queue()
+    writers: list[asyncio.StreamWriter] = []
 
     async def on_connect(
-        reader: asyncio.StreamReader, _writer: asyncio.StreamWriter
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        writers.append(writer)
         await connected.put(reader)
 
-    return await asyncio.start_server(on_connect, "127.0.0.1", 0), connected
+    async with await asyncio.start_server(on_connect, "127.0.0.1", 0) as server:
+        try:
+            yield server.sockets[0].getsockname()[1], connected
+        finally:
+            # Leaving the server waits for every connection it accepted to close.
+            for writer in writers:
+                writer.close()
+            await asyncio.gather(
+                *(writer.wait_closed() for writer in writers), return_exceptions=True
+            )
 
 
 def _with_grandchild(port: int, then: str) -> str:
@@ -143,9 +161,7 @@ async def _closed(reader: asyncio.StreamReader) -> bool:
 
 
 async def test_a_process_the_code_left_running_is_ended_when_it_exits() -> None:
-    server, connected = await _listening()
-    async with server:
-        port = server.sockets[0].getsockname()[1]
+    async with _listening() as (port, connected):
         run = await asyncio.wait_for(
             run_code(_with_grandchild(port, "print('leaving')")), HANG_TIMEOUT_S
         )
@@ -156,9 +172,7 @@ async def test_a_process_the_code_left_running_is_ended_when_it_exits() -> None:
 
 
 async def test_cancelling_a_run_ends_every_process_it_started() -> None:
-    server, connected = await _listening()
-    async with server:
-        port = server.sockets[0].getsockname()[1]
+    async with _listening() as (port, connected):
         code = _with_grandchild(port, "import time\ntime.sleep(60)")
         task = asyncio.create_task(run_code(code, timeout_s=HANG_TIMEOUT_S))
         reader = await asyncio.wait_for(connected.get(), HANG_TIMEOUT_S)
