@@ -17,6 +17,8 @@ jobs:
   gates:
     name: gates (${{ matrix.os }}, py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
+    # A full run takes under 3 minutes; a hung test fails here, not hours later.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -56,6 +58,7 @@ jobs:
   hygiene:
     name: hygiene (secrets, sizes, line endings)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
