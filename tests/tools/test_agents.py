@@ -1,3 +1,4 @@
+import asyncio
 import json
 import sys
 from collections.abc import Callable
@@ -34,9 +35,10 @@ def test_every_agent_found_becomes_a_tool_that_asks_and_may_take_minutes(
 ) -> None:
     tools = agent_tools(tmp_path, find=found("claude", "gemini"))
 
+    assert AGENT_TIME_LIMIT_S == 600
     assert [(t.spec.name, t.reach, t.effect, t.time_limit_s) for t in tools] == [
-        ("ask_claude", Reach.OUTSIDE, Effect.CHANGE, AGENT_TIME_LIMIT_S),
-        ("ask_gemini", Reach.OUTSIDE, Effect.CHANGE, AGENT_TIME_LIMIT_S),
+        ("ask_claude", Reach.OUTSIDE, Effect.CHANGE, 610),
+        ("ask_gemini", Reach.OUTSIDE, Effect.CHANGE, 610),
     ]
     assert tools[0].spec.parameters["required"] == ["task"]  # type: ignore[index]
     assert tools[0].spec.description.startswith(
@@ -82,7 +84,7 @@ async def test_the_task_goes_in_on_stdin_and_the_answer_comes_back(
     ]
 
 
-async def test_an_agent_past_its_time_limit_is_stopped(
+async def test_an_agent_past_its_time_limit_stops_itself_before_the_loop_cancels_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("FAKE_SLEEP", "60")
@@ -93,4 +95,5 @@ async def test_an_agent_past_its_time_limit_is_stopped(
     with pytest.raises(
         ToolError, match=r"^stopped after 1 s; printed so far:\n\(nothing printed\)$"
     ):
-        await tool.run('{"task": "wait"}')
+        async with asyncio.timeout(tool.time_limit_s):
+            await tool.run('{"task": "wait"}')

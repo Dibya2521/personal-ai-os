@@ -4,11 +4,13 @@ Killing a process leaves the processes it started running. On Windows the
 child is put in a Job Object, which ``TerminateJobObject`` ends with every
 process started inside it. On POSIX the child leads a new session, and
 ``killpg`` ends its process group. The child can be sent input only after it
-is contained, so nothing it starts can be outside.
+is contained, so a program that waits for its input before starting others
+(as Python reading a program from stdin does) starts nothing outside.
 
-A descendant can still leave: on POSIX by calling ``setsid``, and on Windows by
-starting a process with ``CREATE_BREAKAWAY_FROM_JOB``, which the job refuses
-unless it allows breakaway (this one does not).
+On Windows the child joins the job just after it starts, so a program that
+starts children at once could start one in that moment, outside the job. On
+POSIX a descendant can leave by calling ``setsid``. A Windows descendant cannot
+break away: this job does not allow ``CREATE_BREAKAWAY_FROM_JOB``.
 """
 
 from __future__ import annotations

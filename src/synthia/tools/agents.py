@@ -37,6 +37,10 @@ if TYPE_CHECKING:
 AGENT_LOGS: Final = Path("logs") / "agents"
 # A coding task takes minutes; past ten the person is better asked again.
 AGENT_TIME_LIMIT_S: Final = 600.0
+# The agent loop's own limit for the call sits this much later, so the run
+# stops itself and keeps what the agent printed instead of being cancelled;
+# ending its process tree and draining the output take up to 5 s.
+STOP_MARGIN_S: Final = 10.0
 MAX_TASK_CHARS: Final = 8000
 MAX_ANSWER_BYTES: Final = 20_000
 
@@ -123,5 +127,5 @@ def _tool(
         reach=Reach.OUTSIDE,
         effect=Effect.CHANGE,
         name=f"ask_{agent.name}",
-        time_limit_s=time_limit_s,
+        time_limit_s=time_limit_s + STOP_MARGIN_S,
     )

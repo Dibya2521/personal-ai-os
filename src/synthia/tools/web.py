@@ -21,6 +21,8 @@ from synthia.agent.tools import Effect, FunctionTool, Reach, ToolError
 FETCH_TIMEOUT_S: Final = 20.0
 MAX_FETCH_BYTES: Final = 2_000_000
 MAX_TEXT_CHARS: Final = 20_000
+MAX_ERROR_CHARS: Final = 2000
+MAX_URL_CHARS: Final = 2000
 MAX_REDIRECTS: Final = 5
 SCHEMES: Final = frozenset({"http", "https"})
 _TEXT_TYPES: Final = frozenset(
@@ -115,7 +117,9 @@ def fetch_tool(
         url: Annotated[
             str,
             Field(
-                min_length=1, max_length=2000, description="an http or https address"
+                min_length=1,
+                max_length=MAX_URL_CHARS,
+                description="an http or https address",
             ),
         ],
     ) -> str:
@@ -167,21 +171,31 @@ async def _read(
         body = bytearray()
         async for chunk in response.aiter_bytes():
             body.extend(chunk)
-            if len(body) >= MAX_FETCH_BYTES:
+            # Read past the limit, so a page of exactly the limit counts as whole.
+            if len(body) > MAX_FETCH_BYTES:
                 break
-        return bytes(body[:MAX_FETCH_BYTES]), response
+        return bytes(body), response
 
 
 def _describe(response: httpx.Response, body: bytes) -> str:
     url, status = response.url, response.status_code
     content_type = response.headers.get("content-type", "")
+    whole = len(body) <= MAX_FETCH_BYTES
     # httpx gives the declared charset, or UTF-8 when it is missing or unknown.
-    text = body.decode(response.encoding or "utf-8", "replace")
+    text = body[:MAX_FETCH_BYTES].decode(response.encoding or "utf-8", "replace")
     if "html" in content_type.lower():
         text = visible_text(text)
     if status >= httpx.codes.BAD_REQUEST:
-        message = f"HTTP {status} from {url}:\n{text[:2000]}"
+        message = f"HTTP {status} from {url}:\n{text[:MAX_ERROR_CHARS]}"
         raise ToolError(message)
-    if len(text) > MAX_TEXT_CHARS:
-        text = f"{text[:MAX_TEXT_CHARS]}\n[cut: {len(text):,} characters in all]"
-    return f"{url} ({status}, {content_type or 'no type'})\n\n{text}"
+    head = f"{url} ({status}, {content_type or 'no type'})\n\n"
+    if whole and len(text) <= MAX_TEXT_CHARS:
+        return head + text
+    if whole:
+        note = f"{len(text):,} characters in all"
+    else:
+        note = (
+            f"{len(text):,} characters in the first {MAX_FETCH_BYTES:,} bytes, "
+            "and the page is longer"
+        )
+    return f"{head}{text[:MAX_TEXT_CHARS]}\n[cut: {note}]"

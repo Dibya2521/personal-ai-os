@@ -129,18 +129,51 @@ async def test_only_http_and_https_addresses_are_fetched(url: str) -> None:
         await fetched(handler, url)
 
 
-async def test_a_long_answer_is_read_only_to_the_byte_limit_and_cut() -> None:
-    body = b"a" * (MAX_FETCH_BYTES * 2)
-
+@pytest.mark.parametrize(
+    ("size", "note"),
+    [
+        (MAX_TEXT_CHARS, None),
+        (MAX_TEXT_CHARS + 1, "20,001 characters in all"),
+        (MAX_FETCH_BYTES, "2,000,000 characters in all"),
+        (
+            MAX_FETCH_BYTES + 1,
+            "2,000,000 characters in the first 2,000,000 bytes, and the page is longer",
+        ),
+        (
+            MAX_FETCH_BYTES * 2,
+            "2,000,000 characters in the first 2,000,000 bytes, and the page is longer",
+        ),
+    ],
+    ids=["text-limit", "text-limit+1", "byte-limit", "byte-limit+1", "twice"],
+)
+async def test_a_long_answer_is_cut_and_says_how_much_was_read(
+    size: int, note: str | None
+) -> None:
     def handler(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers={"content-type": "text/plain"}, content=body)
+        return httpx.Response(
+            200, headers={"content-type": "text/plain"}, content=b"a" * size
+        )
 
     result = await fetched(handler)
 
     head, text = result.split("\n\n", 1)
     assert head == "https://example.org/kettle (200, text/plain)"
-    assert (
-        text == "a" * MAX_TEXT_CHARS + f"\n[cut: {MAX_FETCH_BYTES:,} characters in all]"
+    if note is None:
+        assert text == "a" * size
+    else:
+        assert text == "a" * MAX_TEXT_CHARS + f"\n[cut: {note}]"
+
+
+async def test_a_long_page_with_little_visible_text_still_says_it_was_cut() -> None:
+    page = b"<p>kettle</p><script>" + b"x" * MAX_FETCH_BYTES + b"</script>"
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"content-type": "text/html"}, content=page)
+
+    assert await fetched(handler) == (
+        "https://example.org/kettle (200, text/html)\n\n"
+        "kettle\n[cut: 6 characters in the first 2,000,000 bytes, "
+        "and the page is longer]"
     )
 
 

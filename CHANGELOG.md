@@ -45,7 +45,8 @@ budget, only when asked.
   code can read and change your files and reach the network.
 - `fetch_url` and outside agents in `synthia chat`, each asking before every
   call. `fetch_url` reads an http or https page as text (HTML reduced to
-  what a reader sees), at most 2,000,000 bytes and 20 seconds, with a new
+  what a reader sees), at most 2,000,000 bytes (a longer page comes back
+  marked as cut there) and 20 seconds, with a new
   client per call, so no cookie or key is carried. Claude Code and Gemini
   CLI, when found on PATH, become `ask_claude` and `ask_gemini`. The task
   is sent on standard input, never as an argument, so no command line
