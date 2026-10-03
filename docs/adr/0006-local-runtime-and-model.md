@@ -1,7 +1,8 @@
 # 0006. llama.cpp's server and Qwen3.5-4B for the local model
 
-Status: accepted. The order in which builds are tried is reasoned, not yet
-measured; a measurement that changes it gets a new record.
+Status: accepted. The order in which builds are tried was reasoned first and
+then measured on one class of machine (see Measured); a measurement that
+changes it gets a new record.
 
 ## Context
 
@@ -72,9 +73,31 @@ programs.
 
 The install is about 3.2 GB on a machine without an NVIDIA GPU, checked
 against the disk budget before anything is downloaded. Changing the model or
-the llama.cpp build is a catalogue entry with new digests. Three values are
-still reasoned rather than measured, and will be measured with the model
-running: whether Vulkan is faster than the CPU on an integrated GPU, the
-180-second start timeout, and the memory a 32,768-token context costs.
-Whether Qwen3.5-4B calls tools reliably through llama.cpp's default chat
-template is also unverified until then; the router already assumes it can.
+the llama.cpp build is a catalogue entry with new digests. Tool calling was
+measured later: Qwen3.5-4B made 60 of 60 calls correctly through llama.cpp's
+default chat template (decision record 0010).
+
+## Measured
+
+`benchmarks/local_inference.py` starts the server the way `synthia chat` does
+and sends the same 375-token prompt five times after one warm-up request, each
+opening with its own number so the server cannot reuse a cached prompt (its log
+confirms all 375 tokens were processed every time), asking for at most 128
+tokens with thinking off.
+
+On a laptop with an integrated GPU and no NVIDIA GPU, at 2 threads while other
+work kept the processor about half busy, with the 32,768-token context per
+slot (4 slots):
+
+| Build | Load | First token | Prompt tokens/s | Answer tokens/s | Server memory |
+|---|---|---|---|---|---|
+| Vulkan | 14.9 s | 7.9 to 10.1 s (median 9.3) | 37 to 47 (median 40) | 4.4 to 5.1 (median 4.6) | 6,183 MB peak |
+| CPU | 12.5 s | 41.9 to 82.0 s (median 59.7) | 4.6 to 8.9 (median 6.3) | 2.0 to 3.3 (median 2.6) | 6,600 MB peak |
+
+Vulkan reaches the first token about six times sooner and answers about 1.8
+times faster, so trying it before the CPU build holds on this class of machine.
+Two threads limit the CPU build more than the Vulkan one, so the gap at the
+default thread count is expected to be smaller (not yet measured; that run
+waits for an idle machine). Loading took 12.5 to 15 seconds, well inside the
+180-second start timeout, minutes after earlier runs had read the model; a
+first load after a restart was not measured here.
