@@ -7,8 +7,9 @@ asks first: a local process may itself reach the network, and what a server
 says about its own tools (read-only hints) is not trusted.
 
 A server that will not start, answers wrongly or dies costs only its own
-tools; the rest keep working. None of SYNTHIA's own ``SYNTHIA_*`` variables
-reach a server, so its key never does.
+tools; the rest keep working. A server inherits none of SYNTHIA's own
+``SYNTHIA_*`` variables, so the key never reaches it unless the person writes
+one into that server's ``env`` in ``mcp.toml``.
 """
 
 from __future__ import annotations
@@ -172,7 +173,11 @@ class McpServer:
         if program is None:
             message = f"{name}: {config.command[0]} was not found"
             raise McpError(message)
-        log = open_log(log_dir, name)
+        try:
+            log = open_log(log_dir, name)
+        except OSError as error:
+            message = f"{name}: cannot open its log: {error}"
+            raise McpError(message) from error
         # The connection must exist before the first byte of output can arrive.
         started: list[ProcessTree] = []
 

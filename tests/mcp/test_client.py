@@ -263,6 +263,21 @@ async def test_a_missing_program_is_named(tmp_path: Path) -> None:
         await McpServer.start("gone", config, tmp_path)
 
 
+async def test_a_log_that_cannot_be_opened_is_a_failure_not_a_crash(
+    tmp_path: Path,
+) -> None:
+    not_a_folder = tmp_path / "logs"
+    not_a_folder.write_text("a file where the log folder should be")
+
+    servers = await asyncio.wait_for(
+        McpServers.start({"fake": fake()}, not_a_folder), HANG_TIMEOUT_S
+    )
+
+    assert servers.servers == []
+    assert len(servers.failures) == 1
+    assert servers.failures[0].startswith("fake: cannot open its log: ")
+
+
 async def test_servers_that_fail_leave_the_others_working(tmp_path: Path) -> None:
     configs = {
         "good": fake(),
