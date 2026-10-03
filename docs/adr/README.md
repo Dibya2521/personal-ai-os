@@ -15,3 +15,4 @@ supersedes the old one.
 | [0007](0007-personas-as-data.md) | personas as TOML data, five traits rendered to fixed sentences, blends | accepted |
 | [0008](0008-adaptive-reasoning.md) | thinking depth as a time allowance: token limit remote, stopped live locally | accepted |
 | [0009](0009-self-contained.md) | self-contained: local first, the remote and other outside services only on command | accepted |
+| [0010](0010-tool-calling-and-permissions.md) | tool calling: the model asks, code decides from reach and effect; output is quoted data | accepted |

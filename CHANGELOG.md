@@ -6,9 +6,10 @@ All notable changes are recorded here. The format follows
 
 ## [Unreleased]
 
-SYNTHIA can think: a terminal chat through a model gateway that answers from a
-local model on the machine, and from a free remote model, under a daily
-budget, only when asked.
+SYNTHIA can think and act: a terminal chat through a model gateway that
+answers from a local model on the machine, and from a free remote model, under
+a daily budget, only when asked, and that uses tools, asking before every call
+that changes something or leaves the machine.
 
 ### Added
 
@@ -161,7 +162,8 @@ budget, only when asked.
   `SYNTHIA_LOCAL_MODEL` names no known model, since SYNTHIA then cannot answer
   offline. No OpenRouter key is not a problem: the remote model is optional.
 - Documentation of the gateway (`docs/gateway.md`) and decision records 0005
-  to 0009.
+  to 0009, and of agency (`docs/agency.md`: tools, permissions, limits, MCP
+  servers, the trace) with decision record 0010.
 - An import layer check (import-linter, `uv run lint-imports`) in pre-commit
   and CI: `interfaces`, `mcp`, `tools`, `agent`, `models`, `gateway`,
   `persona`, `kernel`, each importing only the ones below it.

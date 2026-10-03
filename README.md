@@ -24,9 +24,11 @@ peripherals, and a kernel schedules, supervises and guards all of it.
 
 ## Status
 
-**Phase 1 of 13: cognition.** On top of the kernel, SYNTHIA can now think:
+**Phase 2 of 13: agency.** On top of the kernel, SYNTHIA can think and act:
 `synthia chat` talks through a model gateway that answers from a local model,
-and from a free remote model, under a daily budget, only when asked. The rest is built
+and from a free remote model, under a daily budget, only when asked, and it
+uses tools, each call that changes something or leaves the machine asked for
+first. The rest is built
 phase by phase, and released when a capability works end to end.
 [`docs/architecture.md`](docs/architecture.md) describes the whole design and
 the order it is built in.
@@ -129,6 +131,39 @@ in [`docs/gateway.md`](docs/gateway.md).
   model, the tokens and the seconds taken. Ctrl+C stops an answer and keeps the
   chat; only finished exchanges enter the history. Log records go to
   `SYNTHIA_HOME/logs/synthia.log`, not into the conversation.
+
+**Agency.** How SYNTHIA acts through tools is described in
+[`docs/agency.md`](docs/agency.md), and why it is shaped this way in
+[decision record 0010](docs/adr/0010-tool-calling-and-permissions.md).
+
+- **Agent loop.** The model calls tools, reads their results and answers, for
+  at most 8 steps; the last step offers no tools, so it must answer. Calls in
+  one answer run at the same time, each stopped after 60 seconds unless the
+  tool sets its own limit, and a failing tool returns its error instead of
+  ending the turn.
+- **Permissions.** Every tool states where its work happens (on this machine
+  or outside it) and whether it changes anything. A tool that only reads on
+  this machine runs at once; every other call asks first, one yes per call.
+  The question shows the arguments whole, with terminal control characters
+  escaped. The model's text cannot change any of this.
+- **Tools.** The clock, an exact calculator, reading and listing files inside
+  the folders named in `SYNTHIA_FILE_ROOTS`, and Python in a separate process
+  (30 seconds, 20,000 bytes of output, a fresh empty folder, none of your
+  environment variables). On command, a web page fetched as text (2,000,000
+  bytes, 20 seconds) and a task handed to Claude Code or Gemini CLI when either
+  is installed (10 minutes, the task sent on standard input). Any MCP server
+  listed in `SYNTHIA_HOME/mcp.toml` adds its tools. Every process a tool
+  starts is ended with it, children included; `docs/agency.md` names the
+  two narrow ways a process can still escape.
+- **Untrusted output.** Tool results reach the model quoted and marked
+  untrusted, with chat control tokens defused; lines shaped like instructions
+  are flagged on the call's line.
+- **Trace.** Every turn, model step and tool call is written to
+  `SYNTHIA_HOME/traces/`, and `synthia trace` shows a session as a tree.
+- **Plan and execute.** A planner asks the model for a list of steps, runs
+  each as its own loop, re-plans once if a step does not finish, and writes
+  the answer from the results. It is built and tested, and not yet used by
+  the chat.
 
 **Repository.** Every commit passes ruff with every rule enabled, pyright in
 strict mode, an import check that keeps each package from importing the ones

@@ -16,10 +16,11 @@ refined when its phase begins, and this file changes with it.
    every layer.
 3. **Supervised services.** Every long-running part runs as a service under a
    supervisor that restarts it, so one failing peripheral never stops the rest.
-4. **Capabilities, not trust.** A tool declares what it needs (read files, fetch
-   from the network, send input to the desktop). Grants are explicit, and a
-   destructive capability needs a person's approval for each call. Anything a
-   tool returns is data, never instructions.
+4. **Capabilities, not trust.** Every tool states, in SYNTHIA's code or the
+   person's own configuration, where it works (this machine or outside) and
+   whether it changes anything. Only a tool that reads on this machine runs
+   without asking; every other call needs a person's approval, each time.
+   Anything a tool returns is data, never instructions.
 5. **Budget is a resource.** Remote model calls, disk space and latency are
    metered the way an operating system meters CPU time. A call that would exceed
    the day's budget is refused before it starts, not failed half way.
