@@ -1,4 +1,6 @@
+import io
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -6,7 +8,7 @@ from typer.testing import CliRunner
 
 from synthia import __version__
 from synthia.interfaces import doctor
-from synthia.interfaces.cli import app
+from synthia.interfaces.cli import app, main
 
 runner = CliRunner()
 
@@ -23,6 +25,32 @@ def test_version() -> None:
 
     assert result.exit_code == 0
     assert result.stdout.strip() == f"synthia {__version__}"
+
+
+def test_half_an_emoji_is_printed_escaped_instead_of_ending_the_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    written = io.BytesIO()
+    console = io.TextIOWrapper(written, encoding="utf-8", errors="strict")
+    monkeypatch.setattr(sys, "stdout", console)
+
+    main()
+    sys.stdout.write("a\ud83db")
+    console.flush()
+
+    assert written.getvalue() == b"a\\ud83db"
+
+
+def test_an_output_that_cannot_be_reconfigured_is_left_as_it_is(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", text)
+
+    main()
+    sys.stdout.write("a\ud83db")
+
+    assert text.getvalue() == "a\ud83db"
 
 
 def test_no_arguments_prints_help() -> None:

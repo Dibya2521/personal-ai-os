@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -79,6 +80,11 @@ def main(
 ) -> None:
     """SYNTHIA, a personal AI operating system."""
     del version
+    # Half an emoji (a lone surrogate, valid in JSON from a model or a server)
+    # cannot be encoded, and printing it would end the command; show it escaped.
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is not None:
+        reconfigure(errors="backslashreplace")
 
 
 @app.command()
