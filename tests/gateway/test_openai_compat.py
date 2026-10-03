@@ -244,6 +244,27 @@ async def test_the_endpoints_dialect_shapes_what_is_sent() -> None:
     assert "reasoning" not in bodies[0]
 
 
+async def test_an_endpoint_keeps_the_clients_limits_unless_it_sets_its_own() -> None:
+    limits: list[object] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        limits.append(request.extensions["timeout"])
+        return httpx.Response(200, content=sse(delta(content="hi"), finish()))
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), timeout=httpx.Timeout(60.0)
+    )
+    for timeout in (None, httpx.Timeout(None, connect=10.0)):
+        endpoint = Endpoint("http://127.0.0.1:8080/v1", "m", timeout=timeout)
+        model = OpenAICompatibleModel(client=client, endpoint=endpoint, info=INFO)
+        await collect(model.stream(HELLO))
+
+    assert limits == [
+        {"connect": 60.0, "read": 60.0, "write": 60.0, "pool": 60.0},
+        {"connect": 10.0, "read": None, "write": None, "pool": None},
+    ]
+
+
 # Chunks: wire -> chunk
 
 

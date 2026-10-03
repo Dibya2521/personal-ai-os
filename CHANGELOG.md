@@ -14,6 +14,14 @@ All notable changes are recorded here. The format follows
   `answer:` before the answer; only the task and the answer are kept in the
   conversation. `synthia trace` shows the plan and each step's work under it.
 
+### Fixed
+
+- A local answer no longer fails with "no response ... ReadTimeout" when the
+  local model takes more than 60 seconds to read a long prompt before its
+  first word, as the CPU build does on a busy machine. The local server's
+  requests have no read limit (a crash still ends them at once, and Ctrl+C
+  stops an answer); the remote model keeps its 60 seconds.
+
 ## [0.2.0] - 2026-10-03
 
 SYNTHIA can think and act: a terminal chat through a model gateway that

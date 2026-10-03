@@ -28,6 +28,10 @@ CONTROL_SUFFIX: Final = "/control"
 END_REASONING: Final = "reasoning_end"
 MAX_DETAIL: Final = 200
 READY_POLL_S: Final = 0.25
+# No read limit: the server sends nothing while it reads a prompt, which took
+# 42 to 82 s for 375 tokens on a busy CPU and grows with the conversation. A
+# crash closes the connection at once, and Ctrl+C or a run's deadline stops it.
+LOCAL_TIMEOUT: Final = httpx.Timeout(None, connect=10.0)
 
 type Sleep = Callable[[float], Awaitable[None]]
 
@@ -117,7 +121,11 @@ class LocalModel:
         """
         launch = await self._serving()
         endpoint = Endpoint(
-            launch.base_url, self._info.id, launch.key, dialect=Dialect.LLAMA_CPP
+            launch.base_url,
+            self._info.id,
+            launch.key,
+            dialect=Dialect.LLAMA_CPP,
+            timeout=LOCAL_TIMEOUT,
         )
         adapter = OpenAICompatibleModel(
             client=self._client, endpoint=endpoint, info=self._info

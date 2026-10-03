@@ -14,7 +14,9 @@ for that long, as while a model loads; ``FAKE_EXIT_AFTER_S`` exits with code 9
 that long after its first healthy answer, as a crash would;
 ``FAKE_REPORT_SESSION`` prints whether it leads its own session (POSIX only);
 ``FAKE_THINK_UNTIL_ENDED`` keeps a request sent with ``reasoning_control``
-thinking until the control ends it, for at most ``THINK_CAP_S``.
+thinking until the control ends it, for at most ``THINK_CAP_S``;
+``FAKE_FIRST_BYTE_S`` sends nothing for that long before answering a
+completion, as the real server is silent while it reads a long prompt.
 """
 
 from __future__ import annotations
@@ -158,7 +160,12 @@ def _control(
 
 
 def _handler(
-    ready_at: float, key: str, seen_ready: Callable[[], None], *, until_ended: bool
+    ready_at: float,
+    key: str,
+    seen_ready: Callable[[], None],
+    *,
+    until_ended: bool,
+    first_byte_s: float,
 ) -> type[BaseHTTPRequestHandler]:
     completions = Completions()
 
@@ -190,6 +197,7 @@ def _handler(
             if self.path == CONTROL_PATH:
                 _control(self, body, completions)
                 return
+            time.sleep(first_byte_s)
             _stream(
                 self,
                 f"echo: {_last_text(body)}",
@@ -230,6 +238,7 @@ def main() -> None:
         os.environ["LLAMA_API_KEY"],
         crash_once_seen_ready,
         until_ended=bool(os.environ.get("FAKE_THINK_UNTIL_ENDED")),
+        first_byte_s=float(os.environ.get("FAKE_FIRST_BYTE_S", "0")),
     )
     server = ThreadingHTTPServer((options.host, options.port), handler)
     server.serve_forever()

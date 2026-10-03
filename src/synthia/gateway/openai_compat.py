@@ -265,6 +265,8 @@ class Endpoint:
 
     ``model`` is the default model id sent when a request names none.
     ``dialect`` defaults to OpenRouter's, the only remote provider.
+    ``timeout`` replaces the client's own limits for this endpoint's requests;
+    None keeps the client's.
     """
 
     base_url: str
@@ -272,6 +274,7 @@ class Endpoint:
     api_key: SecretStr | None = None
     headers: Mapping[str, str] = field(default_factory=dict[str, str])
     dialect: Dialect = Dialect.OPENROUTER
+    timeout: httpx.Timeout | None = None
 
     @property
     def completions_url(self) -> str:
@@ -292,6 +295,11 @@ class OpenAICompatibleModel:
         self._api_key = endpoint.api_key
         self._headers = dict(endpoint.headers)
         self._dialect = endpoint.dialect
+        # httpx reads timeout=None as "no limit at all", so an unset one must
+        # be its marker for the client's own limits.
+        self._timeout = (
+            httpx.USE_CLIENT_DEFAULT if endpoint.timeout is None else endpoint.timeout
+        )
 
     @property
     def info(self) -> ModelInfo:
@@ -311,7 +319,7 @@ class OpenAICompatibleModel:
         payload = build_payload(request, self._model, self._dialect)
         try:
             async with self._client.stream(
-                "POST", self._url, json=payload, headers=headers
+                "POST", self._url, json=payload, headers=headers, timeout=self._timeout
             ) as response:
                 if response.status_code >= httpx.codes.BAD_REQUEST:
                     body = await response.aread()
