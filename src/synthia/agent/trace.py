@@ -27,12 +27,13 @@ from pydantic import (
 )
 
 from synthia.agent.loop import Finished, ModelChunk, ModelTurn, ToolStarted
+from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
 from synthia.gateway.errors import GatewayError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
-    from synthia.agent.loop import Step
+    from synthia.agent.plan import PlanEvent
     from synthia.gateway.router import RouteDecided
     from synthia.gateway.types import Reasoning
 
@@ -128,6 +129,28 @@ class ToolEnded(_Record):
     flags: tuple[Mended, ...]
 
 
+class PlanMade(_Record):
+    """A plan was made, or made again after a step did not finish."""
+
+    kind: Literal["plan"] = "plan"
+    steps: tuple[Mended, ...]
+    revised: bool
+
+
+class PlanStepStarted(_Record):
+    """Step ``number`` (from 1) of the plan began."""
+
+    kind: Literal["plan_step"] = "plan_step"
+    number: int
+    text: Mended
+
+
+class PlanAnswerStarted(_Record):
+    """Every step was done; the answer is written from their results."""
+
+    kind: Literal["plan_answer"] = "plan_answer"
+
+
 class TurnEnded(_Record):
     """The turn was answered, or stopped at a limit."""
 
@@ -144,7 +167,15 @@ class TurnFailed(_Record):
 
 
 type Record = Annotated[
-    TurnBegan | ModelAnswered | ToolBegan | ToolEnded | TurnEnded | TurnFailed,
+    TurnBegan
+    | ModelAnswered
+    | ToolBegan
+    | ToolEnded
+    | PlanMade
+    | PlanStepStarted
+    | PlanAnswerStarted
+    | TurnEnded
+    | TurnFailed,
     Field(discriminator="kind"),
 ]
 _RECORD: Final[TypeAdapter[Record]] = TypeAdapter(Record)
@@ -156,7 +187,7 @@ def utc_now() -> datetime:
 
 
 def record_of(
-    step: Step, *, turn: int, at: datetime, route: RouteDecided | None = None
+    step: PlanEvent, *, turn: int, at: datetime, route: RouteDecided | None = None
 ) -> Record | None:
     """Return the record of ``step``; None for a streamed piece, which is not traced.
 
@@ -194,6 +225,8 @@ def record_of(
             return TurnEnded(
                 turn=turn, at=at, outcome=outcome.value, text=Clip.of(text)
             )
+        case Planned() | PlanStepBegun() | PlanAnswerBegun():
+            return _plan_record(step, turn=turn, at=at)
         case _:
             return ToolEnded(
                 turn=turn,
@@ -205,6 +238,18 @@ def record_of(
                 seconds=step.seconds,
                 flags=step.flags,
             )
+
+
+def _plan_record(
+    mark: Planned | PlanStepBegun | PlanAnswerBegun, *, turn: int, at: datetime
+) -> Record:
+    match mark:
+        case Planned(steps=steps, revised=revised):
+            return PlanMade(turn=turn, at=at, steps=steps, revised=revised)
+        case PlanStepBegun(number=number, text=text):
+            return PlanStepStarted(turn=turn, at=at, number=number, text=text)
+        case _:
+            return PlanAnswerStarted(turn=turn, at=at)
 
 
 class Trace:
@@ -251,11 +296,11 @@ class Trace:
             )
         )
 
-    async def watch(
+    async def watch[E: PlanEvent](
         self,
-        steps: AsyncGenerator[Step],
+        steps: AsyncGenerator[E],
         route: Callable[[], RouteDecided | None] = lambda: None,
-    ) -> AsyncGenerator[Step]:
+    ) -> AsyncGenerator[E]:
         """Pass ``steps`` on unchanged, recording each into the current turn.
 
         ``route`` returns the router's latest decision, read as each model

@@ -19,6 +19,7 @@ from rich.status import Status
 from rich.text import Text
 
 from synthia.agent.loop import ToolFinished
+from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
 from synthia.agent.policy import Decision
 from synthia.agent.trace import TRACES, Trace
 from synthia.gateway.assemble import build_gateway
@@ -31,6 +32,7 @@ from synthia.interfaces.commands import (
     Exit,
     Help,
     Invalid,
+    Plan,
     Reset,
     Say,
     ShowBudget,
@@ -65,6 +67,7 @@ if TYPE_CHECKING:
     from synthia.gateway.assemble import Gateway
     from synthia.gateway.providers import RemoteProvider
     from synthia.gateway.types import ChatChunk, ImagePart
+    from synthia.interfaces.session import PlanMark
     from synthia.kernel.config import Settings
     from synthia.models.service import LocalService
 
@@ -108,6 +111,19 @@ def describe_call(finished: ToolFinished) -> str:
     return (
         f"tool {call.name} {arguments} | {outcome}{flagged} | {finished.seconds:.1f} s"
     )
+
+
+def describe_mark(mark: PlanMark) -> str:
+    """Return the dim line shown when a planned turn moves on."""
+    match mark:
+        case Planned(steps=steps, revised=revised):
+            made = "plan again" if revised else "plan"
+            listed = " | ".join(f"{n}. {s}" for n, s in enumerate(steps, 1))
+            return f"{made}: {visible(listed) or 'no steps left'}"
+        case PlanStepBegun(number=number, text=text):
+            return f"step {number}: {visible(text)}"
+        case _:
+            return "answer:"
 
 
 def approval_question(name: str, arguments: str) -> str:
@@ -247,6 +263,13 @@ class AnswerLines:
         self.end_line()
         self._console.print(describe_call(finished), style="dim", markup=False)
 
+    def mark(self, mark: PlanMark) -> None:
+        """Print where a planned turn has got to, on a line of its own."""
+        self.end_line()
+        self._console.print(
+            describe_mark(mark), style="dim", markup=False, highlight=False
+        )
+
     def end_line(self) -> None:
         """End the answer's current line, if text is on it."""
         if self._open:
@@ -286,6 +309,8 @@ class ChatApp:
             case Say(text=text):
                 if text:
                     await self._answer(text)
+            case Plan(task=task):
+                await self._answer(task, plan=True)
             case ShowImage(path=path, text=text):
                 await self._image(path, text)
             case SwitchPersona() | AdjustPersona():
@@ -324,16 +349,18 @@ class ChatApp:
         self.console.print()
         self._note("stopped; that turn is not kept")
 
-    async def _answer(self, text: str, *images: ImagePart) -> None:
+    async def _answer(self, text: str, *images: ImagePart, plan: bool = False) -> None:
         report: TurnReport | None = None
         shown = AnswerLines(self.console)
         try:
             with ThinkingLine(self.console, self._clock) as thinking:
-                async for item in self.session.turn(text, *images):
+                async for item in self.session.turn(text, *images, plan=plan):
                     if isinstance(item, TurnReport):
                         report = item
                     elif isinstance(item, ToolFinished):
                         shown.call(item)
+                    elif isinstance(item, Planned | PlanStepBegun | PlanAnswerBegun):
+                        shown.mark(item)
                     else:
                         thinking.see(item)
                         shown.text(item.text)

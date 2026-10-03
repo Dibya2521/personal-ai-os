@@ -246,6 +246,11 @@ one new plan from what is done; a second such step is not re-planned. A plan
 the model cannot give in the right shape is no plan, and the task runs as a
 plain loop.
 
-The planner is built and tested, and not yet used by the chat: a planning call
-on every turn would cost a whole model step, even for a question that needs
-none.
+In the chat it runs only when asked: `/plan <task>`. A planning call on every
+turn would cost a whole model step, even for a question that needs none. The
+chat shows the plan, a line as each step begins, each step's result as it
+streams, and `answer:` before the final answer; only the task and that answer
+enter the conversation. The trace records the plan, each step's start and the
+answer's start, and `synthia trace` shows each step's model steps under it.
+The planning request itself is not a model step of the turn, so its tokens are
+not in the turn's report line.

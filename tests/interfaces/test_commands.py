@@ -10,6 +10,7 @@ from synthia.interfaces.commands import (
     Exit,
     Help,
     Invalid,
+    Plan,
     Reset,
     Say,
     ShowBudget,
@@ -51,6 +52,7 @@ from synthia.interfaces.commands import (
         ("/remote", UseRemote(None)),
         ("/remote on", UseRemote(on=True)),
         ("/remote  OFF ", UseRemote(on=False)),
+        ("/plan find a, then use it ", Plan("find a, then use it")),
     ],
 )
 def test_each_command_parses(line: str, command: Command) -> None:
@@ -73,6 +75,8 @@ def test_each_command_parses(line: str, command: Command) -> None:
         ("/think high now", "'high now' is not a thinking level"),
         ("/remote yes", "'yes' is not on or off"),
         ("/remote on now", "'on now' is not on or off"),
+        ("/plan", "/plan needs a task"),
+        ("/plan    ", "/plan needs a task"),
     ],
 )
 def test_mistakes_say_what_is_wrong(line: str, reason: str) -> None:

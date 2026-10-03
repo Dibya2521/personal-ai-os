@@ -64,7 +64,12 @@ class PlanStepBegun:
     text: str
 
 
-type PlanEvent = Step | Planned | PlanStepBegun
+@dataclass(frozen=True, slots=True)
+class PlanAnswerBegun:
+    """Every step is done; the answer is being written from their results."""
+
+
+type PlanEvent = Step | Planned | PlanStepBegun | PlanAnswerBegun
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +115,7 @@ class Planner:
                 steps = await self._plan(request, done) or ()
                 remaining = list(steps)
                 yield Planned(steps, revised=True)
+        yield PlanAnswerBegun()
         async for event in self._loop(self._final(request, done)):
             if isinstance(event, Finished):
                 yield Finished(

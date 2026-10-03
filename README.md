@@ -160,10 +160,9 @@ in [`docs/gateway.md`](docs/gateway.md).
   are flagged on the call's line.
 - **Trace.** Every turn, model step and tool call is written to
   `SYNTHIA_HOME/traces/`, and `synthia trace` shows a session as a tree.
-- **Plan and execute.** A planner asks the model for a list of steps, runs
-  each as its own loop, re-plans once if a step does not finish, and writes
-  the answer from the results. It is built and tested, and not yet used by
-  the chat.
+- **Plan and execute.** `/plan <task>` asks the model for a list of steps,
+  runs each as its own loop, re-plans once if a step does not finish, and
+  writes the answer from the results, showing each step as it begins.
 
 **Repository.** Every commit passes ruff with every rule enabled, pyright in
 strict mode, an import check that keeps each package from importing the ones

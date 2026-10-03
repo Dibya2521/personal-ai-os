@@ -4,6 +4,16 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `/plan <task>` in `synthia chat`: SYNTHIA plans the task as steps, does each
+  step with its tools, re-plans once if a step does not finish, then answers
+  from the results. The chat shows the plan, each step as it begins and
+  `answer:` before the answer; only the task and the answer are kept in the
+  conversation. `synthia trace` shows the plan and each step's work under it.
+
 ## [0.2.0] - 2026-10-03
 
 SYNTHIA can think and act: a terminal chat through a model gateway that
@@ -199,5 +209,6 @@ that guards itself.
   pyright strict, pytest, secret scanning and a file-size limit.
 - Architecture overview and decision records 0001 to 0004.
 
+[Unreleased]: https://github.com/Dibya2521/personal-ai-os/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/Dibya2521/personal-ai-os/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Dibya2521/personal-ai-os/releases/tag/v0.1.0

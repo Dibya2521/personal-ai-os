@@ -5,6 +5,7 @@ import pytest
 from synthia.agent.loop import Agent, Finished, Limits, Outcome, ToolFinished
 from synthia.agent.plan import (
     MAX_RESULT_CHARS,
+    PlanAnswerBegun,
     PlanEvent,
     Planned,
     Planner,
@@ -60,7 +61,9 @@ async def test_a_task_of_one_step_runs_as_a_plain_loop(steps: tuple[str, ...]) -
     assert only_finished(seen) == Finished(
         "hi", Outcome.ANSWERED, (*question().messages, Message.assistant("hi"))
     )
-    assert not [e for e in seen if isinstance(e, Planned | PlanStepBegun)]
+    assert not [
+        e for e in seen if isinstance(e, Planned | PlanStepBegun | PlanAnswerBegun)
+    ]
     plan, run = model.requests
     assert (plan.tools, plan.response_schema is not None) == ((), True)
     assert "- note: Note something down." in asked(model, 0)
@@ -81,13 +84,14 @@ async def test_a_plan_runs_step_by_step_and_ends_with_one_answer() -> None:
     marks = [
         e.result if isinstance(e, ToolFinished) else e
         for e in seen
-        if isinstance(e, Planned | PlanStepBegun | ToolFinished)
+        if isinstance(e, Planned | PlanStepBegun | PlanAnswerBegun | ToolFinished)
     ]
     assert marks == [
         Planned(("find a", "use a"), revised=False),
         PlanStepBegun(1, "find a"),
         "noted a",
         PlanStepBegun(2, "use a"),
+        PlanAnswerBegun(),
     ]
     assert only_finished(seen) == Finished(
         "All done.",
@@ -118,11 +122,14 @@ async def test_a_step_that_does_not_finish_is_planned_again_but_only_once() -> N
 
     seen = await events(planner(model, Limits(max_steps=2)))
 
-    assert [e for e in seen if isinstance(e, Planned | PlanStepBegun)] == [
+    assert [
+        e for e in seen if isinstance(e, Planned | PlanStepBegun | PlanAnswerBegun)
+    ] == [
         Planned(("a", "b"), revised=False),
         PlanStepBegun(1, "a"),
         Planned(("c",), revised=True),
         PlanStepBegun(2, "c"),
+        PlanAnswerBegun(),
     ]
     assert asked(model, 3).endswith(
         "A step did not finish. Done so far:\n1. a: partial a\n"

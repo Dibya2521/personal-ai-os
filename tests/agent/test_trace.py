@@ -133,6 +133,44 @@ async def test_a_turn_with_a_tool_call_is_recorded_step_by_step(
     assert ran == ["milk"]
 
 
+async def test_a_planned_turn_records_its_plan_each_step_and_the_answer(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "s.jsonl"
+    model = Scripted(
+        says(json.dumps({"steps": ["find a", "use a"]})),
+        says("found a"),
+        says("used a"),
+        says("All done."),
+    )
+    session = traced(model, path)
+
+    async for _ in session.turn("plan it", plan=True):
+        pass
+
+    records = dumps(path)
+    assert [r["kind"] for r in records] == [
+        "turn",
+        "plan",
+        "plan_step",
+        "model",
+        "plan_step",
+        "model",
+        "plan_answer",
+        "model",
+        "finished",
+    ]
+    step = {"turn": 1, "at": "2026-10-02T15:15:00Z"}
+    assert records[1] == step | {
+        "kind": "plan",
+        "steps": ["find a", "use a"],
+        "revised": False,
+    }
+    assert records[4] == step | {"kind": "plan_step", "number": 2, "text": "use a"}
+    assert records[6] == step | {"kind": "plan_answer"}
+    assert [m.text for m in session.history] == ["plan it", "All done."]
+
+
 async def test_turns_are_numbered_and_streamed_pieces_are_not_recorded(
     tmp_path: Path,
 ) -> None:

@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from synthia.agent.loop import ToolFinished
+from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
 from synthia.agent.policy import Policy
 from synthia.agent.quoting import quote
 from synthia.agent.tools import Effect, FunctionTool, Reach, Toolbox
@@ -14,11 +15,12 @@ from synthia.interfaces.chat import (
     MAX_SHOWN,
     approval_question,
     describe_call,
+    describe_mark,
     run_chat,
     terminal_approver,
 )
 from synthia.interfaces.commands import Invalid, ShowTools, parse
-from synthia.interfaces.session import ChatSession, TurnReport
+from synthia.interfaces.session import ChatSession, PlanMark, TurnReport
 from synthia.persona.library import PersonaLibrary
 from synthia.tools import agents
 from tests.agent.scripted import Scripted, calls, says
@@ -269,6 +271,53 @@ async def test_an_answer_with_nothing_in_it_says_none_came_back(
 
     assert out.getvalue() == "no answer came back\n"
     assert chat.session.history == []
+
+
+async def test_plan_shows_the_plan_each_step_and_the_answer(tmp_path: Path) -> None:
+    model = Scripted(
+        says(json.dumps({"steps": ["find a", "use a"]})),
+        says("found a"),
+        says("used a"),
+        says("All done."),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(404))
+    ) as client:
+        chat, out = await app_for(tmp_path, client)
+        chat.session = ChatSession(model, PersonaLibrary(), "synthia")
+        await chat.handle(parse("/plan find a, then use it"))
+
+    *shown, report = out.getvalue().splitlines()
+    assert shown == [
+        "plan: 1. find a | 2. use a",
+        "step 1: find a",
+        "found a",
+        "step 2: use a",
+        "used a",
+        "answer:",
+        "All done.",
+    ]
+    assert report.startswith("direct | ")
+    assert [m.text for m in chat.session.history] == [
+        "find a, then use it",
+        "All done.",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mark", "line"),
+    [
+        (Planned((), revised=True), "plan again: no steps left"),
+        (Planned(("a\x1b[2Jb",), revised=False), "plan: 1. a\\x1b[2Jb"),
+        (PlanStepBegun(3, "check\rthe log"), "step 3: check\\rthe log"),
+        (PlanAnswerBegun(), "answer:"),
+    ],
+    ids=["no-steps-left", "escape-in-plan", "return-in-step", "answer"],
+)
+def test_a_plan_line_escapes_what_a_terminal_would_act_on(
+    mark: PlanMark, line: str
+) -> None:
+    assert describe_mark(mark) == line
 
 
 @pytest.fixture(autouse=True)

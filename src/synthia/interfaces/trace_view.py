@@ -1,8 +1,9 @@
 """``synthia trace``: show what the agent did in a chat, as a tree.
 
 Each turn is a branch; under it, each model step and, under the step, the
-tool calls it asked for with what came back. A call that began and has no end
-was still running when the turn stopped.
+tool calls it asked for with what came back. A planned turn shows its plan,
+then each plan step with its model steps, then the answer written from them.
+A call that began and has no end was still running when the turn stopped.
 """
 
 from __future__ import annotations
@@ -14,10 +15,14 @@ from rich.tree import Tree
 
 from synthia.agent.trace import (
     ModelAnswered,
+    PlanAnswerStarted,
+    PlanMade,
+    PlanStepStarted,
     ToolBegan,
     ToolEnded,
     TurnBegan,
     TurnEnded,
+    TurnFailed,
     read_trace,
 )
 from synthia.interfaces.chat import shorten
@@ -67,6 +72,12 @@ def _model(record: ModelAnswered) -> str:
     return " | ".join(parts)
 
 
+def _plan(record: PlanMade) -> str:
+    made = "planned again" if record.revised else "planned"
+    steps = " | ".join(f"{n}. {s}" for n, s in enumerate(record.steps, 1))
+    return f"{made}: {_preview(steps) or 'no steps left'}"
+
+
 def _call(record: ToolBegan) -> str:
     return f"tool {record.name} {_preview(record.arguments.text or '{}')}"
 
@@ -83,33 +94,61 @@ def _end(calls: dict[str, tuple[Tree, str]], step: Tree, record: ToolEnded) -> N
     node.add(Text(_preview(record.result.text)))
 
 
+class _Branches:
+    """Where the next record goes while a session's records are read in order."""
+
+    def __init__(self, root: Tree, tz: tzinfo | None) -> None:
+        self._root = root
+        self._tz = tz
+        self._turn = root
+        # The turn, or the plan step being worked on: where model steps go.
+        self._section = root
+        self._step = root
+        self._calls: dict[str, tuple[Tree, str]] = {}
+
+    def add(self, record: Record) -> None:
+        match record:
+            case TurnBegan():
+                self._turn = self._section = self._step = self._root.add(
+                    Text(_turn(record, self._tz))
+                )
+                self._calls = {}
+            case ModelAnswered():
+                self._step = self._section.add(Text(_model(record)))
+            case ToolBegan():
+                began = _call(record)
+                node = self._step.add(Text(f"{began} | did not finish"))
+                self._calls[record.call_id] = (node, began)
+            case ToolEnded():
+                _end(self._calls, self._step, record)
+            case TurnEnded():
+                self._turn.add(Text(f"{record.outcome} | {_preview(record.text.text)}"))
+            case TurnFailed():
+                self._turn.add(Text(f"failed | {_preview(record.reason)}"))
+            case _:
+                self._plan(record)
+
+    def _plan(self, record: PlanMade | PlanStepStarted | PlanAnswerStarted) -> None:
+        match record:
+            case PlanMade():
+                self._turn.add(Text(_plan(record)))
+            case PlanStepStarted():
+                text = f"step {record.number}: {_preview(record.text)}"
+                self._section = self._step = self._turn.add(Text(text))
+            case _:
+                self._section = self._step = self._turn.add(
+                    Text("answer from the steps")
+                )
+
+
 def build_tree(
     name: str, records: list[Record], unreadable: int = 0, tz: tzinfo | None = None
 ) -> Tree:
     """Return the tree of the session ``name``, with times in ``tz`` (local if None)."""
     root = Tree(Text(f"session {name}"))
-    turn = root
-    step = root
-    calls: dict[str, tuple[Tree, str]] = {}
+    branches = _Branches(root, tz)
     for record in records:
-        match record:
-            case TurnBegan():
-                turn = step = root.add(Text(_turn(record, tz)))
-                calls = {}
-            case ModelAnswered():
-                step = turn.add(Text(_model(record)))
-            case ToolBegan():
-                began = _call(record)
-                calls[record.call_id] = (
-                    step.add(Text(f"{began} | did not finish")),
-                    began,
-                )
-            case ToolEnded():
-                _end(calls, step, record)
-            case TurnEnded():
-                turn.add(Text(f"{record.outcome} | {_preview(record.text.text)}"))
-            case _:
-                turn.add(Text(f"failed | {_preview(record.reason)}"))
+        branches.add(record)
     if unreadable:
         lines = "line" if unreadable == 1 else "lines"
         root.add(Text(f"{unreadable} {lines} could not be read"))

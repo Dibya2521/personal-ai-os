@@ -12,6 +12,9 @@ from synthia.agent.trace import (
     TRACES,
     Clip,
     ModelAnswered,
+    PlanAnswerStarted,
+    PlanMade,
+    PlanStepStarted,
     Record,
     ToolBegan,
     ToolEnded,
@@ -140,6 +143,47 @@ def test_a_session_shows_turns_steps_and_calls_in_call_order() -> None:
         ),
         "    failed | no answer: the provider broke",
         "  1 line could not be read",
+    ]
+
+
+def test_a_planned_turn_shows_its_plan_then_each_step_then_the_answer() -> None:
+    records: list[Record] = [
+        TurnBegan(
+            turn=1,
+            at=AT,
+            question=Clip.of("find a, then use it"),
+            persona="SYNTHIA",
+            reasoning="auto",
+            use_remote=False,
+        ),
+        PlanMade(turn=1, at=AT, steps=("find a", "use a"), revised=False),
+        PlanStepStarted(turn=1, at=AT, number=1, text="find a"),
+        model("tool_calls", tokens=(10, 2), thought=0),
+        started("call_0", "note", "{}"),
+        ended("call_0", "note", "noted", ok=True),
+        PlanStepStarted(turn=1, at=AT, number=2, text="use a"),
+        model("length", tokens=(12, 3), thought=0),
+        PlanMade(turn=1, at=AT, steps=(), revised=True),
+        PlanAnswerStarted(turn=1, at=AT),
+        model("stop", tokens=(20, 5), thought=0),
+        TurnEnded(turn=1, at=AT, outcome="answered", text=Clip.of("Done.")),
+    ]
+
+    assert outline(build_tree("s", records, tz=UTC))[2:] == [
+        "    planned: 1. find a | 2. use a",
+        "    step 1: find a",
+        (
+            "      model local qwen3.5-4b, thinking low | tool_calls | 10 in, 2 out | "
+            "3.1 s"
+        ),
+        "        tool note {} | ok | 0.2 s",
+        "          noted",
+        "    step 2: use a",
+        "      model local qwen3.5-4b, thinking low | length | 12 in, 3 out | 3.1 s",
+        "    planned again: no steps left",
+        "    answer from the steps",
+        "      model local qwen3.5-4b, thinking low | stop | 20 in, 5 out | 3.1 s",
+        "    answered | Done.",
     ]
 
 

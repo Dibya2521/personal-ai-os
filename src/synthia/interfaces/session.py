@@ -21,6 +21,7 @@ from synthia.agent.loop import (
     ModelTurn,
     ToolFinished,
 )
+from synthia.agent.plan import PlanAnswerBegun, Planned, Planner, PlanStepBegun
 from synthia.agent.policy import Policy, nobody_approves
 from synthia.agent.tools import Toolbox
 from synthia.gateway.errors import IncompleteResponseError
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from pathlib import Path
 
+    from synthia.agent.plan import PlanEvent
     from synthia.agent.policy import Approver
     from synthia.agent.trace import Trace
     from synthia.gateway.protocol import ChatModel
@@ -60,6 +62,9 @@ DEFAULT_REASONING: Final = Reasoning.AUTO
 # No deadline: the answer streams in view and Ctrl+C stops it when the person
 # chooses; a long local answer at 2 threads can pass the agent's 5 minutes.
 CHAT_LIMITS: Final = Limits(deadline_s=None)
+
+type PlanMark = Planned | PlanStepBegun | PlanAnswerBegun
+"""Where a planned turn is: the plan made, a step begun, the answer begun."""
 
 
 class ImageError(ValueError):
@@ -187,12 +192,13 @@ class ChatSession:
         )
 
     async def turn(
-        self, text: str, *images: ImagePart
-    ) -> AsyncGenerator[ChatChunk | ToolFinished | TurnReport]:
+        self, text: str, *images: ImagePart, plan: bool = False
+    ) -> AsyncGenerator[ChatChunk | ToolFinished | PlanMark | TurnReport]:
         """Yield the answer as it streams and each tool call as it ends, then a report.
 
         The turn runs as an agent over :attr:`tools`; with none, it is one
-        request, as it always was.
+        request, as it always was. With ``plan`` it runs as a plan of steps,
+        and the plan, each step's start and the answer's start are yielded too.
 
         Raises:
             GatewayError: If the answer failed; the history is unchanged.
@@ -206,7 +212,9 @@ class ChatSession:
             policy=self.policy,
             approver=self._approver,
         )
-        run = agent.run(request)
+        run: AsyncGenerator[PlanEvent] = (
+            Planner(agent).run(request) if plan else agent.run(request)
+        )
         if self._trace:
             self._trace.begin(
                 text, self.persona.name, self.reasoning, use_remote=self.use_remote
@@ -219,7 +227,9 @@ class ChatSession:
                 async for step in steps:
                     if isinstance(step, ModelChunk):
                         yield step.chunk
-                    elif isinstance(step, ToolFinished):
+                    elif isinstance(
+                        step, ToolFinished | Planned | PlanStepBegun | PlanAnswerBegun
+                    ):
                         yield step
                     elif isinstance(step, ModelTurn):
                         answers.append(step.response)

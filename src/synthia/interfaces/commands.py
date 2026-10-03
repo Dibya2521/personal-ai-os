@@ -26,6 +26,13 @@ class Say:
 
 
 @dataclass(frozen=True, slots=True)
+class Plan:
+    """Do ``task`` as a plan of steps: plan first, then each step, then answer."""
+
+    task: str
+
+
+@dataclass(frozen=True, slots=True)
 class SwitchPersona:
     """Continue as the persona ``key``; an empty key lists the personas."""
 
@@ -100,6 +107,7 @@ class Invalid:
 
 type Command = (
     Say
+    | Plan
     | SwitchPersona
     | AdjustPersona
     | ShowImage
@@ -117,6 +125,7 @@ type Command = (
 DEFAULT_IMAGE_QUESTION: Final = "What is in this image?"
 
 HELP: Final = """\
+/plan <task>               plan the task in steps, do each step, then answer
 /persona [name]            switch persona, or list them
 /persona set wit=0.3 ...   move sliders: warmth formality wit vigilance verbosity
 /image <path> [question]   send an image; quote a path that has spaces
@@ -206,7 +215,12 @@ def _image(rest: str) -> Command:
     return ShowImage(Path(path), text.strip() or DEFAULT_IMAGE_QUESTION)
 
 
+def _plan(rest: str) -> Command:
+    return Plan(rest) if rest else Invalid("/plan needs a task")
+
+
 _WITH_ARGUMENTS: Final[dict[str, Callable[[str], Command]]] = {
+    "plan": _plan,
     "persona": _persona,
     "image": _image,
     "think": _think,
