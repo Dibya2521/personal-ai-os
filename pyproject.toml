@@ -24,12 +24,15 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
+    "fastapi>=0.142.2",
     "httpx>=0.28",
     "platformdirs>=4.3",
     "psutil>=6.1",
     "pydantic-settings>=2.6",
     "rich>=14",
     "typer>=0.15",
+    "uvicorn>=0.54.0",
+    "websockets>=17.1",
 ]
 
 [project.scripts]
