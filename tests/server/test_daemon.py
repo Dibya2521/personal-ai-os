@@ -1,7 +1,7 @@
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import cast
@@ -14,12 +14,14 @@ from websockets.exceptions import InvalidStatus
 
 from synthia import __version__
 from synthia.agent.tools import Effect, FunctionTool, Reach, Toolbox
+from synthia.agent.trace import TRACES, read_trace, sessions
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.errors import ProviderError
 from synthia.gateway.types import ChatChunk, ChatRequest
 from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings
 from synthia.kernel.jsonrpc import Method, Notice, Params, Peer, RpcError
+from synthia.kernel.supervisor import ServiceEvent, ServiceStarted
 from synthia.persona.library import PersonaLibrary
 from synthia.server.api import ANSWER_FAILED, IMAGE_REFUSED, INVALID_PARAMS
 from synthia.server.daemon import run_daemon, serve
@@ -398,6 +400,7 @@ async def test_the_daemon_starts_what_it_shares_serves_and_stops(
     async with client(info) as talk:
         hello = await talk.call("hello")
         tools = await talk.call("tools")
+        status = await talk.call("status")
     stop.set()
     await asyncio.wait_for(running, HANG_TIMEOUT_S)
 
@@ -407,6 +410,7 @@ async def test_the_daemon_starts_what_it_shares_serves_and_stops(
         "sessions": 1,
         "warnings": [],
     }
+    assert status == {"sessions": 1, "local": "none"}
     names = [
         line.split(" | ")[0] for line in cast("dict[str, list[str]]", tools)["notes"]
     ]
@@ -424,8 +428,13 @@ class Service:
         del client
         return Local(says("from the local model"))
 
-    def start(self) -> None:
+    def state(self) -> str:
+        return "ready"
+
+    def start(self, observe: Callable[[ServiceEvent], None] | None = None) -> None:
         self.events.append("start")
+        if observe is not None:
+            observe(ServiceStarted(service="llama-server", attempt=1))
 
     def stop(self) -> None:
         self.events.append("stop")
@@ -443,12 +452,18 @@ async def test_the_local_model_starts_with_the_daemon_and_stops_with_it(
     async with client(info) as talk:
         report = await talk.call("turn", {"text": "hi"})
         adjusted = await talk.call("adjust", {"values": {"wit": 0.9}})
+        status = await talk.call("status")
     stop.set()
     await asyncio.wait_for(running, HANG_TIMEOUT_S)
 
     assert service.events == ["start", "stop"]
     assert cast("dict[str, object]", report)["route"] == "local"
     assert cast("dict[str, list[str]]", adjusted)["notes"][0].startswith("now ")
+    assert status == {"sessions": 1, "local": "ready"}
+    kinds = [
+        [r.kind for r in read_trace(path)[0]] for path in sessions(tmp_path / TRACES)
+    ]
+    assert sorted(kinds) == [["service"], ["turn", "model", "finished"]]
 
 
 async def test_a_routing_decision_outside_any_turn_goes_nowhere() -> None:

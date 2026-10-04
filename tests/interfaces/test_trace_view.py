@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,18 +17,23 @@ from synthia.agent.trace import (
     PlanMade,
     PlanStepStarted,
     Record,
+    ServiceChanged,
     ToolBegan,
     ToolEnded,
     TurnBegan,
     TurnEnded,
     TurnFailed,
+    read_trace,
+    sessions,
 )
 from synthia.interfaces import doctor
 from synthia.interfaces.chat import run_chat
 from synthia.interfaces.cli import app
 from synthia.interfaces.trace_view import build_tree
+from synthia.kernel.supervisor import RestartPolicy
 from tests.interfaces.daemons import private_daemon
 from tests.interfaces.test_chat import KEY, console, scripted, settings, thinking_then
+from tests.models.test_service import service_at, wait_until
 
 AT = datetime(2026, 10, 2, 15, 15, tzinfo=UTC)
 runner = CliRunner()
@@ -219,6 +225,34 @@ def test_a_result_of_many_lines_is_shown_on_one() -> None:
     assert outline(build_tree("s", records))[-1] == "    first line second line"
 
 
+def test_a_service_shows_each_start_end_and_restart() -> None:
+    def changed(change: str, **fields: object) -> ServiceChanged:
+        return ServiceChanged.model_validate(
+            {"turn": 0, "at": AT, "service": "llama-server", "change": change, **fields}
+        )
+
+    records: list[Record] = [
+        changed("started", attempt=1),
+        changed(
+            "exited", error=Clip.of("ServerCrashedError('code 9')"), restart_in_s=0.5
+        ),
+        changed("started", attempt=2),
+        changed("exited"),
+        changed("stopped"),
+    ]
+
+    assert outline(build_tree("d", records, tz=UTC))[1:] == [
+        "  service llama-server started at 15:15:00",
+        (
+            "  service llama-server ended at 15:15:00: ServerCrashedError('code 9') | "
+            "restart in 0.5 s"
+        ),
+        "  service llama-server started at 15:15:00, attempt 2",
+        "  service llama-server ended at 15:15:00 | not restarted",
+        "  service llama-server stopped at 15:15:00",
+    ]
+
+
 @pytest.fixture
 def home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.chdir(tmp_path)
@@ -265,6 +299,32 @@ def test_a_chat_leaves_a_trace_the_command_shows_without_the_key(home: Path) -> 
     assert listed.strip() == f"{path.stem} | turns 1 | tool calls 0"
     by_name = runner.invoke(app, ["trace", path.stem])
     assert by_name.output == shown
+
+
+def test_a_crashed_local_model_is_restarted_and_the_daemon_trace_shows_it(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT_AFTER_S", "0.2")
+    service = service_at(home, RestartPolicy(backoff_initial_s=0.01))
+
+    def restarted() -> bool:
+        return any(
+            isinstance(r, ServiceChanged) and r.attempt == 2
+            for path in sessions(home / TRACES)
+            for r in read_trace(path)[0]
+        )
+
+    with private_daemon(settings(home), local=service):
+        wait_until(restarted)
+
+    listed = runner.invoke(app, ["trace", "--list"]).output
+    shown = runner.invoke(app, ["trace"]).output
+    # It may crash again before the daemon stops: at least one restart.
+    assert re.search(r"\| turns 0 \| tool calls 0 \| service restarts [1-9]", listed)
+    assert "service llama-server started at " in shown
+    assert "ServerCrashedError" in shown
+    assert "| restart in " in shown
+    assert ", attempt 2" in shown
 
 
 def test_an_unknown_session_fails_and_points_at_the_list(home: Path) -> None:

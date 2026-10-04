@@ -7,12 +7,14 @@ from pathlib import Path
 
 import pytest
 from pydantic import SecretStr
+from typer.testing import CliRunner
 
 from synthia import __version__
 from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
 from synthia.gateway.errors import GatewayError
 from synthia.gateway.types import ChatChunk, PromptProgress
 from synthia.interfaces import daemon_client
+from synthia.interfaces.cli import app
 from synthia.interfaces.daemon_client import (
     STOPPED_AT_START,
     DaemonError,
@@ -217,6 +219,25 @@ def test_streamed_pieces_are_rebuilt_as_the_terminal_shows_them() -> None:
     assert chunk.tool_calls
     assert chunk.progress == PromptProgress(2048, 2723)
     assert daemon_client.chunk_from({"text": "hi"}) == ChatChunk(text="hi")
+
+
+def test_status_and_stop_from_the_command_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    with private_daemon(keyed(tmp_path)) as info:
+        running = runner.invoke(app, ["status"]).output.splitlines()
+        stopping = runner.invoke(app, ["stop"])
+        gone = not (tmp_path / DAEMON_FILE).exists()
+
+    assert running[0].startswith(f"daemon running: version {__version__}, since ")
+    assert running[0].endswith(f", pid {info.pid}, port {info.port}")
+    assert running[1:] == ["other conversations open: 0", "local model: none"]
+    assert (stopping.exit_code, stopping.output, gone) == (0, "daemon stopped\n", True)
+    assert runner.invoke(app, ["status"]).output == "no daemon running\n"
+    assert runner.invoke(app, ["stop"]).output == "no daemon running\n"
 
 
 async def test_the_real_command_starts_a_daemon_in_the_background(

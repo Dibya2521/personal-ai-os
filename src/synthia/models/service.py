@@ -14,11 +14,19 @@ import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
 
-from synthia.kernel.supervisor import RestartPolicy, Supervisor, SupervisorGaveUpError
+from synthia.kernel.bus import Event, EventBus
+from synthia.kernel.supervisor import (
+    RestartPolicy,
+    ServiceExited,
+    ServiceStarted,
+    ServiceStopped,
+    Supervisor,
+    SupervisorGaveUpError,
+)
 from synthia.models.backends import Fallback, candidates
 from synthia.models.catalogue import MODELS, RUNTIMES, Model, Runtime
 from synthia.models.gguf import context_length
@@ -29,6 +37,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
     from synthia.kernel.config import LocalBackend, Settings
+    from synthia.kernel.supervisor import ServiceEvent
     from synthia.models.catalogue import Target
     from synthia.models.install import Installer
 
@@ -38,6 +47,8 @@ SERVER_LOG: Final = Path("logs") / "llama-server.log"
 THREAD_NAME: Final = "local-model"
 # Above the supervisor's 5 s shutdown limit, which already covers a kill.
 JOIN_TIMEOUT_S: Final = 10.0
+
+type LocalState = Literal["ready", "starting", "stopped"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,8 +140,10 @@ class LocalService:
             command=command,
             on_start_failure=fallback.failed,
         )
-        self._supervisor = Supervisor(default_policy=policy)
+        self._bus = EventBus()
+        self._supervisor = Supervisor(bus=self._bus, default_policy=policy)
         self._supervisor.add(self.server)
+        self._observe: Callable[[ServiceEvent], None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._looping = threading.Event()
         self._thread = threading.Thread(
@@ -141,8 +154,19 @@ class LocalService:
         """Return the chat model that sends requests on ``client``'s loop."""
         return LocalModel(self.server, client, self._setup.model, self._setup.context)
 
-    def start(self) -> None:
-        """Start the thread; the server loads in the background."""
+    def state(self) -> LocalState:
+        """Return whether the server answers, is loading or restarting, or stopped."""
+        if not self._thread.is_alive():
+            return "stopped"
+        return "ready" if self.server.ready.is_set() else "starting"
+
+    def start(self, observe: Callable[[ServiceEvent], None] | None = None) -> None:
+        """Start the thread; the server loads in the background.
+
+        ``observe`` is called on the service's thread each time the server
+        starts, ends or is stopped for good.
+        """
+        self._observe = observe
         self._thread.start()
         self._looping.wait()
 
@@ -166,7 +190,17 @@ class LocalService:
                 logger.exception("the local model is not restarted again")
 
     async def _run(self) -> None:
+        observe = self._observe
+        if observe is not None:
+
+            async def deliver(event: Event) -> None:
+                if isinstance(event, ServiceStarted | ServiceExited | ServiceStopped):
+                    observe(event)
+
+            # One subscription for every kind, so they arrive in the order made.
+            self._bus.subscribe(Event, deliver)
         try:
             await self._supervisor.run()
         finally:
+            await self._bus.close()
             await self._client.aclose()

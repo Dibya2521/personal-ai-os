@@ -13,9 +13,16 @@ import pytest
 from synthia.gateway.protocol import collect
 from synthia.gateway.types import ChatRequest, Message
 from synthia.kernel.config import LocalBackend, Settings
-from synthia.kernel.supervisor import RestartPolicy
+from synthia.kernel.supervisor import (
+    RestartPolicy,
+    ServiceEvent,
+    ServiceExited,
+    ServiceStarted,
+    ServiceStopped,
+)
 from synthia.models.catalogue import Backend, Download, Model, Runtime, Target
 from synthia.models.install import COMPLETE_MARKER, Installer
+from synthia.models.server import SERVICE_NAME
 from synthia.models.service import THREAD_NAME, LocalService, LocalSetup, find_local
 from tests.models import fake_llama_server
 from tests.models.test_gguf import STRING, UINT32, gguf, pair, text
@@ -192,6 +199,41 @@ def test_the_server_serves_from_its_own_thread_until_stopped(tmp_path: Path) -> 
     assert answer == "echo: hello"
     assert service.server.running is None
     assert not service_threads()
+
+
+def test_the_state_follows_the_server_from_loading_to_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_LOAD_S", "0.5")
+    service = service_at(tmp_path)
+    before = service.state()
+    service.start()
+    loading = service.state()
+    wait_until(lambda: service.state() == "ready")
+    service.stop()
+
+    assert (before, loading, service.state()) == ("stopped", "starting", "stopped")
+
+
+def test_a_crash_and_the_restart_are_told_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("FAKE_EXIT_AFTER_S", "0.2")
+    seen: list[ServiceEvent] = []
+    service = service_at(tmp_path, RestartPolicy(backoff_initial_s=0.01))
+    service.start(seen.append)
+    wait_until(lambda: len(seen) >= 3)
+    service.stop()
+
+    started, crashed, restarted = seen[:3]
+    assert isinstance(started, ServiceStarted)
+    assert (started.service, started.attempt) == (SERVICE_NAME, 1)
+    assert isinstance(crashed, ServiceExited)
+    assert "while serving" in (crashed.error or "")
+    assert crashed.restart_in_s is not None
+    assert isinstance(restarted, ServiceStarted)
+    assert restarted.attempt == 2
+    assert isinstance(seen[-1], ServiceStopped)
 
 
 def test_stopping_a_service_never_started_does_nothing(tmp_path: Path) -> None:

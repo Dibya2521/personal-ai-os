@@ -112,6 +112,9 @@ class ServiceStopped(Event):
     service: str
 
 
+type ServiceEvent = ServiceStarted | ServiceExited | ServiceStopped
+
+
 class SupervisorGaveUpError(SynthiaError):
     """A service restarted more often than its policy allows."""
 

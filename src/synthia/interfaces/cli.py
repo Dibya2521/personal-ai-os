@@ -21,7 +21,12 @@ from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.interfaces import doctor as doctor_checks
 from synthia.interfaces import model_commands
 from synthia.interfaces.chat import run_chat
-from synthia.interfaces.daemon_client import DaemonError, current_daemon
+from synthia.interfaces.daemon_client import (
+    DaemonError,
+    current_daemon,
+    daemon_status,
+    stop_running,
+)
 from synthia.interfaces.trace_view import build_tree, summary
 from synthia.interfaces.usage_report import budget_report
 from synthia.kernel.config import Settings, load_settings, unknown_variables
@@ -168,6 +173,38 @@ def serve() -> None:
         raise typer.Exit(doctor_checks.Status.FAIL) from None
     except KeyboardInterrupt:
         typer.echo("stopped")
+
+
+@app.command()
+def stop() -> None:
+    """Stop the daemon.
+
+    Answers still running are cancelled, and the local model and the MCP
+    servers are stopped with it. The next chat starts it again.
+    """
+    try:
+        stopped = asyncio.run(stop_running(_settings().home))
+    except DaemonError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    typer.echo("daemon stopped" if stopped else "no daemon running")
+
+
+@app.command()
+def status() -> None:
+    """Show whether the daemon runs, since when, and how its local model is."""
+    found = asyncio.run(daemon_status(_settings().home))
+    if found is None:
+        typer.echo("no daemon running")
+        return
+    info = found.info
+    since = info.started.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    typer.echo(
+        f"daemon running: version {info.version}, since {since}, "
+        f"pid {info.pid}, port {info.port}"
+    )
+    typer.echo(f"other conversations open: {found.others}")
+    typer.echo(f"local model: {found.local}")
 
 
 @app.command()

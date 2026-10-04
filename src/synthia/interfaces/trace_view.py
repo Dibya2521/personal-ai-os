@@ -4,6 +4,7 @@ Each turn is a branch; under it, each model step and, under the step, the
 tool calls it asked for with what came back. A planned turn shows its plan,
 then each plan step with its model steps, then the answer written from them.
 A call that began and has no end was still running when the turn stopped.
+The daemon's trace shows each start, end and restart of a supervised service.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from synthia.agent.trace import (
     PlanAnswerStarted,
     PlanMade,
     PlanStepStarted,
+    ServiceChanged,
     ToolBegan,
     ToolEnded,
     TurnBegan,
@@ -78,6 +80,25 @@ def _plan(record: PlanMade) -> str:
     return f"{made}: {_preview(steps) or 'no steps left'}"
 
 
+def _service(record: ServiceChanged, tz: tzinfo | None) -> str:
+    at = record.at.astimezone(tz).strftime("%H:%M:%S")
+    named = f"service {record.service}"
+    match record.change:
+        case "started":
+            again = f", attempt {record.attempt}" if (record.attempt or 1) > 1 else ""
+            return f"{named} started at {at}{again}"
+        case "exited":
+            why = f": {_preview(record.error.text)}" if record.error else ""
+            after = (
+                "not restarted"
+                if record.restart_in_s is None
+                else f"restart in {record.restart_in_s:.1f} s"
+            )
+            return f"{named} ended at {at}{why} | {after}"
+        case _:
+            return f"{named} stopped at {at}"
+
+
 def _call(record: ToolBegan) -> str:
     return f"tool {record.name} {_preview(record.arguments.text or '{}')}"
 
@@ -125,6 +146,8 @@ class _Branches:
                 self._turn.add(Text(f"{record.outcome} | {_preview(record.text.text)}"))
             case TurnFailed():
                 self._turn.add(Text(f"failed | {_preview(record.reason)}"))
+            case ServiceChanged():
+                self._root.add(Text(_service(record, self._tz)))
             case _:
                 self._plan(record)
 
@@ -156,8 +179,16 @@ def build_tree(
 
 
 def summary(path: Path) -> str:
-    """Return one line about the trace at ``path``: its name, turns and tool calls."""
+    """Return one line about the trace at ``path``: its name, turns and tool calls.
+
+    The daemon's trace also counts the restarts of the services it supervises.
+    """
     records, _ = read_trace(path)
     turns = sum(isinstance(r, TurnBegan) for r in records)
     calls = sum(isinstance(r, ToolBegan) for r in records)
-    return f"{path.stem} | turns {turns} | tool calls {calls}"
+    line = f"{path.stem} | turns {turns} | tool calls {calls}"
+    changes = [r for r in records if isinstance(r, ServiceChanged)]
+    if changes:
+        restarts = sum(r.change == "started" and (r.attempt or 1) > 1 for r in changes)
+        line += f" | service restarts {restarts}"
+    return line

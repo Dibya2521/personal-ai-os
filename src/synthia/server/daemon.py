@@ -5,7 +5,8 @@ writes ``daemon.json``, so a client that reads the file can connect at once;
 its connection waits in the queue until the server accepts it. Stopping
 (asked by a client, Ctrl+C, or the end of the process's session) ends every
 conversation, which cancels the turns still running, then stops the MCP
-servers and the local model, and removes ``daemon.json``.
+servers and the local model, and removes ``daemon.json``. Each start, end
+and restart of the local model's server goes to the daemon's own trace.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import httpx
 import uvicorn
 
 from synthia import __version__
+from synthia.agent.trace import TRACES, Trace
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.persona.library import PersonaLibrary
@@ -32,14 +34,23 @@ from synthia.server.discovery import (
     started_now,
     write_info,
 )
-from synthia.server.host import PERSONAS_DIR, TIMEOUT, Host, publish_route, start_tools
+from synthia.server.host import (
+    PERSONAS_DIR,
+    TIMEOUT,
+    Host,
+    no_local_model,
+    publish_route,
+    start_tools,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from synthia.gateway.protocol import LocalChatModel
     from synthia.gateway.providers import RemoteProvider
     from synthia.kernel.config import Settings
+    from synthia.kernel.supervisor import ServiceEvent
 
 LOOPBACK: Final = "127.0.0.1"
 BACKLOG: Final = 16
@@ -52,8 +63,12 @@ class LocalModels(Protocol):
         """Return the local model, sending its requests on ``client``."""
         ...
 
-    def start(self) -> None:
-        """Start loading the model."""
+    def state(self) -> str:
+        """Return whether the model answers, is starting, or has stopped."""
+        ...
+
+    def start(self, observe: Callable[[ServiceEvent], None] | None = None) -> None:
+        """Start loading the model; ``observe`` hears each start, end and stop."""
         ...
 
     def stop(self) -> None:
@@ -145,10 +160,21 @@ async def run_daemon(
 
         tools, servers = await start_tools(settings, warn, transport)
         library = PersonaLibrary(settings.home / PERSONAS_DIR)
+        traces = settings.home / TRACES
+        local_state = no_local_model
         if local is not None:
-            local.start()
+            local.start(Trace.start(traces).service)
+            local_state = local.state
         try:
-            host = Host.traced(settings, gateway, library, tools, tuple(warnings))
+            host = Host(
+                gateway,
+                library,
+                settings.persona,
+                tools,
+                traces,
+                tuple(warnings),
+                local_state,
+            )
             await serve(host, settings.home, stop=stop)
         finally:
             if local is not None:

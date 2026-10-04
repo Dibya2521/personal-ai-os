@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx
 
-from synthia.agent.trace import TRACES, Trace
+from synthia.agent.trace import Trace
 from synthia.kernel.errors import ConfigError
 from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
 from synthia.server.conversation import Conversation
@@ -74,6 +74,11 @@ async def start_tools(
     return tools, servers
 
 
+def no_local_model() -> str:
+    """Return the local model's state when there is none."""
+    return "none"
+
+
 @dataclass(slots=True)
 class Host:
     """What every conversation shares, and how a new one is made."""
@@ -84,19 +89,7 @@ class Host:
     tools: Toolbox
     traces: Path | None = None
     warnings: tuple[str, ...] = ()
-
-    @classmethod
-    def traced(
-        cls,
-        settings: Settings,
-        gateway: Gateway,
-        library: PersonaLibrary,
-        tools: Toolbox,
-        warnings: tuple[str, ...] = (),
-    ) -> Host:
-        """Return a host whose conversations are traced under ``SYNTHIA_HOME``."""
-        traces = settings.home / TRACES
-        return cls(gateway, library, settings.persona, tools, traces, warnings)
+    local_state: Callable[[], str] = no_local_model
 
     def conversation(self, approver: Approver) -> Conversation:
         """Return a new conversation that asks ``approver`` before each call."""

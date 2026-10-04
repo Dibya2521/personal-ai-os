@@ -16,6 +16,8 @@ Methods, client to daemon:
 - ``think`` {``level``}, ``remote`` {``on``}, ``persona`` {``key``}, ``adjust``
   {``values``}, ``budget``, ``model``, ``tools``, ``reset`` return a reply:
   ``notes`` and ``errors``, lines to show.
+- ``status`` {} returns how many ``sessions`` the daemon holds and the
+  ``local`` model's state: ``ready``, ``starting``, ``stopped`` or ``none``.
 - ``stop`` {} stops the daemon.
 
 Request, daemon to client: ``approve`` {``tool``, ``arguments``} returns true to
@@ -179,6 +181,7 @@ class Served:
         self._on_stop = on_stop
         self._sessions = sessions
         self._warnings = host.warnings
+        self._local_state = host.local_state
 
     async def close(self) -> None:
         """Stop serving: running turns are cancelled, the conversation closed."""
@@ -197,6 +200,7 @@ class Served:
             "model": self._model,
             "tools": self._tools,
             "reset": self._reset,
+            "status": self._status,
             "stop": self._stop,
         }
 
@@ -240,6 +244,10 @@ class Served:
     async def _reset(self, params: Params) -> object:
         checked(EmptyParams, params)
         return reply_of(await self.conversation.reset())
+
+    async def _status(self, params: Params) -> object:
+        checked(EmptyParams, params)
+        return {"sessions": self._sessions(), "local": self._local_state()}
 
     async def _stop(self, params: Params) -> object:
         checked(EmptyParams, params)

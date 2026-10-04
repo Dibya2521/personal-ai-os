@@ -2,7 +2,9 @@
 
 A chat writes one file per session under ``<home>/traces``, named by the time
 it started, so ``synthia trace`` can show afterwards which tools ran, with what,
-what came back, and where each model step was sent. Texts are cut to
+what came back, and where each model step was sent. The daemon writes one
+too, for the services it supervises: when each started, ended and was
+restarted. Texts are cut to
 :data:`MAX_TRACED_CHARS` with their full length kept: a trace shows what
 happened, it is not a copy of every file a tool read. The key never appears,
 because no step carries it.
@@ -29,6 +31,7 @@ from pydantic import (
 from synthia.agent.loop import Finished, ModelChunk, ModelTurn, ToolStarted
 from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
 from synthia.gateway.errors import GatewayError
+from synthia.kernel.supervisor import ServiceExited, ServiceStarted, ServiceStopped
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -36,6 +39,7 @@ if TYPE_CHECKING:
     from synthia.agent.plan import PlanEvent
     from synthia.gateway.router import RouteDecided
     from synthia.gateway.types import Reasoning
+    from synthia.kernel.supervisor import ServiceEvent
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +170,20 @@ class TurnFailed(_Record):
     reason: Mended
 
 
+class ServiceChanged(_Record):
+    """A supervised service started, ended, or stopped for good; never in a turn.
+
+    ``restart_in_s`` is set when an ended service will be started again.
+    """
+
+    kind: Literal["service"] = "service"
+    service: Mended
+    change: Literal["started", "exited", "stopped"]
+    attempt: int | None = None
+    error: Clip | None = None
+    restart_in_s: float | None = None
+
+
 type Record = Annotated[
     TurnBegan
     | ModelAnswered
@@ -175,7 +193,8 @@ type Record = Annotated[
     | PlanStepStarted
     | PlanAnswerStarted
     | TurnEnded
-    | TurnFailed,
+    | TurnFailed
+    | ServiceChanged,
     Field(discriminator="kind"),
 ]
 _RECORD: Final[TypeAdapter[Record]] = TypeAdapter(Record)
@@ -250,6 +269,26 @@ def _plan_record(
             return PlanStepStarted(turn=turn, at=at, number=number, text=text)
         case _:
             return PlanAnswerStarted(turn=turn, at=at)
+
+
+def service_record(event: ServiceEvent, *, at: datetime) -> ServiceChanged:
+    """Return the record of a supervisor's ``event``."""
+    match event:
+        case ServiceStarted(service=name, attempt=attempt):
+            return ServiceChanged(
+                turn=0, at=at, service=name, change="started", attempt=attempt
+            )
+        case ServiceExited(service=name, error=error, restart_in_s=delay):
+            return ServiceChanged(
+                turn=0,
+                at=at,
+                service=name,
+                change="exited",
+                error=None if error is None else Clip.of(error),
+                restart_in_s=delay,
+            )
+        case ServiceStopped(service=name):
+            return ServiceChanged(turn=0, at=at, service=name, change="stopped")
 
 
 class Trace:
@@ -328,6 +367,10 @@ class Trace:
         finally:
             if not finished:
                 self._write(TurnFailed(turn=self._turn, at=self._now(), reason=reason))
+
+    def service(self, event: ServiceEvent) -> None:
+        """Record a change in a supervised service."""
+        self._write(service_record(event, at=self._now()))
 
     def _write(self, record: Record) -> None:
         if self._broken:

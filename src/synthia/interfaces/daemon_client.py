@@ -4,7 +4,8 @@ A conversation in the daemon answers like one in this process (a ``Talk``),
 so the terminal shows it the same way: its streamed answer, tool calls and
 plan marks are rebuilt from the daemon's notifications. A tool call that
 needs a yes is asked here, in the terminal; Ctrl+C cancels the request,
-which tells the daemon to cancel the turn.
+which tells the daemon to cancel the turn. ``synthia stop`` and ``synthia
+status`` open a conversation only to ask the daemon to stop, or how it is.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import asyncio
 import subprocess
 import sys
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -48,6 +50,8 @@ if TYPE_CHECKING:
 # Building the gateway and starting MCP servers (30 s each, at once) comes
 # before the daemon writes its file.
 START_TIMEOUT_S: Final = 90.0
+# Stopping waits for the local model (10 s at most) and the MCP servers.
+STOP_TIMEOUT_S: Final = 30.0
 POLL_S: Final = 0.2
 HEALTH_TIMEOUT: Final = httpx.Timeout(2.0)
 ANSWER_PREFIX: Final = "no answer: "
@@ -186,6 +190,40 @@ async def current_daemon(
         raise DaemonError(message)
     await stopped(home, info, timeout_s)
     return await find_or_start(home, start=start, timeout_s=timeout_s)
+
+
+async def stop_running(home: Path) -> bool:
+    """Stop the running daemon and wait until it has gone; False if none ran.
+
+    Raises:
+        DaemonError: If it is still running after ``STOP_TIMEOUT_S``.
+    """
+    info = await running_daemon(home)
+    if info is None:
+        return False
+    async with conversation(info, _refuse) as talk:
+        await talk.stop_daemon()
+    await stopped(home, info, STOP_TIMEOUT_S)
+    return True
+
+
+@dataclass(frozen=True, slots=True)
+class DaemonStatus:
+    """The running daemon, the conversations open in it, and its local model."""
+
+    info: DaemonInfo
+    others: int
+    local: str
+
+
+async def daemon_status(home: Path) -> DaemonStatus | None:
+    """Return the running daemon's status, or None if none runs."""
+    info = await running_daemon(home)
+    if info is None:
+        return None
+    async with conversation(info, _refuse) as talk:
+        sessions, local = await talk.status()
+    return DaemonStatus(info, sessions - 1, local)
 
 
 def chunk_from(params: Params) -> ChatChunk:
@@ -351,6 +389,11 @@ class RemoteConversation:
     async def reset(self) -> Reply:
         """Forget the conversation."""
         return await self._ask("reset", {})
+
+    async def status(self) -> tuple[int, str]:
+        """Return the conversations open, this one included, and the local model."""
+        fields = cast("dict[str, object]", await self.peer.request("status", {}))
+        return int(cast("int", fields["sessions"])), str(fields["local"])
 
     async def stop_daemon(self) -> None:
         """Ask the daemon to stop."""

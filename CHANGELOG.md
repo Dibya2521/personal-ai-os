@@ -25,6 +25,14 @@ All notable changes are recorded here. The format follows
   request with an `Origin` header). Each client gets its own conversation, is
   asked before every tool call that needs a yes, and a client that goes away
   is a no. A client can stop the daemon; Ctrl+C stops it too.
+- `synthia stop` stops the daemon: answers still running are cancelled, and
+  the local model and the MCP servers stop with it. `synthia status` shows
+  whether it runs, its version, since when, its pid and port, the other
+  conversations open in it, and the local model: `ready`, `starting`
+  (loading, or waiting to restart), `stopped` or `none`.
+- The daemon keeps a trace of its own: each start, end and restart of the
+  local model's server, with the error that ended it. `synthia trace` shows
+  it like a chat's, and `synthia trace --list` counts its restarts.
 
 ### Changed
 
