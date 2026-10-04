@@ -36,6 +36,7 @@ from synthia.kernel.errors import ConfigError
 from synthia.models.service import LocalService, LocalSetup
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
+from synthia.server.conversation import Conversation
 from synthia.server.session import ChatSession, LastRoute, TurnReport
 from tests.models.test_service import (
     CPU,
@@ -375,7 +376,7 @@ async def app_for(
     session = ChatSession(gateway.model, PersonaLibrary(), "synthia", routes)
     session.use_remote = True
     screen, out = console()
-    return ChatApp(session, gateway, screen), out
+    return ChatApp(Conversation(session, gateway), screen), out
 
 
 async def test_persona_commands_switch_list_adjust_and_report_mistakes(

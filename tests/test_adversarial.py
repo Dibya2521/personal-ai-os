@@ -28,6 +28,7 @@ from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
+from synthia.server.conversation import Conversation
 from synthia.server.session import ChatSession, LastRoute
 
 KEY = "sk-or-v1-adversarial-test-key-000"  # pragma: allowlist secret
@@ -150,7 +151,10 @@ async def chat_with(
     session.use_remote = True
     out = io.StringIO()
     return (
-        ChatApp(session, gateway, Console(file=out, width=200, color_system=None)),
+        ChatApp(
+            Conversation(session, gateway),
+            Console(file=out, width=200, color_system=None),
+        ),
         out,
         client,
     )

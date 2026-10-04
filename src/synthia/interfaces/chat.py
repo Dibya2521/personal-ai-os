@@ -20,7 +20,6 @@ from rich.text import Text
 
 from synthia.agent.loop import ToolFinished
 from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
-from synthia.agent.policy import Decision
 from synthia.agent.trace import TRACES, Trace
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.errors import GatewayError
@@ -47,7 +46,7 @@ from synthia.interfaces.commands import (
 from synthia.kernel.errors import ConfigError
 from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
 from synthia.persona.library import PersonaLibrary
-from synthia.persona.model import PersonaError
+from synthia.server.conversation import Conversation, Reply
 from synthia.server.session import (
     ChatSession,
     ImageError,
@@ -64,7 +63,6 @@ if TYPE_CHECKING:
 
     from synthia.agent.policy import Approver
     from synthia.agent.tools import Tool, Toolbox
-    from synthia.gateway.assemble import Gateway
     from synthia.gateway.providers import RemoteProvider
     from synthia.gateway.types import ChatChunk, ImagePart, PromptProgress
     from synthia.kernel.config import Settings
@@ -80,11 +78,6 @@ PERSONAS_DIR: Final = Path("personas")
 TIMEOUT: Final = httpx.Timeout(60.0, connect=10.0)
 YES: Final = frozenset({"y", "yes"})
 MAX_SHOWN: Final = 80
-RULE_SHOWN: Final = {
-    Decision.ALLOW: "",
-    Decision.ASK: " | asks first",
-    Decision.DENY: " | never runs",
-}
 
 type ReadLine = Callable[[str], str]
 
@@ -314,20 +307,26 @@ class AnswerLines:
 
 
 class ChatApp:
-    """Carry out chat commands against a session, printing to a console."""
+    """Carry out chat commands against a conversation, printing to a console."""
 
     def __init__(
         self,
-        session: ChatSession,
-        gateway: Gateway,
+        conversation: Conversation,
         console: Console,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self.session = session
-        self.gateway = gateway
+        self.conversation = conversation
         self.console = console
         self._clock = clock
-        self.learning: asyncio.Task[int | None] | None = None
+
+    @property
+    def session(self) -> ChatSession:
+        """Return the conversation's session."""
+        return self.conversation.session
+
+    @session.setter
+    def session(self, session: ChatSession) -> None:
+        self.conversation.session = session
 
     def greet(self) -> None:
         """Print who is listening and how to get help."""
@@ -349,36 +348,49 @@ class ChatApp:
                 await self._answer(task, plan=True)
             case ShowImage(path=path, text=text):
                 await self._image(path, text)
-            case SwitchPersona() | AdjustPersona():
-                self._persona(command)
             case ShowBudget():
-                await self._budget()
-            case _:
-                self._show(command)
-        return True
-
-    def _show(
-        self,
-        command: Think | UseRemote | ShowModel | ShowTools | Reset | Help | Invalid,
-    ) -> None:
-        match command:
-            case Think(level=level):
-                if level is not None:
-                    self.session.reasoning = level
-                self._note(f"thinking: {self.session.reasoning.value}")
-            case UseRemote():
-                self._remote(command)
-            case ShowModel():
-                self._model()
-            case ShowTools():
-                self._tools()
-            case Reset():
-                self.session.reset()
-                self._note("conversation forgotten")
+                self._say(await self.conversation.budget())
             case Help():
                 self.console.print(HELP, markup=False, highlight=False)
+            case Invalid(reason=reason):
+                self._error(reason)
             case _:
-                self._error(command.reason)
+                self._say(self._reply(command))
+        return True
+
+    def _reply(
+        self,
+        command: SwitchPersona
+        | AdjustPersona
+        | Think
+        | UseRemote
+        | ShowModel
+        | ShowTools
+        | Reset,
+    ) -> Reply:
+        conversation = self.conversation
+        match command:
+            case SwitchPersona(key=key):
+                reply = conversation.persona(key)
+            case AdjustPersona(values=values):
+                reply = conversation.adjust(values)
+            case Think(level=level):
+                reply = conversation.think(level)
+            case UseRemote(on=on):
+                reply = conversation.remote(on=on)
+            case ShowModel():
+                reply = conversation.model()
+            case ShowTools():
+                reply = conversation.tools()
+            case _:
+                reply = conversation.reset()
+        return reply
+
+    def _say(self, reply: Reply) -> None:
+        for line in reply.notes:
+            self._note(line)
+        for line in reply.errors:
+            self._error(line)
 
     def stopped(self) -> None:
         """Say that an answer was stopped with Ctrl+C."""
@@ -417,79 +429,6 @@ class ChatApp:
             self._error(str(error))
             return
         await self._answer(text, image)
-
-    def _persona(self, command: SwitchPersona | AdjustPersona) -> None:
-        if isinstance(command, SwitchPersona) and not command.key:
-            self._note(f"personas: {', '.join(self.session.persona_names())}")
-            return
-        try:
-            if isinstance(command, SwitchPersona):
-                self.session.switch(command.key)
-            else:
-                self.session.adjust(command.values)
-        except PersonaError as error:
-            self._error(str(error))
-            return
-        persona = self.session.persona
-        sliders = ", ".join(
-            f"{k}={v:g}" for k, v in persona.traits.model_dump().items()
-        )
-        self._note(f"now {persona.name}: {sliders}")
-
-    def _remote(self, command: UseRemote) -> None:
-        if command.on and self.gateway.router.remote is None:
-            self._error(
-                "no remote model is configured: set SYNTHIA_OPENROUTER_API_KEY in .env"
-            )
-            return
-        if command.on is not None:
-            self.session.use_remote = command.on
-        if self.session.use_remote and self.learning is None:
-            # Not before remote is on, so the key never leaves unasked; beside
-            # the turns, so no answer waits for it.
-            self.learning = asyncio.get_running_loop().create_task(
-                self.gateway.learn_daily_cap()
-            )
-        if self.session.use_remote:
-            self._note("remote: on, turns may leave this machine")
-        else:
-            self._note("remote: off, every turn stays on this machine")
-
-    async def _budget(self) -> None:
-        health = self.gateway.health
-        if health is None:
-            self._note("no remote model is configured, so there is no budget")
-            return
-        status = await health.ledger.status(health.provider)
-        self._note(
-            f"{status.used} of {status.cap} remote requests used today (UTC); "
-            f"{status.remaining} left, {health.reserve} kept in reserve"
-        )
-
-    def _model(self) -> None:
-        info = self.gateway.router.info
-        images = "yes" if info.vision else "no"
-        tools = "yes" if info.tools else "no"
-        self._note(
-            f"context {info.context_window} tokens, images {images}, tools {tools}"
-        )
-        last = self.session.routes.decision
-        if last is None:
-            self._note("no turn yet")
-        else:
-            self._note(f"last turn: {last.route} to {last.model} ({last.reason})")
-
-    def _tools(self) -> None:
-        tools = list(self.session.tools)
-        if not tools:
-            self._note("no tools")
-            return
-        for tool in tools:
-            rule = RULE_SHOWN[self.session.policy.decide(tool)]
-            self._note(
-                f"{tool.spec.name} | {tool.reach.value}, {tool.effect.value}{rule} | "
-                f"{tool.spec.description}"
-            )
 
     def _note(self, text: str) -> None:
         self.console.print(text, style="cyan", markup=False, highlight=False)
@@ -558,7 +497,7 @@ def run_chat(  # noqa: PLR0913
                 approver=terminal_approver(read),
                 trace=Trace.start(settings.home / TRACES),
             )
-            app = ChatApp(session, gateway, console)
+            app = ChatApp(Conversation(session, gateway), console)
             if local is not None:
                 local.start()
             if use_remote:
@@ -567,9 +506,8 @@ def run_chat(  # noqa: PLR0913
         finally:
             if local is not None:
                 local.stop()
-            if app is not None and app.learning is not None:
-                app.learning.cancel()
-                runner.run(asyncio.wait([app.learning]))
+            if app is not None:
+                runner.run(app.conversation.close())
             runner.run(servers.stop())
             runner.run(client.aclose())
 
