@@ -39,6 +39,7 @@ from synthia.server.host import (
     TIMEOUT,
     Host,
     no_local_model,
+    open_memory,
     publish_route,
     start_tools,
 )
@@ -159,6 +160,7 @@ async def run_daemon(
             logger.warning("%s", text)
 
         tools, servers = await start_tools(settings, warn, transport)
+        memory = open_memory(settings, warn)
         library = PersonaLibrary(settings.home / PERSONAS_DIR)
         traces = settings.home / TRACES
         local_state = no_local_model
@@ -174,6 +176,7 @@ async def run_daemon(
                 traces,
                 tuple(warnings),
                 local_state,
+                memory,
             )
             await serve(host, settings.home, stop=stop)
         finally:

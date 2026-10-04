@@ -9,6 +9,7 @@ through a context variable that each turn sets for itself.
 
 from __future__ import annotations
 
+import sqlite3
 from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,8 @@ import httpx
 from synthia.agent.trace import Trace
 from synthia.kernel.errors import ConfigError
 from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
+from synthia.memory.remembering import Remembering
+from synthia.memory.store import MEMORY_FILE, MemoryStore
 from synthia.server.conversation import Conversation
 from synthia.server.session import ChatSession, LastRoute
 from synthia.tools import local_tools, outside_tools
@@ -74,6 +77,15 @@ async def start_tools(
     return tools, servers
 
 
+def open_memory(settings: Settings, warn: Callable[[str], None]) -> MemoryStore | None:
+    """Return the memory under ``SYNTHIA_HOME``, or None after a ``warn``."""
+    try:
+        return MemoryStore(settings.home / MEMORY_FILE)
+    except (sqlite3.Error, OSError) as error:
+        warn(f"nothing will be remembered: {error}")
+        return None
+
+
 def no_local_model() -> str:
     """Return the local model's state when there is none."""
     return "none"
@@ -90,6 +102,7 @@ class Host:
     traces: Path | None = None
     warnings: tuple[str, ...] = ()
     local_state: Callable[[], str] = no_local_model
+    memory: MemoryStore | None = None
 
     def conversation(self, approver: Approver) -> Conversation:
         """Return a new conversation that asks ``approver`` before each call."""
@@ -101,5 +114,6 @@ class Host:
             tools=self.tools,
             approver=approver,
             trace=None if self.traces is None else Trace.start(self.traces),
+            memory=None if self.memory is None else Remembering(self.memory),
         )
         return Conversation(session, self.gateway)

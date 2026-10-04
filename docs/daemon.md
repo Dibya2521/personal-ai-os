@@ -28,6 +28,7 @@ All under `SYNTHIA_HOME`.
 | --- | --- |
 | `daemon.json` | `port`, `pid`, `version`, `started`, `token`. Written after the port listens, readable only by its owner, removed on stop. |
 | `traces/*.jsonl` | One per conversation, created at its first turn, and one for the daemon, created when the local model first starts. |
+| `memory.db` | Every finished turn of every conversation, kept unless the conversation is private (SQLite). |
 | `logs/synthia.log` | The daemon's log, shared with the CLI. |
 | `logs/llama-server.log` | The local model's server output. |
 
@@ -61,6 +62,8 @@ Messages are JSON-RPC 2.0, one per WebSocket text frame.
 | `turn` | `text`, `plan` (bool), `images` (file paths) | the report: `route`, `model`, `prompt_tokens`, `completion_tokens`, `seconds`, `reasoning` |
 | `think` | `level`: `off`, `low`, `medium`, `high`, `auto`, or null to ask | a reply |
 | `remote` | `on`: true, false, or null to ask | a reply |
+| `private` | `on`: true (stop remembering this conversation), false, or null to ask | a reply |
+| `forget` | `{}` | a reply; the last turn leaves the conversation and memory |
 | `persona` | `key`: a persona, or empty to list them | a reply |
 | `adjust` | `values`: trait name to a level from 0 to 1 | a reply |
 | `budget`, `model`, `tools`, `reset` | `{}` | a reply |

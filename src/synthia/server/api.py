@@ -13,9 +13,9 @@ Methods, client to daemon:
 - ``turn`` {``text``, ``plan``, ``images``: paths} returns the turn's report,
   after notifications ``chunk``, ``tool`` and ``plan``. An answer that failed
   is error ``-32001`` with the reason, an image that cannot be sent ``-32002``.
-- ``think`` {``level``}, ``remote`` {``on``}, ``persona`` {``key``}, ``adjust``
-  {``values``}, ``budget``, ``model``, ``tools``, ``reset`` return a reply:
-  ``notes`` and ``errors``, lines to show.
+- ``think`` {``level``}, ``remote`` {``on``}, ``private`` {``on``}, ``persona``
+  {``key``}, ``adjust`` {``values``}, ``budget``, ``model``, ``tools``,
+  ``reset``, ``forget`` return a reply: ``notes`` and ``errors``, lines to show.
 - ``status`` {} returns how many ``sessions`` the daemon holds and the
   ``local`` model's state: ``ready``, ``starting``, ``stopped`` or ``none``.
 - ``stop`` {} stops the daemon.
@@ -79,8 +79,8 @@ class ThinkParams(_Params):
     level: Reasoning | None = None
 
 
-class RemoteParams(_Params):
-    """Whether turns may leave the machine, or None to say which."""
+class SwitchParams(_Params):
+    """A switch to turn on or off, or None to say how it is."""
 
     on: bool | None = None
 
@@ -200,6 +200,8 @@ class Served:
             "model": self._model,
             "tools": self._tools,
             "reset": self._reset,
+            "private": self._private,
+            "forget": self._forget,
             "status": self._status,
             "stop": self._stop,
         }
@@ -218,8 +220,16 @@ class Served:
         return reply_of(await self.conversation.think(level))
 
     async def _remote(self, params: Params) -> object:
-        on = checked(RemoteParams, params).on
+        on = checked(SwitchParams, params).on
         return reply_of(await self.conversation.remote(on=on))
+
+    async def _private(self, params: Params) -> object:
+        on = checked(SwitchParams, params).on
+        return reply_of(await self.conversation.private(on=on))
+
+    async def _forget(self, params: Params) -> object:
+        checked(EmptyParams, params)
+        return reply_of(await self.conversation.forget())
 
     async def _persona(self, params: Params) -> object:
         key = checked(PersonaParams, params).key

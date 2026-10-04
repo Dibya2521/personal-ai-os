@@ -1,16 +1,16 @@
 """One conversation: its history, its persona, and a report on each turn.
 
 The session knows nothing about terminals, so a web UI or a voice loop can
-drive the same object later. Only a turn that finished enters the history: an
-answer that failed or was interrupted is dropped whole, question and all, so
-the model is never shown half of an exchange as if it had happened.
+drive the same object later. Only a turn that finished enters the history and
+the memory: an answer that failed or was interrupted is dropped whole, question
+and all, so the model is never shown half of an exchange as if it had happened.
 """
 
 from __future__ import annotations
 
 import time
 from contextlib import aclosing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
 from synthia.agent.loop import (
@@ -24,15 +24,18 @@ from synthia.agent.loop import (
 from synthia.agent.plan import PlanAnswerBegun, Planned, Planner, PlanStepBegun
 from synthia.agent.policy import Policy, nobody_approves
 from synthia.agent.tools import Toolbox
+from synthia.agent.trace import utc_now
 from synthia.gateway.errors import IncompleteResponseError
 from synthia.gateway.router import RouteDecided
 from synthia.gateway.types import (
     ChatChunk,
     ChatRequest,
+    ChatResponse,
     ImagePart,
     Message,
     Reasoning,
 )
+from synthia.memory.store import ToolUse, Turn
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -42,8 +45,8 @@ if TYPE_CHECKING:
     from synthia.agent.policy import Approver
     from synthia.agent.trace import Trace
     from synthia.gateway.protocol import ChatModel
-    from synthia.gateway.types import ChatResponse
     from synthia.kernel.bus import Event
+    from synthia.memory.remembering import Remembering
     from synthia.persona.library import PersonaLibrary
     from synthia.persona.model import Persona
 
@@ -122,6 +125,33 @@ class TurnReport:
     reasoning: Reasoning | None = None
 
 
+@dataclass(slots=True)
+class _Taken:
+    """What a turn's steps leave behind, sorted from what the person is shown."""
+
+    answers: list[ChatResponse] = field(default_factory=list[ChatResponse])
+    uses: list[ToolUse] = field(default_factory=list[ToolUse])
+    finished: Finished | None = None
+
+    def take(self, step: PlanEvent) -> TurnItem | None:
+        """Keep what ``step`` adds to the turn; return it if it is to be shown."""
+        match step:
+            case ModelChunk(chunk=chunk):
+                return chunk
+            case ToolFinished(call=call, result=result, ok=ok):
+                self.uses.append(ToolUse(call.name, call.arguments, result, ok))
+                return step
+            case Planned() | PlanStepBegun() | PlanAnswerBegun():
+                return step
+            case ModelTurn(response=response):
+                self.answers.append(response)
+            case Finished():
+                self.finished = step
+            case _:
+                pass
+        return None
+
+
 class ChatSession:
     """A conversation with SYNTHIA through one model, usually the router."""
 
@@ -136,13 +166,15 @@ class ChatSession:
         tools: Toolbox | None = None,
         approver: Approver = nobody_approves,
         trace: Trace | None = None,
+        memory: Remembering | None = None,
     ) -> None:
         """Start an empty conversation as ``persona``.
 
         ``routes`` is the recorder the router publishes to, so each turn's
         report can say where the turn went. ``tools`` are what the model may
         call; a call that needs approval is put to ``approver``. ``trace``
-        records every step of every turn, including turns that fail.
+        records every step of every turn, including turns that fail;
+        ``memory`` keeps each finished turn.
 
         Raises:
             PersonaError: If there is no such persona.
@@ -152,6 +184,9 @@ class ChatSession:
         self._clock = clock
         self._approver = approver
         self._trace = trace
+        self.memory = memory
+        # Where each finished turn's messages begin in the history.
+        self._starts: list[int] = []
         self.tools = tools or Toolbox()
         self.policy = Policy()
         self.persona: Persona = library.get(persona)
@@ -181,8 +216,18 @@ class ChatSession:
         self.persona = self.persona.adjusted(**values)
 
     def reset(self) -> None:
-        """Forget the conversation."""
+        """Forget the conversation; what was remembered stays remembered."""
         self.history.clear()
+        self._starts.clear()
+        if self.memory is not None:
+            self.memory.begin_again()
+
+    def drop_last(self) -> bool:
+        """Take the last finished turn out of the history; False if there is none."""
+        if not self._starts:
+            return False
+        del self.history[self._starts.pop() :]
+        return True
 
     def request(self, text: str, *images: ImagePart) -> ChatRequest:
         """Return the request a turn saying ``text`` would send."""
@@ -207,6 +252,40 @@ class ChatSession:
         """
         request = self.request(text, *images)
         started = self._clock()
+        asked_at = utc_now()
+        before = len(self.history)
+        taken = _Taken()
+        try:
+            async with aclosing(self._run(request, text, plan=plan)) as steps:
+                async for step in steps:
+                    if (shown := taken.take(step)) is not None:
+                        yield shown
+        except IncompleteResponseError:
+            return
+        finished = taken.finished
+        if finished is None:  # pragma: no cover - the agent always finishes
+            return
+        # The persona's system message is rebuilt every turn, so it is not kept.
+        self.history = list(finished.messages[1:])
+        self._starts.append(before)
+        report = self._report(request, taken.answers, self._clock() - started)
+        if self.memory is not None:
+            await self.memory.remember(
+                Turn(
+                    text,
+                    finished.text,
+                    asked_at,
+                    self.persona.name,
+                    report.route,
+                    report.model,
+                    tuple(taken.uses),
+                )
+            )
+        yield report
+
+    def _run(
+        self, request: ChatRequest, text: str, *, plan: bool
+    ) -> AsyncGenerator[PlanEvent]:
         agent = Agent(
             self._model,
             self.tools,
@@ -214,36 +293,13 @@ class ChatSession:
             policy=self.policy,
             approver=self._approver,
         )
-        run: AsyncGenerator[PlanEvent] = (
-            Planner(agent).run(request) if plan else agent.run(request)
+        run = Planner(agent).run(request) if plan else agent.run(request)
+        if self._trace is None:
+            return run
+        self._trace.begin(
+            text, self.persona.name, self.reasoning, use_remote=self.use_remote
         )
-        if self._trace:
-            self._trace.begin(
-                text, self.persona.name, self.reasoning, use_remote=self.use_remote
-            )
-            run = self._trace.watch(run, lambda: self.routes.decision)
-        answers: list[ChatResponse] = []
-        finished: Finished | None = None
-        try:
-            async with aclosing(run) as steps:
-                async for step in steps:
-                    if isinstance(step, ModelChunk):
-                        yield step.chunk
-                    elif isinstance(
-                        step, ToolFinished | Planned | PlanStepBegun | PlanAnswerBegun
-                    ):
-                        yield step
-                    elif isinstance(step, ModelTurn):
-                        answers.append(step.response)
-                    elif isinstance(step, Finished):
-                        finished = step
-        except IncompleteResponseError:
-            return
-        if finished is None:  # pragma: no cover - the agent always finishes
-            return
-        # The persona's system message is rebuilt every turn, so it is not kept.
-        self.history = list(finished.messages[1:])
-        yield self._report(request, answers, self._clock() - started)
+        return self._trace.watch(run, lambda: self.routes.decision)
 
     def _report(
         self, request: ChatRequest, answers: list[ChatResponse], seconds: float

@@ -33,6 +33,12 @@ All notable changes are recorded here. The format follows
 - The daemon keeps a trace of its own: each start, end and restart of the
   local model's server, with the error that ended it. `synthia trace` shows
   it like a chat's, and `synthia trace --list` counts its restarts.
+- SYNTHIA remembers: every finished turn of every chat (the question, the
+  answer, the persona, where it was answered, and the tool calls with their
+  results cut to 2,000 characters) is kept in `SYNTHIA_HOME/memory.db`, on
+  this machine. A stopped or failed turn is not kept. `/private on` stops
+  remembering the rest of a chat, `/private off` starts again, and
+  `/forget` takes the last turn out of the chat and out of memory.
 
 ### Changed
 

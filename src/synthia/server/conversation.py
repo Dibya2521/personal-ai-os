@@ -9,6 +9,8 @@ words are the same, because they are made here once.
 from __future__ import annotations
 
 import asyncio
+import logging
+import sqlite3
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -32,6 +34,9 @@ RULE_SHOWN: Final = {
 NO_REMOTE: Final = (
     "no remote model is configured: set SYNTHIA_OPENROUTER_API_KEY in .env"
 )
+NO_MEMORY: Final = "nothing is remembered in this conversation"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +106,14 @@ class Talk(Protocol):
 
     async def reset(self) -> Reply:
         """Forget the conversation."""
+        ...
+
+    async def private(self, *, on: bool | None) -> Reply:
+        """Stop or resume remembering turns, or show which."""
+        ...
+
+    async def forget(self) -> Reply:
+        """Forget the last turn."""
         ...
 
 
@@ -208,6 +221,30 @@ class Conversation:
         """Forget the conversation so far."""
         self.session.reset()
         return note("conversation forgotten")
+
+    async def private(self, *, on: bool | None) -> Reply:
+        """Stop or resume remembering turns, or with None say which."""
+        memory = self.session.memory
+        if memory is None:
+            return note(NO_MEMORY)
+        if on is not None:
+            memory.private = on
+        if memory.private:
+            return note("private: on, nothing from here on is remembered")
+        return note("private: off, each finished turn is remembered")
+
+    async def forget(self) -> Reply:
+        """Take the last turn out of the conversation and out of memory."""
+        if not self.session.drop_last():
+            return note("no turn to forget")
+        memory = self.session.memory
+        if memory is not None:
+            try:
+                await memory.forget_last()
+            except (sqlite3.Error, OSError) as problem:
+                logger.exception("a turn was not forgotten")
+                return error(f"the last turn could not be forgotten: {problem}")
+        return note("the last turn is forgotten")
 
     async def close(self) -> None:
         """Stop asking for the daily cap, if that is still under way."""

@@ -25,8 +25,10 @@ from synthia.interfaces.commands import (
     AdjustPersona,
     Command,
     Exit,
+    Forget,
     Help,
     Invalid,
+    KeepPrivate,
     Plan,
     Reset,
     Say,
@@ -350,12 +352,18 @@ class ChatApp[T: Talk]:
         | AdjustPersona
         | Think
         | UseRemote
+        | KeepPrivate
+        | Forget
         | ShowModel
         | ShowTools
         | Reset,
     ) -> Reply:
         conversation = self.conversation
         match command:
+            case KeepPrivate(on=on):
+                reply = await conversation.private(on=on)
+            case Forget():
+                reply = await conversation.forget()
             case SwitchPersona(key=key):
                 reply = await conversation.persona(key)
             case AdjustPersona(values=values):

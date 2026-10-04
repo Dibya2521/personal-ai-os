@@ -390,6 +390,14 @@ class RemoteConversation:
         """Forget the conversation."""
         return await self._ask("reset", {})
 
+    async def private(self, *, on: bool | None) -> Reply:
+        """Stop or resume remembering turns, or show which."""
+        return await self._ask("private", {"on": on})
+
+    async def forget(self) -> Reply:
+        """Forget the last turn."""
+        return await self._ask("forget", {})
+
     async def status(self) -> tuple[int, str]:
         """Return the conversations open, this one included, and the local model."""
         fields = cast("dict[str, object]", await self.peer.request("status", {}))

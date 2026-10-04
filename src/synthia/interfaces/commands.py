@@ -69,6 +69,18 @@ class UseRemote:
 
 
 @dataclass(frozen=True, slots=True)
+class KeepPrivate:
+    """Stop, or resume, remembering turns; ``None`` shows which."""
+
+    on: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class Forget:
+    """Forget the last turn: out of the conversation and out of memory."""
+
+
+@dataclass(frozen=True, slots=True)
 class ShowBudget:
     """Print today's remote budget."""
 
@@ -113,6 +125,8 @@ type Command = (
     | ShowImage
     | Think
     | UseRemote
+    | KeepPrivate
+    | Forget
     | ShowBudget
     | ShowModel
     | ShowTools
@@ -131,6 +145,8 @@ HELP: Final = """\
 /image <path> [question]   send an image; quote a path that has spaces
 /think [level]             how much to think: off low medium high auto, or show it
 /remote [on|off]           send turns to the remote model, or keep them local
+/private [on|off]          stop remembering this conversation, or start again
+/forget                    forget the last turn, here and in memory
 /budget                    today's remote requests
 /model                     the models behind the router, and the last route
 /tools                     the tools SYNTHIA may call, and which ask first
@@ -143,6 +159,7 @@ _SIMPLE: Final[dict[str, Command]] = {
     "model": ShowModel(),
     "tools": ShowTools(),
     "reset": Reset(),
+    "forget": Forget(),
     "help": Help(),
     "exit": Exit(),
     "quit": Exit(),
@@ -166,12 +183,22 @@ def parse(line: str) -> Command:
 _SWITCH: Final = {"on": True, "off": False}
 
 
-def _remote(rest: str) -> Command:
+def _switch(rest: str) -> bool | Invalid | None:
     if not rest:
-        return UseRemote(None)
+        return None
     if rest.lower() not in _SWITCH:
         return Invalid(f"{rest!r} is not on or off")
-    return UseRemote(_SWITCH[rest.lower()])
+    return _SWITCH[rest.lower()]
+
+
+def _remote(rest: str) -> Command:
+    on = _switch(rest)
+    return on if isinstance(on, Invalid) else UseRemote(on)
+
+
+def _private(rest: str) -> Command:
+    on = _switch(rest)
+    return on if isinstance(on, Invalid) else KeepPrivate(on)
 
 
 def _think(rest: str) -> Command:
@@ -225,4 +252,5 @@ _WITH_ARGUMENTS: Final[dict[str, Callable[[str], Command]]] = {
     "image": _image,
     "think": _think,
     "remote": _remote,
+    "private": _private,
 }

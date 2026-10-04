@@ -262,9 +262,15 @@ async def test_commands_answer_with_lines_to_show(tmp_path: Path) -> None:
             await talk.call("persona", {"key": "nobody"}),
             await talk.call("tools"),
             await talk.call("reset"),
+            await talk.call("private", {"on": True}),
+            await talk.call("forget"),
         ]
 
-    assert replies == [
+    assert replies[4:] == [
+        {"notes": ["nothing is remembered in this conversation"], "errors": []},
+        {"notes": ["no turn to forget"], "errors": []},
+    ]
+    assert replies[:4] == [
         {
             "notes": [],
             "errors": [
