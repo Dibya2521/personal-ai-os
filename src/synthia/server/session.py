@@ -65,6 +65,8 @@ CHAT_LIMITS: Final = Limits(deadline_s=None)
 
 type PlanMark = Planned | PlanStepBegun | PlanAnswerBegun
 """Where a planned turn is: the plan made, a step begun, the answer begun."""
+type TurnItem = ChatChunk | ToolFinished | PlanMark | TurnReport
+"""What a turn yields: streamed answer, tool calls, plan marks, then its report."""
 
 
 class ImageError(ValueError):
@@ -193,7 +195,7 @@ class ChatSession:
 
     async def turn(
         self, text: str, *images: ImagePart, plan: bool = False
-    ) -> AsyncGenerator[ChatChunk | ToolFinished | PlanMark | TurnReport]:
+    ) -> AsyncGenerator[TurnItem]:
         """Yield the answer as it streams and each tool call as it ends, then a report.
 
         The turn runs as an agent over :attr:`tools`; with none, it is one

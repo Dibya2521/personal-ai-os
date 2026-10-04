@@ -370,7 +370,7 @@ def test_ctrl_c_mid_answer_stops_it_closes_the_stream_and_keeps_chatting(
 
 async def app_for(
     tmp_path: Path, client: httpx.AsyncClient
-) -> tuple[ChatApp, io.StringIO]:
+) -> tuple[ChatApp[Conversation], io.StringIO]:
     routes = LastRoute()
     gateway = build_gateway(settings(tmp_path), client, routes)
     session = ChatSession(gateway.model, PersonaLibrary(), "synthia", routes)
@@ -400,7 +400,7 @@ async def test_persona_commands_switch_list_adjust_and_report_mistakes(
     assert "now SYNTHIA Horizon: warmth=0.25, formality=0.6, wit=0.9" in text
     assert "no persona 'nobody'" in text
     assert "no such trait: charm" in text
-    assert chat.session.persona.traits.wit == 0.9
+    assert chat.conversation.session.persona.traits.wit == 0.9
 
 
 async def test_an_image_is_sent_and_a_bad_one_is_refused_without_a_request(
@@ -446,7 +446,7 @@ async def test_a_failed_answer_is_reported_and_the_chat_goes_on(tmp_path: Path) 
     assert "/persona set wit=0.3" in text
     assert "unknown command /dance" in text
     assert "no turn yet" not in text  # the failed turn was still routed
-    assert chat.session.history == []
+    assert chat.conversation.session.history == []
 
 
 async def test_an_answer_that_never_finished_is_shown_without_a_report(
@@ -461,7 +461,7 @@ async def test_an_answer_that_never_finished_is_shown_without_a_report(
         await chat.handle(parse("hello"))
 
     assert out.getvalue() == "Half\n"
-    assert chat.session.history == []
+    assert chat.conversation.session.history == []
 
 
 async def test_model_before_any_turn_says_so(tmp_path: Path) -> None:

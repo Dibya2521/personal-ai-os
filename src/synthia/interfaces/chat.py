@@ -44,7 +44,7 @@ from synthia.interfaces.commands import (
 )
 from synthia.mcp.client import McpServers
 from synthia.persona.library import PersonaLibrary
-from synthia.server.conversation import Conversation, Reply
+from synthia.server.conversation import Conversation, Reply, Talk
 from synthia.server.host import PERSONAS_DIR, TIMEOUT, start_tools
 from synthia.server.session import (
     ChatSession,
@@ -301,12 +301,12 @@ class AnswerLines:
             self._open = False
 
 
-class ChatApp:
+class ChatApp[T: Talk]:
     """Carry out chat commands against a conversation, printing to a console."""
 
     def __init__(
         self,
-        conversation: Conversation,
+        conversation: T,
         console: Console,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -314,19 +314,10 @@ class ChatApp:
         self.console = console
         self._clock = clock
 
-    @property
-    def session(self) -> ChatSession:
-        """Return the conversation's session."""
-        return self.conversation.session
-
-    @session.setter
-    def session(self, session: ChatSession) -> None:
-        self.conversation.session = session
-
     def greet(self) -> None:
         """Print who is listening and how to get help."""
         self.console.print(
-            f"{self.session.persona.name} is listening. /help lists the commands.",
+            f"{self.conversation.persona_name} is listening. /help lists the commands.",
             style="bold",
             markup=False,
         )
@@ -350,10 +341,10 @@ class ChatApp:
             case Invalid(reason=reason):
                 self._error(reason)
             case _:
-                self._say(self._reply(command))
+                self._say(await self._reply(command))
         return True
 
-    def _reply(
+    async def _reply(
         self,
         command: SwitchPersona
         | AdjustPersona
@@ -366,19 +357,19 @@ class ChatApp:
         conversation = self.conversation
         match command:
             case SwitchPersona(key=key):
-                reply = conversation.persona(key)
+                reply = await conversation.persona(key)
             case AdjustPersona(values=values):
-                reply = conversation.adjust(values)
+                reply = await conversation.adjust(values)
             case Think(level=level):
-                reply = conversation.think(level)
+                reply = await conversation.think(level)
             case UseRemote(on=on):
-                reply = conversation.remote(on=on)
+                reply = await conversation.remote(on=on)
             case ShowModel():
-                reply = conversation.model()
+                reply = await conversation.model()
             case ShowTools():
-                reply = conversation.tools()
+                reply = await conversation.tools()
             case _:
-                reply = conversation.reset()
+                reply = await conversation.reset()
         return reply
 
     def _say(self, reply: Reply) -> None:
@@ -397,7 +388,7 @@ class ChatApp:
         shown = AnswerLines(self.console)
         try:
             with ThinkingLine(self.console, self._clock) as thinking:
-                async for item in self.session.turn(text, *images, plan=plan):
+                async for item in self.conversation.turn(text, *images, plan=plan):
                     if isinstance(item, TurnReport):
                         report = item
                     elif isinstance(item, ToolFinished):
@@ -432,7 +423,7 @@ class ChatApp:
         self.console.print(text, style="red", markup=False, highlight=False)
 
 
-def converse(runner: asyncio.Runner, app: ChatApp, read: ReadLine) -> None:
+def converse[T: Talk](runner: asyncio.Runner, app: ChatApp[T], read: ReadLine) -> None:
     """Read and carry out commands until the user leaves."""
     app.greet()
     while True:
@@ -472,7 +463,7 @@ def run_chat(  # noqa: PLR0913
     routes = LastRoute()
     with asyncio.Runner() as runner:
         client = httpx.AsyncClient(transport=transport, timeout=TIMEOUT)
-        app: ChatApp | None = None
+        app: ChatApp[Conversation] | None = None
         servers = McpServers([], [])
         try:
             gateway = build_gateway(

@@ -10,15 +10,17 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from synthia.agent.policy import Decision
 from synthia.persona.model import PersonaError
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from synthia.gateway.assemble import Gateway
-    from synthia.gateway.types import Reasoning
-    from synthia.server.session import ChatSession
+    from synthia.gateway.types import ImagePart, Reasoning
+    from synthia.server.session import ChatSession, TurnItem
 
 RULE_SHOWN: Final = {
     Decision.ALLOW: "",
@@ -48,6 +50,57 @@ def error(*lines: str) -> Reply:
     return Reply(errors=lines)
 
 
+class Talk(Protocol):
+    """A conversation a terminal can hold: here, or in a daemon over the wire."""
+
+    @property
+    def persona_name(self) -> str:
+        """Return the name of the persona answering."""
+        ...
+
+    def turn(
+        self, text: str, *images: ImagePart, plan: bool = False
+    ) -> AsyncGenerator[TurnItem]:
+        """Yield the answer as it streams, tool calls, plan marks, then the report."""
+        ...
+
+    async def think(self, level: Reasoning | None) -> Reply:
+        """Set or show the thinking level."""
+        ...
+
+    async def remote(self, *, on: bool | None) -> Reply:
+        """Allow, stop or show turns going to the remote model."""
+        ...
+
+    async def persona(self, key: str) -> Reply:
+        """Switch persona, or list them."""
+        ...
+
+    async def adjust(self, values: dict[str, float]) -> Reply:
+        """Move trait sliders."""
+        ...
+
+    async def budget(self) -> Reply:
+        """Show today's remote budget."""
+        ...
+
+    async def model(self) -> Reply:
+        """Show the model and the last route."""
+        ...
+
+    async def tools(self) -> Reply:
+        """List the tools."""
+        ...
+
+    async def reset(self) -> Reply:
+        """Forget the conversation."""
+        ...
+
+    async def close(self) -> None:
+        """End the conversation."""
+        ...
+
+
 class Conversation:
     """One conversation and the commands about it."""
 
@@ -56,13 +109,24 @@ class Conversation:
         self.gateway = gateway
         self.learning: asyncio.Task[int | None] | None = None
 
-    def think(self, level: Reasoning | None) -> Reply:
+    @property
+    def persona_name(self) -> str:
+        """Return the name of the persona answering."""
+        return self.session.persona.name
+
+    def turn(
+        self, text: str, *images: ImagePart, plan: bool = False
+    ) -> AsyncGenerator[TurnItem]:
+        """Yield the answer as it streams, tool calls, plan marks, then the report."""
+        return self.session.turn(text, *images, plan=plan)
+
+    async def think(self, level: Reasoning | None) -> Reply:
         """Set how much each answer may think, or with None say what it is."""
         if level is not None:
             self.session.reasoning = level
         return note(f"thinking: {self.session.reasoning.value}")
 
-    def remote(self, *, on: bool | None) -> Reply:
+    async def remote(self, *, on: bool | None) -> Reply:
         """Allow or stop turns going to the remote model, or with None say which."""
         if on and self.gateway.router.remote is None:
             return error(NO_REMOTE)
@@ -78,7 +142,7 @@ class Conversation:
             return note("remote: on, turns may leave this machine")
         return note("remote: off, every turn stays on this machine")
 
-    def persona(self, key: str) -> Reply:
+    async def persona(self, key: str) -> Reply:
         """Continue as the persona ``key``; an empty key lists them."""
         if not key:
             return note(f"personas: {', '.join(self.session.persona_names())}")
@@ -88,7 +152,7 @@ class Conversation:
             return error(str(problem))
         return self._now()
 
-    def adjust(self, values: dict[str, float]) -> Reply:
+    async def adjust(self, values: dict[str, float]) -> Reply:
         """Move some trait sliders of the current persona."""
         try:
             self.session.adjust(values)
@@ -107,7 +171,7 @@ class Conversation:
             f"{status.remaining} left, {health.reserve} kept in reserve"
         )
 
-    def model(self) -> Reply:
+    async def model(self) -> Reply:
         """Say what the model behind the router can do, and where the last turn went."""
         info = self.gateway.router.info
         images = "yes" if info.vision else "no"
@@ -118,7 +182,7 @@ class Conversation:
             return note(first, "no turn yet")
         return note(first, f"last turn: {last.route} to {last.model} ({last.reason})")
 
-    def tools(self) -> Reply:
+    async def tools(self) -> Reply:
         """List the tools, where each works, what it may change and whether it asks."""
         tools = list(self.session.tools)
         if not tools:
@@ -132,7 +196,7 @@ class Conversation:
             )
         )
 
-    def reset(self) -> Reply:
+    async def reset(self) -> Reply:
         """Forget the conversation so far."""
         self.session.reset()
         return note("conversation forgotten")

@@ -239,16 +239,16 @@ async def test_slash_tools_lists_each_tool_and_whether_it_asks(tmp_path: Path) -
         transport=httpx.MockTransport(lambda _: httpx.Response(404))
     ) as client:
         chat, out = await app_for(tmp_path, client)
-        chat.session.tools = Toolbox(
+        chat.conversation.session.tools = Toolbox(
             [
                 recorded([]),
                 recorded([], Effect.CHANGE, name="edit"),
                 recorded([], name="gone"),
             ]
         )
-        chat.session.policy = Policy(denied=frozenset({"gone"}))
+        chat.conversation.session.policy = Policy(denied=frozenset({"gone"}))
         await chat.handle(ShowTools())
-        chat.session.tools = Toolbox()
+        chat.conversation.session.tools = Toolbox()
         await chat.handle(ShowTools())
 
     assert out.getvalue().splitlines() == [
@@ -266,11 +266,13 @@ async def test_an_answer_with_nothing_in_it_says_none_came_back(
         transport=httpx.MockTransport(lambda _: httpx.Response(404))
     ) as client:
         chat, out = await app_for(tmp_path, client)
-        chat.session = ChatSession(Scripted([]), PersonaLibrary(), "synthia")
+        chat.conversation.session = ChatSession(
+            Scripted([]), PersonaLibrary(), "synthia"
+        )
         await chat.handle(parse("hello"))
 
     assert out.getvalue() == "no answer came back\n"
-    assert chat.session.history == []
+    assert chat.conversation.session.history == []
 
 
 async def test_plan_shows_the_plan_each_step_and_the_answer(tmp_path: Path) -> None:
@@ -284,7 +286,7 @@ async def test_plan_shows_the_plan_each_step_and_the_answer(tmp_path: Path) -> N
         transport=httpx.MockTransport(lambda _: httpx.Response(404))
     ) as client:
         chat, out = await app_for(tmp_path, client)
-        chat.session = ChatSession(model, PersonaLibrary(), "synthia")
+        chat.conversation.session = ChatSession(model, PersonaLibrary(), "synthia")
         await chat.handle(parse("/plan find a, then use it"))
 
     *shown, report = out.getvalue().splitlines()
@@ -298,7 +300,7 @@ async def test_plan_shows_the_plan_each_step_and_the_answer(tmp_path: Path) -> N
         "All done.",
     ]
     assert report.startswith("direct | ")
-    assert [m.text for m in chat.session.history] == [
+    assert [m.text for m in chat.conversation.session.history] == [
         "find a, then use it",
         "All done.",
     ]

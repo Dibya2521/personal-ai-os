@@ -201,19 +201,19 @@ class Served:
 
     async def _think(self, params: Params) -> object:
         level = checked(ThinkParams, params).level
-        return reply_of(self.conversation.think(level))
+        return reply_of(await self.conversation.think(level))
 
     async def _remote(self, params: Params) -> object:
         on = checked(RemoteParams, params).on
-        return reply_of(self.conversation.remote(on=on))
+        return reply_of(await self.conversation.remote(on=on))
 
     async def _persona(self, params: Params) -> object:
         key = checked(PersonaParams, params).key
-        return reply_of(self.conversation.persona(key))
+        return reply_of(await self.conversation.persona(key))
 
     async def _adjust(self, params: Params) -> object:
         values = checked(AdjustParams, params).values
-        return reply_of(self.conversation.adjust(values))
+        return reply_of(await self.conversation.adjust(values))
 
     async def _budget(self, params: Params) -> object:
         checked(EmptyParams, params)
@@ -221,15 +221,15 @@ class Served:
 
     async def _model(self, params: Params) -> object:
         checked(EmptyParams, params)
-        return reply_of(self.conversation.model())
+        return reply_of(await self.conversation.model())
 
     async def _tools(self, params: Params) -> object:
         checked(EmptyParams, params)
-        return reply_of(self.conversation.tools())
+        return reply_of(await self.conversation.tools())
 
     async def _reset(self, params: Params) -> object:
         checked(EmptyParams, params)
-        return reply_of(self.conversation.reset())
+        return reply_of(await self.conversation.reset())
 
     async def _stop(self, params: Params) -> object:
         checked(EmptyParams, params)

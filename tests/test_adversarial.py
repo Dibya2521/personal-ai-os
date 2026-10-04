@@ -138,7 +138,7 @@ def test_a_persona_file_that_is_not_utf8_names_the_file(tmp_path: Path) -> None:
 
 async def chat_with(
     tmp_path: Path, transport: httpx.MockTransport, cap: int = 50
-) -> tuple[ChatApp, io.StringIO, httpx.AsyncClient]:
+) -> tuple[ChatApp[Conversation], io.StringIO, httpx.AsyncClient]:
     client = httpx.AsyncClient(transport=transport)
     routes = LastRoute()
     gateway = build_gateway(
@@ -192,7 +192,7 @@ async def test_the_used_up_budget_says_when_it_comes_back(tmp_path: Path) -> Non
     )
     assert text.startswith("one\nremote | ")
     assert "\n\n" not in text  # a failure before any output adds no blank line
-    assert len(chat.session.history) == 2
+    assert len(chat.conversation.session.history) == 2
 
 
 class DroppedMidSentence(httpx.AsyncByteStream):
@@ -213,7 +213,7 @@ async def test_a_connection_lost_mid_answer_ends_the_line_then_says_why(
         assert await chat.handle(parse("what is it?"))
 
     assert out.getvalue().startswith("The answer is\nno answer: no response from ")
-    assert chat.session.history == []
+    assert chat.conversation.session.history == []
 
 
 async def test_an_answer_that_is_only_done_says_so_and_is_not_kept(
@@ -227,4 +227,4 @@ async def test_an_answer_that_is_only_done_says_so_and_is_not_kept(
         await chat.handle(parse("hello?"))
 
     assert out.getvalue() == "no answer came back\n"
-    assert chat.session.history == []
+    assert chat.conversation.session.history == []
