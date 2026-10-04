@@ -2,7 +2,14 @@ import json
 
 import pytest
 
-from synthia.agent.loop import Agent, Finished, Limits, Outcome, ToolFinished
+from synthia.agent.loop import (
+    Agent,
+    Finished,
+    Limits,
+    ModelTurn,
+    Outcome,
+    ToolFinished,
+)
 from synthia.agent.plan import (
     MAX_RESULT_CHARS,
     PlanAnswerBegun,
@@ -137,6 +144,29 @@ async def test_a_step_that_does_not_finish_is_planned_again_but_only_once() -> N
     )
     assert only_finished(seen).text == "done"
     assert len(model.requests) == 7
+
+
+async def test_every_planning_answer_is_a_model_step_of_the_run() -> None:
+    model = Scripted(
+        planned("a", "b"),
+        calls(("note", '{"text": "a"}')),
+        says("partial a"),
+        planned("c"),
+        says("did c"),
+        says("done"),
+    )
+
+    seen = await events(planner(model, Limits(max_steps=2)))
+
+    assert [e.response.text for e in seen if isinstance(e, ModelTurn)] == [
+        json.dumps({"steps": ["a", "b"]}),
+        "",
+        "partial a",
+        json.dumps({"steps": ["c"]}),
+        "did c",
+        "done",
+    ]
+    assert isinstance(seen[0], ModelTurn)
 
 
 async def test_a_new_plan_that_cannot_be_read_goes_straight_to_the_answer() -> None:

@@ -13,21 +13,24 @@ give in the right shape is no plan: the task runs as a plain loop.
 from __future__ import annotations
 
 import dataclasses
+import time
 from contextlib import aclosing
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from synthia.agent.loop import Finished, Outcome
+from synthia.agent.loop import Finished, ModelTurn, Outcome
+from synthia.gateway.protocol import join
 from synthia.gateway.structured import DEFAULT_REPAIRS, StructuredOutputError, generate
 from synthia.gateway.types import Message
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Sequence
+    from collections.abc import AsyncGenerator, Callable, Sequence
 
     from synthia.agent.loop import Agent, Step
-    from synthia.gateway.types import ChatRequest
+    from synthia.gateway.protocol import ChatModel
+    from synthia.gateway.types import ChatChunk, ChatRequest, ModelInfo
 
 MAX_PLAN_STEPS: Final = 6
 MIN_PLAN_STEPS: Final = 2
@@ -73,6 +76,41 @@ type PlanEvent = Step | Planned | PlanStepBegun | PlanAnswerBegun
 
 
 @dataclass(frozen=True, slots=True)
+class _Planning:
+    steps: tuple[str, ...] | None
+    turns: list[ModelTurn]
+
+
+class _Observed:
+    """A model whose every answer is kept as a :class:`ModelTurn`.
+
+    A planning request is a model step of the turn like any other, so its
+    answers are counted and traced, but its text (the plan as JSON) is not
+    shown as the answer.
+    """
+
+    def __init__(self, model: ChatModel, clock: Callable[[], float]) -> None:
+        self._model = model
+        self._clock = clock
+        self.turns: list[ModelTurn] = []
+
+    @property
+    def info(self) -> ModelInfo:
+        """Return what the model behind it can do."""
+        return self._model.info
+
+    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
+        """Yield the model's answer and keep it whole once it ends."""
+        started = self._clock()
+        chunks: list[ChatChunk] = []
+        async with aclosing(self._model.stream(request)) as stream:
+            async for chunk in stream:
+                chunks.append(chunk)
+                yield chunk
+        self.turns.append(ModelTurn(join(chunks), self._clock() - started))
+
+
+@dataclass(frozen=True, slots=True)
 class _Done:
     text: str
     result: str
@@ -82,9 +120,16 @@ class _Done:
 class Planner:
     """Runs a task as a plan of steps, each through ``agent``."""
 
-    def __init__(self, agent: Agent, *, repairs: int = DEFAULT_REPAIRS) -> None:
+    def __init__(
+        self,
+        agent: Agent,
+        *,
+        repairs: int = DEFAULT_REPAIRS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._agent = agent
         self._repairs = repairs
+        self._clock = clock
 
     async def run(self, request: ChatRequest) -> AsyncGenerator[PlanEvent]:
         """Yield every step of answering ``request``, ending with :class:`Finished`.
@@ -95,7 +140,10 @@ class Planner:
         Raises:
             GatewayError: What the model raised.
         """
-        steps = await self._plan(request, ())
+        planning = await self._plan(request, ())
+        for turn in planning.turns:
+            yield turn
+        steps = planning.steps
         if steps is None or len(steps) < MIN_PLAN_STEPS:
             async for event in self._loop(request):
                 yield event
@@ -112,7 +160,10 @@ class Planner:
                 yield event
             if not done[-1].answered and not revised:
                 revised = True
-                steps = await self._plan(request, done) or ()
+                planning = await self._plan(request, done)
+                for turn in planning.turns:
+                    yield turn
+                steps = planning.steps or ()
                 remaining = list(steps)
                 yield Planned(steps, revised=True)
         yield PlanAnswerBegun()
@@ -143,10 +194,8 @@ class Planner:
                 yield event
         done.append(_Done(text, result, answered))
 
-    async def _plan(
-        self, request: ChatRequest, done: Sequence[_Done]
-    ) -> tuple[str, ...] | None:
-        """Return the steps the model plans, or None if it gave no valid plan."""
+    async def _plan(self, request: ChatRequest, done: Sequence[_Done]) -> _Planning:
+        """Return the steps the model plans (None if no valid plan) and its answers."""
         tools = "\n".join(
             f"- {spec.name}: {spec.description}" for spec in self._agent.toolbox.specs()
         )
@@ -163,11 +212,12 @@ class Planner:
         ask = dataclasses.replace(
             request, messages=(*request.messages, Message.user(prompt)), tools=()
         )
+        model = _Observed(self._agent.model, self._clock)
         try:
-            plan = await generate(self._agent.model, ask, Plan, repairs=self._repairs)
+            plan = await generate(model, ask, Plan, repairs=self._repairs)
         except StructuredOutputError:
-            return None
-        return tuple(plan.steps)
+            return _Planning(None, model.turns)
+        return _Planning(tuple(plan.steps), model.turns)
 
     def _step(
         self,

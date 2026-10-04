@@ -252,5 +252,6 @@ chat shows the plan, a line as each step begins, each step's result as it
 streams, and `answer:` before the final answer; only the task and that answer
 enter the conversation. The trace records the plan, each step's start and the
 answer's start, and `synthia trace` shows each step's model steps under it.
-The planning request itself is not a model step of the turn, so its tokens are
-not in the turn's report line.
+Each planning answer (a repair or a new plan included) is a model step of the
+turn like any other: it is traced with its route, and its tokens are in the
+turn's report line. Its text, the plan as JSON, is not shown as the answer.

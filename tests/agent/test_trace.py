@@ -151,6 +151,7 @@ async def test_a_planned_turn_records_its_plan_each_step_and_the_answer(
     records = dumps(path)
     assert [r["kind"] for r in records] == [
         "turn",
+        "model",
         "plan",
         "plan_step",
         "model",
@@ -161,13 +162,15 @@ async def test_a_planned_turn_records_its_plan_each_step_and_the_answer(
         "finished",
     ]
     step = {"turn": 1, "at": "2026-10-02T15:15:00Z"}
-    assert records[1] == step | {
+    plan_text = json.dumps({"steps": ["find a", "use a"]})
+    assert records[1]["text"] == {"text": plan_text, "chars": len(plan_text)}
+    assert records[2] == step | {
         "kind": "plan",
         "steps": ["find a", "use a"],
         "revised": False,
     }
-    assert records[4] == step | {"kind": "plan_step", "number": 2, "text": "use a"}
-    assert records[6] == step | {"kind": "plan_answer"}
+    assert records[5] == step | {"kind": "plan_step", "number": 2, "text": "use a"}
+    assert records[7] == step | {"kind": "plan_answer"}
     assert [m.text for m in session.history] == ["plan it", "All done."]
 
 
