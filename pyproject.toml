@@ -82,6 +82,11 @@ ignore = [
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.ruff.lint.flake8-type-checking]
+# pydantic reads field annotations when the class is made, so their types
+# must be imported at run time.
+runtime-evaluated-base-classes = ["pydantic.BaseModel", "synthia.server.api._Params"]
+
 [tool.ruff.lint.pylint]
 max-args = 5
 max-statements = 25

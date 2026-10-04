@@ -17,6 +17,14 @@ All notable changes are recorded here. The format follows
   shows a dim "reading the message: N of M tokens, S s" line, updated each
   time the server reports a batch read (up to 2,048 tokens), then the
   thinking line or the answer.
+- `synthia serve` runs SYNTHIA as a daemon on 127.0.0.1, on a free port
+  written with a random token to `SYNTHIA_HOME/daemon.json` (readable only by
+  its owner). It starts the local model and the MCP servers once for every
+  conversation. `/health` answers anyone; conversations are JSON-RPC 2.0 over
+  a WebSocket at `/ws`, need the token, and are refused from web pages (any
+  request with an `Origin` header). Each client gets its own conversation, is
+  asked before every tool call that needs a yes, and a client that goes away
+  is a no. A client can stop the daemon; Ctrl+C stops it too.
 
 ### Fixed
 

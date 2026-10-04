@@ -29,6 +29,7 @@ from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.models.server import Launch
 from synthia.models.service import SERVER_LOG, LocalService, find_local
 from synthia.persona.model import PersonaError
+from synthia.server.daemon import run_daemon
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -148,6 +149,25 @@ def chat(
     except (ConfigError, PersonaError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
+
+
+@app.command()
+def serve() -> None:
+    """Run SYNTHIA as a daemon until it is stopped.
+
+    It listens on 127.0.0.1 only, on a free port written with a token to
+    SYNTHIA_HOME/daemon.json, and logs to SYNTHIA_HOME/logs/synthia.log.
+    Ctrl+C stops it.
+    """
+    settings = _settings()
+    try:
+        with logging_to(settings, settings.home / CHAT_LOG):
+            asyncio.run(run_daemon(settings, local_service(settings)))
+    except (ConfigError, PersonaError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    except KeyboardInterrupt:
+        typer.echo("stopped")
 
 
 @app.command()

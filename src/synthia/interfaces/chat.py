@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Final, Self, cast
 
 import httpx
@@ -43,10 +42,10 @@ from synthia.interfaces.commands import (
     UseRemote,
     parse,
 )
-from synthia.kernel.errors import ConfigError
-from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
+from synthia.mcp.client import McpServers
 from synthia.persona.library import PersonaLibrary
 from synthia.server.conversation import Conversation, Reply
+from synthia.server.host import PERSONAS_DIR, TIMEOUT, start_tools
 from synthia.server.session import (
     ChatSession,
     ImageError,
@@ -54,15 +53,15 @@ from synthia.server.session import (
     TurnReport,
     load_image,
 )
-from synthia.tools import local_tools, outside_tools
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from rich.console import Console
 
     from synthia.agent.policy import Approver
-    from synthia.agent.tools import Tool, Toolbox
+    from synthia.agent.tools import Tool
     from synthia.gateway.providers import RemoteProvider
     from synthia.gateway.types import ChatChunk, ImagePart, PromptProgress
     from synthia.kernel.config import Settings
@@ -72,10 +71,6 @@ if TYPE_CHECKING:
 PROMPT: Final = "you> "
 MORE: Final = "...> "
 CONTINUES: Final = "\\"
-PERSONAS_DIR: Final = Path("personas")
-# OpenRouter sends keep-alive comments while a model thinks, so a minute of
-# silence mid-stream means the connection is gone, not that the model is slow.
-TIMEOUT: Final = httpx.Timeout(60.0, connect=10.0)
 YES: Final = frozenset({"y", "yes"})
 MAX_SHOWN: Final = 80
 
@@ -487,7 +482,9 @@ def run_chat(  # noqa: PLR0913
                 None if local is None else local.model(client),
                 remote=remote,
             )
-            tools, servers = runner.run(chat_tools(settings, console, transport))
+            tools, servers = runner.run(
+                start_tools(settings, lambda text: _warn(console, text), transport)
+            )
             session = ChatSession(
                 gateway.model,
                 PersonaLibrary(settings.home / PERSONAS_DIR),
@@ -510,35 +507,6 @@ def run_chat(  # noqa: PLR0913
                 runner.run(app.conversation.close())
             runner.run(servers.stop())
             runner.run(client.aclose())
-
-
-async def chat_tools(
-    settings: Settings,
-    console: Console,
-    transport: httpx.AsyncBaseTransport | None = None,
-) -> tuple[Toolbox, McpServers]:
-    """Return SYNTHIA's own tools, the outside ones, and every MCP server's.
-
-    In that order: what runs on this machine first, then what asks first.
-    """
-    servers = await start_mcp_servers(settings, console)
-    tools = local_tools(settings.file_roots)
-    for tool in (*outside_tools(settings.home, transport), *servers.tools()):
-        tools.add(tool)
-    return tools, servers
-
-
-async def start_mcp_servers(settings: Settings, console: Console) -> McpServers:
-    """Start the servers in ``mcp.toml``; any that fail are named and left out."""
-    try:
-        configs = load_config(settings.home / MCP_CONFIG)
-    except ConfigError as error:
-        configs = {}
-        _warn(console, f"no MCP servers: {error}")
-    servers = await McpServers.start(configs, settings.home / MCP_LOGS)
-    for failure in servers.failures:
-        _warn(console, f"MCP server not started: {failure}")
-    return servers
 
 
 def _warn(console: Console, text: str) -> None:
