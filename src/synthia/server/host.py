@@ -12,6 +12,7 @@ from __future__ import annotations
 import sqlite3
 from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -22,6 +23,7 @@ from synthia.kernel.errors import ConfigError
 from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
 from synthia.memory.remembering import Remembering
 from synthia.memory.store import MEMORY_FILE, MemoryStore
+from synthia.memory.summary import summarize
 from synthia.server.conversation import Conversation
 from synthia.server.session import ChatSession, LastRoute
 from synthia.tools import local_tools, outside_tools
@@ -117,5 +119,10 @@ class Host:
             approver=approver,
             trace=None if self.traces is None else Trace.start(self.traces),
             memory=None if self.memory is None else Remembering(self.memory),
+            summarizer=(
+                partial(summarize, self.gateway.model)
+                if self.gateway.router.has_local
+                else None
+            ),
         )
         return Conversation(session, self.gateway)

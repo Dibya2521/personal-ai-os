@@ -43,6 +43,13 @@ All notable changes are recorded here. The format follows
   and days ("what did I tell you about my cat last week?"): it reads the
   clock for the dates, then returns up to eight earlier turns, best match
   first, each with its day. It only reads this machine, so it never asks.
+- Long chats keep fitting in the model's context window. Before each turn
+  the oldest turns leave, whole, until the request fits with a quarter of the
+  window kept free for the answer. With a local model, the turns that left
+  are folded into a short summary (at most 1,500 tokens, written on this
+  machine, never sent to the remote model) that SYNTHIA keeps seeing; without
+  one they are only dropped. How many characters make a token is learned
+  from the prompt size the model reports for each turn.
 
 ### Changed
 

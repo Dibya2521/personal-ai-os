@@ -200,6 +200,11 @@ class Router:
         return self._remote
 
     @property
+    def has_local(self) -> bool:
+        """Return whether a model on this machine stands behind the router."""
+        return self._local is not None
+
+    @property
     def info(self) -> ModelInfo:
         """Return what a request sent here may use: the union of both models."""
         remote = None if self._remote is None else self._remote.model

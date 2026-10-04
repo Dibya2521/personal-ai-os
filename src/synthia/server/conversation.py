@@ -247,10 +247,11 @@ class Conversation:
         return note("the last turn is forgotten")
 
     async def close(self) -> None:
-        """Stop asking for the daily cap, if that is still under way."""
+        """Stop asking for the daily cap, and the summary, if still under way."""
         if self.learning is not None:
             self.learning.cancel()
             await asyncio.wait([self.learning])
+        await self.session.close()
 
     def _now(self) -> Reply:
         persona = self.session.persona

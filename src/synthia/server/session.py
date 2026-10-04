@@ -8,9 +8,13 @@ and all, so the model is never shown half of an exchange as if it had happened.
 
 from __future__ import annotations
 
+import asyncio
+import contextvars
+import logging
 import time
 from contextlib import aclosing
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import TYPE_CHECKING, Final
 
 from synthia.agent.loop import (
@@ -25,7 +29,7 @@ from synthia.agent.plan import PlanAnswerBegun, Planned, Planner, PlanStepBegun
 from synthia.agent.policy import Policy, nobody_approves
 from synthia.agent.tools import Toolbox
 from synthia.agent.trace import utc_now
-from synthia.gateway.errors import IncompleteResponseError
+from synthia.gateway.errors import GatewayError, IncompleteResponseError
 from synthia.gateway.router import RouteDecided
 from synthia.gateway.types import (
     ChatChunk,
@@ -36,6 +40,7 @@ from synthia.gateway.types import (
     Reasoning,
 )
 from synthia.memory.store import ToolUse, Turn
+from synthia.memory.window import ContextWindow, message_chars, tools_chars
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -47,8 +52,11 @@ if TYPE_CHECKING:
     from synthia.gateway.protocol import ChatModel
     from synthia.kernel.bus import Event
     from synthia.memory.remembering import Remembering
+    from synthia.memory.summary import Summarizer
     from synthia.persona.library import PersonaLibrary
     from synthia.persona.model import Persona
+
+logger = logging.getLogger(__name__)
 
 MEDIA_TYPES: Final = {
     ".png": "image/png",
@@ -167,6 +175,7 @@ class ChatSession:
         approver: Approver = nobody_approves,
         trace: Trace | None = None,
         memory: Remembering | None = None,
+        summarizer: Summarizer | None = None,
     ) -> None:
         """Start an empty conversation as ``persona``.
 
@@ -174,7 +183,9 @@ class ChatSession:
         report can say where the turn went. ``tools`` are what the model may
         call; a call that needs approval is put to ``approver``. ``trace``
         records every step of every turn, including turns that fail;
-        ``memory`` keeps each finished turn.
+        ``memory`` keeps each finished turn. Turns that no longer fit in the
+        model's window leave it, and ``summarizer`` folds them into a summary
+        the model keeps seeing; without one they are only dropped.
 
         Raises:
             PersonaError: If there is no such persona.
@@ -184,7 +195,12 @@ class ChatSession:
         self._clock = clock
         self._approver = approver
         self._trace = trace
+        self._summarizer = summarizer
         self.memory = memory
+        self.window = ContextWindow(model.info.context_window)
+        self.summary = ""
+        self._leaving: list[Message] = []
+        self._summarizing: asyncio.Task[None] | None = None
         # Where each finished turn's messages begin in the history.
         self._starts: list[int] = []
         self.tools = tools or Toolbox()
@@ -219,8 +235,16 @@ class ChatSession:
         """Forget the conversation; what was remembered stays remembered."""
         self.history.clear()
         self._starts.clear()
+        self._leaving.clear()
+        self.summary = ""
         if self.memory is not None:
             self.memory.begin_again()
+
+    async def close(self) -> None:
+        """Stop writing the summary, if that is under way."""
+        if self._summarizing is not None:
+            self._summarizing.cancel()
+            await asyncio.wait([self._summarizing])
 
     def drop_last(self) -> bool:
         """Take the last finished turn out of the history; False if there is none."""
@@ -231,12 +255,34 @@ class ChatSession:
 
     def request(self, text: str, *images: ImagePart) -> ChatRequest:
         """Return the request a turn saying ``text`` would send."""
-        system = Message.system(self.persona.system_prompt())
         return ChatRequest(
-            (system, *self.history, Message.user(text, *images)),
+            (self._system(), *self.history, Message.user(text, *images)),
             reasoning=self.reasoning,
             use_remote=self.use_remote,
         )
+
+    def make_room(self, text: str, *images: ImagePart) -> int:
+        """Move the oldest turns out of the window until a turn saying ``text`` fits.
+
+        Return how many turns left. They wait to be summarised after the turn.
+        """
+        bounds = sorted({0, *self._starts}) if self.history else []
+        edges = [*bounds, len(self.history)]
+        turns = [self.history[a:b] for a, b in pairwise(edges)]
+        fixed = (self._system(), Message.user(text, *images))
+        leaving = self.window.overflow(fixed, turns, tools_chars(self.tools.specs()))
+        if leaving:
+            cut = edges[leaving]
+            self._leaving.extend(self.history[:cut])
+            del self.history[:cut]
+            self._starts = [b - cut for b in bounds[leaving:]]
+        return leaving
+
+    def _system(self) -> Message:
+        prompt = self.persona.system_prompt()
+        if self.summary:
+            prompt += f"\n\nEarlier in this conversation, in short: {self.summary}"
+        return Message.system(prompt)
 
     async def turn(
         self, text: str, *images: ImagePart, plan: bool = False
@@ -250,6 +296,7 @@ class ChatSession:
         Raises:
             GatewayError: If the answer failed; the history is unchanged.
         """
+        self.make_room(text, *images)
         request = self.request(text, *images)
         started = self._clock()
         asked_at = utc_now()
@@ -269,6 +316,9 @@ class ChatSession:
         self.history = list(finished.messages[1:])
         self._starts.append(before)
         report = self._report(request, taken.answers, self._clock() - started)
+        if not plan:
+            self._learn(request, taken.answers)
+        self._summarize_leaving()
         if self.memory is not None:
             await self.memory.remember(
                 Turn(
@@ -282,6 +332,37 @@ class ChatSession:
                 )
             )
         yield report
+
+    def _learn(self, request: ChatRequest, answers: list[ChatResponse]) -> None:
+        usage = answers[0].usage if answers else None
+        if usage is not None:
+            chars = sum(message_chars(m) for m in request.messages)
+            chars += tools_chars(self.tools.specs())
+            self.window.learn(chars, usage.prompt_tokens)
+
+    def _summarize_leaving(self) -> None:
+        if self._summarizer is None:
+            self._leaving.clear()
+            return
+        if not self._leaving or (
+            self._summarizing is not None and not self._summarizing.done()
+        ):
+            return
+        leaving, self._leaving = self._leaving, []
+        # A context of its own, so the summary's routing decision is never
+        # taken for the next turn's.
+        self._summarizing = asyncio.get_running_loop().create_task(
+            self._write_summary(self._summarizer, leaving),
+            context=contextvars.Context(),
+        )
+
+    async def _write_summary(
+        self, summarizer: Summarizer, leaving: list[Message]
+    ) -> None:
+        try:
+            self.summary = await summarizer(self.summary, leaving)
+        except GatewayError:
+            logger.warning("the turns that left the window were not summarised")
 
     def _run(
         self, request: ChatRequest, text: str, *, plan: bool
