@@ -114,6 +114,7 @@ layers = [
   "__main__",
   "interfaces",
   "server",
+  "memory",
   "mcp",
   "tools",
   "agent",

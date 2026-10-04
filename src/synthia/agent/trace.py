@@ -32,6 +32,7 @@ from synthia.agent.loop import Finished, ModelChunk, ModelTurn, ToolStarted
 from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
 from synthia.gateway.errors import GatewayError
 from synthia.kernel.supervisor import ServiceExited, ServiceStarted, ServiceStopped
+from synthia.kernel.text import mended
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -52,13 +53,7 @@ _STAMP: Final = "%Y%m%dT%H%M%SZ"
 _TOKEN_BYTES: Final = 3
 
 
-def _mend(text: str) -> str:
-    # A model's JSON may escape half an emoji ("\ud83d"); that string cannot
-    # be written as UTF-8, so it is kept as the visible escape instead.
-    return text.encode("utf-8", "backslashreplace").decode("utf-8")
-
-
-Mended = Annotated[str, AfterValidator(_mend)]
+Mended = Annotated[str, AfterValidator(mended)]
 
 
 class Clip(BaseModel):
