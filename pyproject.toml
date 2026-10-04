@@ -26,6 +26,7 @@ dynamic = ["version"]
 dependencies = [
     "fastapi>=0.142.2",
     "httpx>=0.28",
+    "numpy>=2.5.3",
     "platformdirs>=4.3",
     "psutil>=6.1",
     "pydantic-settings>=2.6",
