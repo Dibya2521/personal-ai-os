@@ -16,12 +16,13 @@ from typer.testing import CliRunner
 
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.providers import OPENROUTER_FREE
-from synthia.gateway.types import ChatChunk, Reasoning
+from synthia.gateway.types import ChatChunk, PromptProgress, Reasoning
 from synthia.interfaces import cli
 from synthia.interfaces.chat import (
     MORE,
     PROMPT,
     ChatApp,
+    ReadingTimer,
     ThinkingLine,
     ThinkingTimer,
     describe,
@@ -124,6 +125,48 @@ def test_the_thinking_line_counts_seconds_from_when_thinking_began() -> None:
     assert [timer.__rich__().plain for _ in range(2)] == [
         "thinking 0 s",
         "thinking 4 s",
+    ]
+
+
+def test_the_reading_line_counts_tokens_read_and_seconds() -> None:
+    now = iter([50.0, 79.9, 91.2])
+    timer = ReadingTimer(lambda: next(now), PromptProgress(2048, 2723))
+
+    first = timer.__rich__().plain
+    timer.progress = PromptProgress(2719, 2723)
+
+    assert [first, timer.__rich__().plain] == [
+        "reading the message: 2,048 of 2,723 tokens, 30 s",
+        "reading the message: 2,719 of 2,723 tokens, 41 s",
+    ]
+
+
+def test_the_line_reads_then_thinks_then_goes_when_the_answer_starts() -> None:
+    out = io.StringIO()
+    terminal = Console(file=out, width=80, force_terminal=False, color_system=None)
+    line = ThinkingLine(terminal, lambda: 0.0)
+    seen: list[str | None] = []
+
+    def shown() -> str | None:
+        return None if line.showing is None else line.showing.__rich__().plain
+
+    for chunk in (
+        ChatChunk(progress=PromptProgress(0, 2723)),
+        ChatChunk(progress=PromptProgress(2048, 2723)),
+        ChatChunk(reasoning="hmm"),
+        ChatChunk(progress=PromptProgress(2723, 2723)),
+        ChatChunk(text="Hello."),
+    ):
+        line.see(chunk)
+        seen.append(shown())
+    line.close()
+
+    assert seen == [
+        "reading the message: 0 of 2,723 tokens, 0 s",
+        "reading the message: 2,048 of 2,723 tokens, 0 s",
+        "thinking 0 s",
+        "thinking 0 s",
+        None,
     ]
 
 

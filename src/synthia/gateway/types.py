@@ -250,6 +250,14 @@ class ToolCallDelta:
 
 
 @dataclass(frozen=True, slots=True)
+class PromptProgress:
+    """How far a server has read the prompt before its first word."""
+
+    processed: int
+    total: int
+
+
+@dataclass(frozen=True, slots=True)
 class ChatChunk:
     """One piece of a streamed completion.
 
@@ -258,6 +266,7 @@ class ChatChunk:
     is a thinking model's working, kept apart from ``text`` so it is never spoken
     or shown as the answer. ``id`` names the completion the chunk belongs to,
     which is how a server that takes commands mid-answer is told which one.
+    ``progress`` comes from a server that reports reading a long prompt.
     """
 
     text: str = ""
@@ -267,6 +276,7 @@ class ChatChunk:
     usage: Usage | None = None
     model: str | None = None
     id: str | None = None
+    progress: PromptProgress | None = None
 
 
 @dataclass(frozen=True, slots=True)

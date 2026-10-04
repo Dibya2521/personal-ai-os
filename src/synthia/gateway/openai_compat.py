@@ -35,6 +35,7 @@ from synthia.gateway.types import (
     ChatChunk,
     FinishReason,
     ImagePart,
+    PromptProgress,
     Reasoning,
     Role,
     TextPart,
@@ -67,7 +68,8 @@ class Dialect(StrEnum):
     or ``reasoning.max_tokens`` when the request carries a token limit.
     llama.cpp's server passes ``chat_template_kwargs`` to the model's chat
     template, and ``enable_thinking`` is the one switch Qwen3.5's template has;
-    ``reasoning_control`` lets the thinking be ended mid-answer by a command.
+    ``reasoning_control`` lets the thinking be ended mid-answer by a command;
+    ``return_progress`` makes it report reading the prompt, once per batch.
     """
 
     OPENROUTER = "openrouter"
@@ -157,6 +159,8 @@ def build_payload(
                 "strict": True,
             },
         }
+    if dialect is Dialect.LLAMA_CPP:
+        payload["return_progress"] = True
     return payload | _reasoning(request, dialect)
 
 
@@ -183,6 +187,7 @@ def parse_chunk(data: JSON) -> ChatChunk:
         choice = choices[0]
         delta = cast("JSON", choice.get("delta") or {})
         reason = choice.get("finish_reason")
+        read = cast("JSON | None", data.get("prompt_progress"))
         return ChatChunk(
             text=delta.get("content") or "",
             reasoning=next((delta[k] for k in REASONING_KEYS if delta.get(k)), ""),
@@ -194,6 +199,11 @@ def parse_chunk(data: JSON) -> ChatChunk:
             usage=usage,
             model=data.get("model"),
             id=data.get("id"),
+            progress=(
+                PromptProgress(int(read["processed"]), int(read["total"]))
+                if read
+                else None
+            ),
         )
     except (KeyError, TypeError, ValueError, AttributeError, IndexError) as error:
         message = f"unexpected chunk shape: {type(error).__name__}"

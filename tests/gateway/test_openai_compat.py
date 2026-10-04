@@ -28,11 +28,13 @@ from synthia.gateway.openai_compat import (
 )
 from synthia.gateway.protocol import collect
 from synthia.gateway.types import (
+    ChatChunk,
     ChatRequest,
     FinishReason,
     ImagePart,
     Message,
     ModelInfo,
+    PromptProgress,
     Reasoning,
     ToolCall,
     ToolSpec,
@@ -188,14 +190,13 @@ def test_a_reasoning_level_is_sent_in_each_servers_dialect(
     llama_cpp: dict[str, object],
 ) -> None:
     request = ChatRequest(HELLO.messages, reasoning=level)
-    plain = build_payload(HELLO, "m")
 
     for dialect, added in (
         (Dialect.OPENROUTER, openrouter),
         (Dialect.LLAMA_CPP, llama_cpp),
     ):
         payload = build_payload(request, "m", dialect)
-        assert payload == plain | added
+        assert payload == build_payload(HELLO, "m", dialect) | added
 
 
 def test_a_token_limit_replaces_the_effort_on_openrouter_only() -> None:
@@ -215,7 +216,8 @@ def test_a_token_limit_replaces_the_effort_on_openrouter_only() -> None:
 
 def test_no_reasoning_level_leaves_the_body_byte_identical() -> None:
     # Recorded cassettes match on the body's hash, so a request that sets no
-    # level must serialise exactly as it did before levels existed.
+    # level must serialise exactly as it did before levels existed; llama.cpp
+    # is asked to report reading the prompt, and nothing else is added.
     before = {
         "model": "m",
         "messages": [{"role": "user", "content": "hello"}],
@@ -223,8 +225,25 @@ def test_no_reasoning_level_leaves_the_body_byte_identical() -> None:
         "stream_options": {"include_usage": True},
     }
 
-    for dialect in Dialect:
-        assert json.dumps(build_payload(HELLO, "m", dialect)) == json.dumps(before)
+    assert json.dumps(build_payload(HELLO, "m")) == json.dumps(before)
+    assert json.dumps(build_payload(HELLO, "m", Dialect.LLAMA_CPP)) == json.dumps(
+        before | {"return_progress": True}
+    )
+
+
+def test_a_servers_report_of_reading_the_prompt_is_read() -> None:
+    # The shape llama-server b11130 sent in a real run, with a 2,723-token prompt.
+    data = {
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": None}}],
+        "prompt_progress": {
+            "total": 2723,
+            "cache": 0,
+            "processed": 2048,
+            "time_ms": 29930,
+        },
+    }
+
+    assert parse_chunk(data) == ChatChunk(progress=PromptProgress(2048, 2723))
 
 
 async def test_the_endpoints_dialect_shapes_what_is_sent() -> None:

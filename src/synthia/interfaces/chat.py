@@ -66,7 +66,7 @@ if TYPE_CHECKING:
     from synthia.agent.tools import Tool, Toolbox
     from synthia.gateway.assemble import Gateway
     from synthia.gateway.providers import RemoteProvider
-    from synthia.gateway.types import ChatChunk, ImagePart
+    from synthia.gateway.types import ChatChunk, ImagePart, PromptProgress
     from synthia.interfaces.session import PlanMark
     from synthia.kernel.config import Settings
     from synthia.models.service import LocalService
@@ -208,8 +208,26 @@ class ThinkingTimer:
         return Text(f"thinking {self._clock() - self._started:.0f} s", style="dim")
 
 
+class ReadingTimer:
+    """How much of the message the model has read, and for how long."""
+
+    def __init__(self, clock: Callable[[], float], progress: PromptProgress) -> None:
+        self._clock = clock
+        self._started = clock()
+        self.progress = progress
+
+    def __rich__(self) -> Text:
+        """Return the line as it reads now."""
+        done, total = self.progress.processed, self.progress.total
+        seconds = self._clock() - self._started
+        return Text(
+            f"reading the message: {done:,} of {total:,} tokens, {seconds:.0f} s",
+            style="dim",
+        )
+
+
 class ThinkingLine:
-    """Show a :class:`ThinkingTimer` from the first thought until the answer starts.
+    """Show the model reading the message, then thinking, until the answer starts.
 
     The line is transient: it leaves nothing on screen once closed, and closing
     it on leaving the ``with`` block also covers a failed or stopped answer.
@@ -219,7 +237,10 @@ class ThinkingLine:
         self._console = console
         self._clock = clock
         self._status: Status | None = None
+        self._reading: ReadingTimer | None = None
+        self._thinking = False
         self._answering = False
+        self.showing: ReadingTimer | ThinkingTimer | None = None
 
     def __enter__(self) -> Self:
         return self
@@ -228,18 +249,33 @@ class ThinkingLine:
         self.close()
 
     def see(self, chunk: ChatChunk) -> None:
-        """Start the line at the first thought; close it once the answer begins."""
+        """Move the line on with ``chunk``; close it once the answer begins."""
         if chunk.text or chunk.tool_calls:
             self._answering = True
             self.close()
-        elif chunk.reasoning and self._status is None and not self._answering:
-            self._status = Status(
-                ThinkingTimer(self._clock), console=self._console, spinner_style="dim"
-            )
+        elif self._answering or self._thinking:
+            return
+        elif chunk.reasoning:
+            self._thinking = True
+            self._show(ThinkingTimer(self._clock))
+        elif chunk.progress is not None:
+            if self._reading is None:
+                self._reading = ReadingTimer(self._clock, chunk.progress)
+                self._show(self._reading)
+            else:
+                self._reading.progress = chunk.progress
+
+    def _show(self, line: ReadingTimer | ThinkingTimer) -> None:
+        self.showing = line
+        if self._status is None:
+            self._status = Status(line, console=self._console, spinner_style="dim")
             self._status.start()
+        else:
+            self._status.update(line)
 
     def close(self) -> None:
         """Remove the line, if it is showing."""
+        self.showing = None
         if self._status is not None:
             self._status.stop()
 

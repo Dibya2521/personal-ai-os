@@ -67,9 +67,12 @@ async def record() -> int:
     if service is None:
         sys.stdout.write("no local model is installed: run `synthia models install`\n")
         return 1
-    # llama-server reports its speed in every answer: this machine's, not for git.
+    # llama-server reports its speed in every answer and in its progress while
+    # it reads the prompt: this machine's, not for git.
     recorder = CassetteTransport.recording(
-        AGENT_CASSETTE, httpx.AsyncHTTPTransport(), dropped=("timings",)
+        AGENT_CASSETTE,
+        httpx.AsyncHTTPTransport(),
+        dropped=("timings", "prompt_progress"),
     )
     async with httpx.AsyncClient(transport=recorder, timeout=TIMEOUT) as client:
         model = service.model(client)

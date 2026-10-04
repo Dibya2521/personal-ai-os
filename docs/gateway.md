@@ -175,6 +175,17 @@ changes the level from the next turn on. While the model thinks, a dim
 "thinking N s" line counts the seconds, and the line after each answer names
 the level that was sent.
 
+Before that, the local model has to read the whole message, and it says
+nothing while it does: a 375-token prompt took 42 to 82 seconds on the CPU
+build of a busy laptop, and the time grows with the conversation. So requests
+to llama.cpp's server ask it to report its reading (`return_progress`), which
+it does once per batch of up to 2,048 tokens, and the chat shows a dim
+"reading the message: N of M tokens, S s" line until the model starts
+thinking or answering. The local server's requests also have no read time
+limit, since a fixed one would end a long read that is still going; a crash
+closes the connection at once, and Ctrl+C stops the answer. The remote model
+keeps a 60-second read limit.
+
 ## The remote guards
 
 The remote adapter is wrapped in three layers. Their order matters, and each

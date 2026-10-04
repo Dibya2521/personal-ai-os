@@ -13,6 +13,10 @@ All notable changes are recorded here. The format follows
   from the results. The chat shows the plan, each step as it begins and
   `answer:` before the answer; only the task and the answer are kept in the
   conversation. `synthia trace` shows the plan and each step's work under it.
+- While the local model reads a long message before answering, `synthia chat`
+  shows a dim "reading the message: N of M tokens, S s" line, updated each
+  time the server reports a batch read (up to 2,048 tokens), then the
+  thinking line or the answer.
 
 ### Fixed
 
