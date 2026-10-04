@@ -2,16 +2,19 @@ import logging
 import os
 import stat
 import sys
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
 import psutil
 import pytest
 
+from synthia.server import discovery
 from synthia.server.discovery import (
     DaemonInfo,
     is_running,
     new_token,
+    patiently,
     read_info,
     remove_info,
     started_now,
@@ -82,3 +85,45 @@ def test_the_file_is_removed_only_by_the_daemon_it_describes(tmp_path: Path) -> 
     remove_info(path, 4242)
 
     assert (kept, path.exists()) == (True, False)
+
+
+def test_a_client_reading_all_the_while_never_stops_a_write_or_a_removal(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "daemon.json"
+    written = info(os.getpid())
+    done = threading.Event()
+    seen: list[DaemonInfo | None] = []
+
+    def keep_reading() -> None:
+        while not done.is_set():
+            seen.append(read_info(path))
+
+    reader = threading.Thread(target=keep_reading)
+    reader.start()
+    try:
+        for _ in range(100):
+            write_info(path, written)
+            remove_info(path, written.pid)
+            assert not path.exists()
+    finally:
+        done.set()
+        reader.join()
+
+    assert all(found in (written, None) for found in seen)
+
+
+def test_a_refusal_that_outlasts_the_wait_is_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(discovery, "SHARING_WAIT_S", 0.05)
+    attempts: list[int] = []
+
+    def refused() -> None:
+        attempts.append(1)
+        raise PermissionError(13, "in use")
+
+    with pytest.raises(PermissionError, match="in use"):
+        patiently(refused)
+
+    assert len(attempts) > 1

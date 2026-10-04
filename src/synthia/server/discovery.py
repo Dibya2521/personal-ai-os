@@ -14,15 +14,21 @@ from __future__ import annotations
 import logging
 import os
 import secrets
+import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import psutil
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 DAEMON_FILE: Final = Path("daemon.json")
 TOKEN_BYTES: Final = 32
+SHARING_WAIT_S: Final = 1.0
+_SHARING_POLL_S: Final = 0.01
 _OWNER_ONLY: Final = 0o600
 
 logger = logging.getLogger(__name__)
@@ -55,6 +61,27 @@ def new_token() -> str:
     return secrets.token_urlsafe(TOKEN_BYTES)
 
 
+def patiently[T](action: Callable[[], T]) -> T:
+    """Return ``action()``, retrying for up to ``SHARING_WAIT_S`` while it is refused.
+
+    On Windows a file another process has open cannot be replaced or removed,
+    and one being replaced cannot be opened: a client reading ``daemon.json``
+    while the daemon removes it made the removal fail 218 times in 300. Each
+    refusal lasts only as long as the other side's read or write.
+
+    Raises:
+        PermissionError: If it is still refused when the time is up.
+    """
+    deadline = time.monotonic() + SHARING_WAIT_S
+    while True:
+        try:
+            return action()
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(_SHARING_POLL_S)
+
+
 def write_info(path: Path, info: DaemonInfo) -> None:
     """Write ``info`` to ``path`` as a whole, readable by its owner only."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,13 +90,13 @@ def write_info(path: Path, info: DaemonInfo) -> None:
     descriptor = os.open(partial, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _OWNER_ONLY)
     with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
         file.write(info.model_dump_json() + "\n")
-    partial.replace(path)
+    patiently(lambda: partial.replace(path))
 
 
 def read_info(path: Path) -> DaemonInfo | None:
     """Return the daemon described at ``path``, or None if there is none to read."""
     try:
-        return DaemonInfo.model_validate_json(path.read_bytes())
+        return DaemonInfo.model_validate_json(patiently(path.read_bytes))
     except FileNotFoundError:
         return None
     except (OSError, ValidationError) as error:
@@ -90,7 +117,7 @@ def remove_info(path: Path, pid: int) -> None:
     """Remove ``path`` if it still describes the daemon ``pid``."""
     info = read_info(path)
     if info is not None and info.pid == pid:
-        path.unlink(missing_ok=True)
+        patiently(lambda: path.unlink(missing_ok=True))
 
 
 def started_now() -> datetime:
