@@ -27,6 +27,7 @@ dependencies = [
     "fastapi>=0.142.2",
     "httpx>=0.28",
     "numpy>=2.5.3",
+    "onnxruntime>=1.30.0",
     "platformdirs>=4.3",
     "psutil>=6.1",
     "pydantic-settings>=2.6",
@@ -50,6 +51,7 @@ dev = [
   "pytest-asyncio>=0.25",
   "pytest-cov>=6.0",
   "ruff>=0.9",
+  "tokenizers>=0.23.2",
 ]
 
 [tool.hatch.version]
