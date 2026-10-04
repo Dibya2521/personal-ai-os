@@ -111,6 +111,7 @@ name = "packages import only the layers below them"
 type = "layers"
 containers = ["synthia"]
 layers = [
+  "__main__",
   "interfaces",
   "server",
   "mcp",

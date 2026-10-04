@@ -26,6 +26,7 @@ from synthia.interfaces import doctor
 from synthia.interfaces.chat import run_chat
 from synthia.interfaces.cli import app
 from synthia.interfaces.trace_view import build_tree
+from tests.interfaces.daemons import private_daemon
 from tests.interfaces.test_chat import KEY, console, scripted, settings, thinking_then
 
 AT = datetime(2026, 10, 2, 15, 15, tzinfo=UTC)
@@ -243,14 +244,8 @@ def test_a_chat_leaves_a_trace_the_command_shows_without_the_key(home: Path) -> 
         return httpx.Response(200, content=thinking_then("Hello."))
 
     screen, _ = console()
-    run_chat(
-        settings(home),
-        "synthia",
-        screen,
-        scripted("hello"),
-        httpx.MockTransport(reply),
-        use_remote=True,
-    )
+    with private_daemon(settings(home), httpx.MockTransport(reply)) as daemon:
+        run_chat(daemon, screen, scripted("hello"), use_remote=True)
 
     (path,) = (home / TRACES).iterdir()
     assert KEY not in path.read_text(encoding="utf-8")

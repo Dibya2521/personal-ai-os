@@ -14,12 +14,14 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from synthia.agent.policy import Decision
 from synthia.persona.model import PersonaError
+from synthia.server.session import load_image
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+    from pathlib import Path
 
     from synthia.gateway.assemble import Gateway
-    from synthia.gateway.types import ImagePart, Reasoning
+    from synthia.gateway.types import Reasoning
     from synthia.server.session import ChatSession, TurnItem
 
 RULE_SHOWN: Final = {
@@ -59,9 +61,14 @@ class Talk(Protocol):
         ...
 
     def turn(
-        self, text: str, *images: ImagePart, plan: bool = False
+        self, text: str, *, images: tuple[Path, ...] = (), plan: bool = False
     ) -> AsyncGenerator[TurnItem]:
-        """Yield the answer as it streams, tool calls, plan marks, then the report."""
+        """Yield the answer as it streams, tool calls, plan marks, then the report.
+
+        Raises:
+            ImageError: If an image cannot be sent, when the call is made or
+                when the turn starts.
+        """
         ...
 
     async def think(self, level: Reasoning | None) -> Reply:
@@ -96,10 +103,6 @@ class Talk(Protocol):
         """Forget the conversation."""
         ...
 
-    async def close(self) -> None:
-        """End the conversation."""
-        ...
-
 
 class Conversation:
     """One conversation and the commands about it."""
@@ -115,10 +118,15 @@ class Conversation:
         return self.session.persona.name
 
     def turn(
-        self, text: str, *images: ImagePart, plan: bool = False
+        self, text: str, *, images: tuple[Path, ...] = (), plan: bool = False
     ) -> AsyncGenerator[TurnItem]:
-        """Yield the answer as it streams, tool calls, plan marks, then the report."""
-        return self.session.turn(text, *images, plan=plan)
+        """Yield the answer as it streams, tool calls, plan marks, then the report.
+
+        Raises:
+            ImageError: If an image is missing, of the wrong kind or too large.
+        """
+        loaded = [load_image(path) for path in images]
+        return self.session.turn(text, *loaded, plan=plan)
 
     async def think(self, level: Reasoning | None) -> Reply:
         """Set how much each answer may think, or with None say what it is."""

@@ -14,6 +14,7 @@ from pydantic import SecretStr
 from rich.console import Console
 from typer.testing import CliRunner
 
+from synthia import __version__
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.gateway.types import ChatChunk, PromptProgress, Reasoning
@@ -37,7 +38,10 @@ from synthia.models.service import LocalService, LocalSetup
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
 from synthia.server.conversation import Conversation
+from synthia.server.daemon import run_daemon
+from synthia.server.discovery import DaemonInfo, new_token, started_now
 from synthia.server.session import ChatSession, LastRoute, TurnReport
+from tests.interfaces.daemons import private_daemon
 from tests.models.test_service import (
     CPU,
     TINY,
@@ -205,14 +209,8 @@ def test_a_level_set_with_think_is_sent_and_reported(tmp_path: Path) -> None:
         "/think", "/think high", "hello", "/think auto", "hello", "/think max"
     )
 
-    run_chat(
-        settings(tmp_path),
-        "synthia",
-        screen,
-        read,
-        httpx.MockTransport(reply),
-        use_remote=True,
-    )
+    with private_daemon(settings(tmp_path), httpx.MockTransport(reply)) as daemon:
+        run_chat(daemon, screen, read, use_remote=True)
 
     text = out.getvalue()
     assert text.count("thinking: auto") == 2
@@ -241,14 +239,8 @@ def test_the_chat_asks_for_the_keys_daily_cap_while_the_first_answer_streams(
         return httpx.Response(200, content=answer("Hello."))
 
     screen, out = console()
-    run_chat(
-        settings(tmp_path),
-        "synthia",
-        screen,
-        scripted("hello"),
-        httpx.MockTransport(handler),
-        use_remote=True,
-    )
+    with private_daemon(settings(tmp_path), httpx.MockTransport(handler)) as daemon:
+        run_chat(daemon, screen, scripted("hello"), use_remote=True)
 
     assert asked == ["/api/v1/key"]
     assert "Hello." in out.getvalue()
@@ -263,11 +255,13 @@ def test_a_cap_question_that_never_answers_does_not_hold_the_chat_open(
         return httpx.Response(200, content=answer("Hello."))
 
     screen, out = console()
-    chat = threading.Thread(
-        target=run_chat,
-        args=(settings(tmp_path), "synthia", screen, scripted("hello")),
-        kwargs={"transport": httpx.MockTransport(handler), "use_remote": True},
-    )
+
+    def talk() -> None:
+        transport = httpx.MockTransport(handler)
+        with private_daemon(settings(tmp_path), transport) as daemon:
+            run_chat(daemon, screen, scripted("hello"), use_remote=True)
+
+    chat = threading.Thread(target=talk)
     chat.start()
     chat.join(HANG_TIMEOUT_S)
 
@@ -284,14 +278,8 @@ def test_the_thinking_line_shows_while_thinking_and_leaves_only_the_answer(
         lambda _: httpx.Response(200, content=thinking_then("Done."))
     )
 
-    run_chat(
-        settings(tmp_path),
-        "synthia",
-        terminal,
-        scripted("why?"),
-        transport,
-        use_remote=True,
-    )
+    with private_daemon(settings(tmp_path), transport) as daemon:
+        run_chat(daemon, terminal, scripted("why?"), use_remote=True)
 
     text = out.getvalue()
     assert "thinking 0 s" in text
@@ -305,7 +293,8 @@ def test_a_whole_chat_answers_reports_and_leaves_on_exit(tmp_path: Path) -> None
         "/remote", "/remote on", "hello", "/budget", "/model", "/exit", "never read"
     )
 
-    run_chat(settings(tmp_path), "synthia", screen, read, replying())
+    with private_daemon(settings(tmp_path), replying()) as daemon:
+        run_chat(daemon, screen, read)
 
     text = out.getvalue()
     assert text.startswith("SYNTHIA is listening.")
@@ -326,19 +315,26 @@ def test_the_end_of_input_or_ctrl_c_at_the_prompt_leaves(
         raise ending
 
     screen, out = console()
-    run_chat(settings(tmp_path), "synthia", screen, read, replying())
+    with private_daemon(settings(tmp_path), replying()) as daemon:
+        run_chat(daemon, screen, read)
 
     assert out.getvalue().startswith("SYNTHIA is listening.")
 
 
 class InterruptedBody(httpx.AsyncByteStream):
-    """Send the first words, then press Ctrl+C while the rest is awaited."""
+    """Send the first words, then press Ctrl+C once they are on screen."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_screen: Callable[[], bool]) -> None:
         self.closed = False
+        self._on_screen = on_screen
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield event({"choices": [{"delta": {"content": "Once upon"}}]})
+        # The words reach the chat through the daemon; press Ctrl+C after they
+        # are shown, as a person would.
+        async with asyncio.timeout(HANG_TIMEOUT_S):
+            while not self._on_screen():  # noqa: ASYNC110 - printed by another thread
+                await asyncio.sleep(0.01)
         signal.raise_signal(signal.SIGINT)
         await asyncio.sleep(30)  # cancelled by the Ctrl+C before it ends
 
@@ -349,7 +345,8 @@ class InterruptedBody(httpx.AsyncByteStream):
 def test_ctrl_c_mid_answer_stops_it_closes_the_stream_and_keeps_chatting(
     tmp_path: Path,
 ) -> None:
-    body = InterruptedBody()
+    screen, out = console()
+    body = InterruptedBody(lambda: "Once upon" in out.getvalue())
     transport = httpx.MockTransport(
         lambda request: (
             httpx.Response(404)
@@ -357,10 +354,10 @@ def test_ctrl_c_mid_answer_stops_it_closes_the_stream_and_keeps_chatting(
             else httpx.Response(200, stream=body)
         )
     )
-    screen, out = console()
     read = scripted("tell me a story", "/model")
 
-    run_chat(settings(tmp_path), "synthia", screen, read, transport, use_remote=True)
+    with private_daemon(settings(tmp_path), transport) as daemon:
+        run_chat(daemon, screen, read, use_remote=True)
 
     text = out.getvalue()
     assert "Once upon\nstopped; that turn is not kept" in text
@@ -481,7 +478,13 @@ def test_the_command_refuses_to_start_without_a_key_or_with_an_unknown_persona(
 
     no_key = cli.invoke(app, ["chat"])
     monkeypatch.setenv("SYNTHIA_OPENROUTER_API_KEY", KEY)
-    no_persona = cli.invoke(app, ["chat", "--persona", "nobody"])
+    with private_daemon(settings(tmp_path / "home")) as daemon:
+
+        async def current(_: Path) -> DaemonInfo:
+            return daemon
+
+        monkeypatch.setattr("synthia.interfaces.cli.current_daemon", current)
+        no_persona = cli.invoke(app, ["chat", "--persona", "nobody"])
 
     assert (no_key.exit_code, no_persona.exit_code) == (2, 2)
     assert "SYNTHIA_OPENROUTER_API_KEY" in no_key.stderr
@@ -507,15 +510,9 @@ def test_with_the_remote_budget_spent_the_local_model_answers(tmp_path: Path) ->
         return lines(prompt)
 
     screen, out = console()
-    run_chat(
-        remote_spent(tmp_path, openrouter_api_key=KEY),
-        "synthia",
-        screen,
-        read,
-        local=service,
-        remote=NO_REMOTE,
-        use_remote=True,
-    )
+    spent = remote_spent(tmp_path, openrouter_api_key=KEY)
+    with private_daemon(spent, local=service, remote=NO_REMOTE) as daemon:
+        run_chat(daemon, screen, read, use_remote=True)
 
     text = out.getvalue()
     assert "echo: hello\nlocal | local | thinking off | 3 in, 2 out |" in text
@@ -530,13 +527,9 @@ def test_without_a_key_the_local_model_answers_and_remote_is_refused(
     service = service_at(tmp_path)
     screen, out = console()
 
-    run_chat(
-        remote_spent(tmp_path),
-        "synthia",
-        screen,
-        scripted("hello", "/model", "/remote on", "/budget", "/exit"),
-        local=service,
-    )
+    read = scripted("hello", "/model", "/remote on", "/budget", "/exit")
+    with private_daemon(remote_spent(tmp_path), local=service) as daemon:
+        run_chat(daemon, screen, read)
 
     text = out.getvalue()
     assert "echo: hello\nlocal | local | thinking off | 3 in, 2 out |" in text
@@ -552,14 +545,9 @@ def test_a_first_turn_waits_for_the_starting_local_model_and_never_goes_out(
     service = service_at(tmp_path)
     screen, out = console()
 
-    run_chat(
-        remote_spent(tmp_path, openrouter_api_key=KEY),
-        "synthia",
-        screen,
-        scripted("hello", "/model", "/exit"),
-        local=service,
-        remote=NO_REMOTE,
-    )
+    spent = remote_spent(tmp_path, openrouter_api_key=KEY)
+    with private_daemon(spent, local=service, remote=NO_REMOTE) as daemon:
+        run_chat(daemon, screen, scripted("hello", "/model", "/exit"))
 
     text = out.getvalue()
     assert "echo: hello\nlocal | local |" in text
@@ -574,66 +562,90 @@ def test_with_a_key_but_remote_off_nothing_leaves_the_machine(tmp_path: Path) ->
         return httpx.Response(200, content=answer("from the remote"))
 
     screen, out = console()
-    run_chat(
-        settings(tmp_path),
-        "synthia",
-        screen,
-        scripted("hello", "/budget", "/exit"),
-        httpx.MockTransport(handler),
-    )
+    transport = httpx.MockTransport(handler)
+    with private_daemon(settings(tmp_path), transport) as daemon:
+        run_chat(daemon, screen, scripted("hello", "/budget", "/exit"))
 
     assert "no answer: no local model is installed" in out.getvalue()
     assert sent == []
 
 
-def test_the_local_model_is_not_started_when_the_chat_cannot_begin(
+def test_a_chat_asked_for_a_persona_that_does_not_exist_ends_before_it_begins(
     tmp_path: Path,
 ) -> None:
     service = service_at(tmp_path)
+    screen, out = console()
 
-    with pytest.raises(PersonaError):
-        run_chat(
-            remote_spent(tmp_path),
-            "nobody",
-            console()[0],
-            local=service,
-            remote=NO_REMOTE,
-        )
+    with (
+        private_daemon(remote_spent(tmp_path), local=service) as daemon,
+        pytest.raises(PersonaError, match="no persona 'nobody'"),
+    ):
+        run_chat(daemon, screen, scripted("never read"), persona="nobody")
 
-    assert service.server.running is None
+    assert out.getvalue() == ""
     assert not service_threads()
 
 
-def test_without_a_local_model_or_a_key_the_chat_cannot_begin(tmp_path: Path) -> None:
+def test_without_a_local_model_or_a_key_the_daemon_cannot_begin(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(ConfigError, match="synthia models install"):
-        run_chat(remote_spent(tmp_path), "synthia", console()[0])
+        asyncio.run(run_daemon(remote_spent(tmp_path), None))
 
 
-def test_the_command_hands_an_installed_local_model_to_the_chat(
+def test_serve_hands_an_installed_local_model_to_the_daemon(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     setup = setup_at(tmp_path, CPU, TINY)
-    given: list[tuple[LocalService | None, bool]] = []
+    given: list[object] = []
 
-    def chat(
-        *_: object, local: LocalService | None = None, use_remote: bool = False
-    ) -> None:
-        given.append((local, use_remote))
+    async def daemon(_: Settings, local: object) -> None:
+        given.append(local)
 
     def find_local(*_: object, **__: object) -> LocalSetup | None:
         return setup
 
     monkeypatch.setattr(cli, "find_local", find_local)
-    monkeypatch.setattr(cli, "run_chat", chat)
+    monkeypatch.setattr(cli, "run_daemon", daemon)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
 
-    plain = CliRunner().invoke(app, ["chat"])
-    remote = CliRunner().invoke(app, ["chat", "--remote"])
+    served = CliRunner().invoke(app, ["serve"])
 
-    assert (plain.exit_code, remote.exit_code) == (0, 0)
-    assert [type(local) for local, _ in given] == [LocalService, LocalService]
-    assert [use_remote for _, use_remote in given] == [False, True]
+    assert served.exit_code == 0
+    assert [type(local) for local in given] == [LocalService]
+
+
+def test_chat_finds_the_daemon_then_chats_with_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    info = DaemonInfo(
+        port=45678, pid=1, version=__version__, started=started_now(), token=new_token()
+    )
+    given: list[tuple[object, str | None, bool]] = []
+
+    async def current(_: Path) -> DaemonInfo:
+        return info
+
+    def chat(
+        daemon: DaemonInfo,
+        *_: object,
+        persona: str | None = None,
+        use_remote: bool = False,
+    ) -> None:
+        given.append((daemon, persona, use_remote))
+
+    monkeypatch.setattr(cli, "current_daemon", current)
+    monkeypatch.setattr(cli, "run_chat", chat)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.setenv("SYNTHIA_OPENROUTER_API_KEY", KEY)
+
+    plain = CliRunner().invoke(app, ["chat"])
+    chosen = CliRunner().invoke(app, ["chat", "--remote", "--persona", "neon"])
+
+    assert (plain.exit_code, chosen.exit_code) == (0, 0)
+    assert given == [(info, None, False), (info, "neon", True)]
 
 
 def test_the_command_logs_to_a_file_not_over_the_prompt(
@@ -642,11 +654,16 @@ def test_the_command_logs_to_a_file_not_over_the_prompt(
     def chat(*_: object, **__: object) -> None:
         logging.getLogger("synthia.test").warning("the vulkan build could not start")
 
+    async def current(_: Path) -> None:
+        return None
+
     monkeypatch.setattr(cli, "run_chat", chat)
+    monkeypatch.setattr(cli, "current_daemon", current)
     # As in a real run: with no handler at all, logging prints to stderr.
     monkeypatch.setattr(logging.getLogger(), "handlers", [])
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.setenv("SYNTHIA_OPENROUTER_API_KEY", KEY)
 
     result = CliRunner().invoke(app, ["chat"])
 

@@ -83,6 +83,7 @@ class Host:
     persona: str
     tools: Toolbox
     traces: Path | None = None
+    warnings: tuple[str, ...] = ()
 
     @classmethod
     def traced(
@@ -91,9 +92,11 @@ class Host:
         gateway: Gateway,
         library: PersonaLibrary,
         tools: Toolbox,
+        warnings: tuple[str, ...] = (),
     ) -> Host:
         """Return a host whose conversations are traced under ``SYNTHIA_HOME``."""
-        return cls(gateway, library, settings.persona, tools, settings.home / TRACES)
+        traces = settings.home / TRACES
+        return cls(gateway, library, settings.persona, tools, traces, warnings)
 
     def conversation(self, approver: Approver) -> Conversation:
         """Return a new conversation that asks ``approver`` before each call."""

@@ -35,6 +35,7 @@ def authorised(header: str | None, token: str) -> bool:
 def create_app(host: Host, token: str, on_stop: Callable[[], None]) -> FastAPI:
     """Return the daemon's app; ``on_stop`` is called when a client asks it to stop."""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    open_conversations: set[Served] = set()
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -48,7 +49,10 @@ def create_app(host: Host, token: str, on_stop: Callable[[], None]) -> FastAPI:
             return
         await websocket.accept()
         outgoing: asyncio.Queue[bytes] = asyncio.Queue()
-        served = Served(host, outgoing.put_nowait, on_stop)
+        served = Served(
+            host, outgoing.put_nowait, on_stop, lambda: len(open_conversations)
+        )
+        open_conversations.add(served)
         writer = asyncio.create_task(_write(websocket, outgoing))
         try:
             while True:
@@ -56,6 +60,7 @@ def create_app(host: Host, token: str, on_stop: Callable[[], None]) -> FastAPI:
         except WebSocketDisconnect:
             pass
         finally:
+            open_conversations.discard(served)
             await served.close()
             writer.cancel()
             # A client that went away leaves the writer failed on its last send.

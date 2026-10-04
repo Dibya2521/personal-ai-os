@@ -21,7 +21,7 @@ from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings
 from synthia.kernel.jsonrpc import Method, Notice, Params, Peer, RpcError
 from synthia.persona.library import PersonaLibrary
-from synthia.server.api import ANSWER_FAILED, INVALID_PARAMS
+from synthia.server.api import ANSWER_FAILED, IMAGE_REFUSED, INVALID_PARAMS
 from synthia.server.daemon import run_daemon, serve
 from synthia.server.discovery import DAEMON_FILE, DaemonInfo, read_info
 from synthia.server.host import Host, publish_route
@@ -171,7 +171,12 @@ async def test_a_turn_streams_its_answer_and_reports_where_it_went(
         hello = await talk.call("hello")
         report = await talk.call("turn", {"text": "hi"})
 
-    assert hello == {"version": __version__, "persona": "SYNTHIA"}
+    assert hello == {
+        "version": __version__,
+        "persona": "SYNTHIA",
+        "sessions": 1,
+        "warnings": [],
+    }
     assert isinstance(report, dict)
     assert (report["route"], report["model"]) == ("local", "scripted")
     texts = [p["text"] for name, p in talk.notes if name == "chunk"]
@@ -285,9 +290,8 @@ async def test_commands_answer_with_lines_to_show(tmp_path: Path) -> None:
         ("turn", {"text": "hi", "colour": "red"}, "colour: Extra inputs"),
         ("think", {"level": "max"}, "level: Input should be"),
         ("budget", {"now": True}, "now: Extra inputs"),
-        ("turn", {"text": "see", "images": ["missing.png"]}, "missing.png"),
     ],
-    ids=["no-text", "unknown-field", "bad-level", "params-for-none", "no-image"],
+    ids=["no-text", "unknown-field", "bad-level", "params-for-none"],
 )
 async def test_params_that_do_not_fit_are_refused_by_name(
     tmp_path: Path, method: str, params: Params, problem: str
@@ -297,6 +301,16 @@ async def test_params_that_do_not_fit_are_refused_by_name(
             await talk.call(method, params)
 
     assert refused.value.code == INVALID_PARAMS
+
+
+async def test_an_image_that_cannot_be_sent_is_refused_with_its_own_code(
+    tmp_path: Path,
+) -> None:
+    async with daemon(tmp_path, Local()) as info, client(info) as talk:
+        with pytest.raises(RpcError, match=r"missing\.png") as refused:
+            await talk.call("turn", {"text": "see", "images": ["missing.png"]})
+
+    assert refused.value.code == IMAGE_REFUSED
 
 
 async def test_a_failed_answer_is_an_error_with_the_reason(tmp_path: Path) -> None:
@@ -387,7 +401,12 @@ async def test_the_daemon_starts_what_it_shares_serves_and_stops(
     stop.set()
     await asyncio.wait_for(running, HANG_TIMEOUT_S)
 
-    assert hello == {"version": __version__, "persona": "SYNTHIA"}
+    assert hello == {
+        "version": __version__,
+        "persona": "SYNTHIA",
+        "sessions": 1,
+        "warnings": [],
+    }
     names = [
         line.split(" | ")[0] for line in cast("dict[str, list[str]]", tools)["notes"]
     ]

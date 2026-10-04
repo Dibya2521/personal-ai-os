@@ -90,6 +90,9 @@ async def serve(host: Host, home: Path, *, stop: asyncio.Event | None = None) ->
         uvicorn.Config(
             create_app(host, info.token, stopping.set),
             ws="websockets-sansio",
+            # The chat's loop is idle while it waits at the prompt, so it cannot
+            # answer pings; on 127.0.0.1 a client that dies closes its socket.
+            ws_ping_interval=None,
             lifespan="off",
             log_config=None,
         )
@@ -134,12 +137,18 @@ async def run_daemon(
             None if local is None else local.model(client),
             remote=remote,
         )
-        tools, servers = await start_tools(settings, logger.warning, transport)
+        warnings: list[str] = []
+
+        def warn(text: str) -> None:
+            warnings.append(text)
+            logger.warning("%s", text)
+
+        tools, servers = await start_tools(settings, warn, transport)
         library = PersonaLibrary(settings.home / PERSONAS_DIR)
         if local is not None:
             local.start()
         try:
-            host = Host.traced(settings, gateway, library, tools)
+            host = Host.traced(settings, gateway, library, tools, tuple(warnings))
             await serve(host, settings.home, stop=stop)
         finally:
             if local is not None:

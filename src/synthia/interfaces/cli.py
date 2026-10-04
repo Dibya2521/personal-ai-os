@@ -16,10 +16,12 @@ from rich.table import Table
 
 from synthia import __version__
 from synthia.agent.trace import TRACES, read_trace, sessions
+from synthia.gateway.assemble import NO_MODEL
 from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.interfaces import doctor as doctor_checks
 from synthia.interfaces import model_commands
 from synthia.interfaces.chat import run_chat
+from synthia.interfaces.daemon_client import DaemonError, current_daemon
 from synthia.interfaces.trace_view import build_tree, summary
 from synthia.interfaces.usage_report import budget_report
 from synthia.kernel.config import Settings, load_settings, unknown_variables
@@ -27,7 +29,7 @@ from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.kernel.logs import logging_to
 from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.models.server import Launch
-from synthia.models.service import SERVER_LOG, LocalService, find_local
+from synthia.models.service import SERVER_LOG, LocalService, LocalSetup, find_local
 from synthia.persona.model import PersonaError
 from synthia.server.daemon import run_daemon
 
@@ -131,22 +133,20 @@ def chat(
         ),
     ] = False,
 ) -> None:
-    """Talk to SYNTHIA in the terminal.
+    """Talk to SYNTHIA in the terminal, through the daemon.
 
-    Every turn stays on this machine unless remote is switched on.
-    Ctrl+C stops an answer; Ctrl+C at the prompt, Ctrl+D or /exit leaves.
+    The daemon is started in the background if it is not running, and keeps
+    running after the chat ends (``synthia stop`` stops it). Every turn stays
+    on this machine unless remote is switched on. Ctrl+C stops an answer;
+    Ctrl+C at the prompt, Ctrl+D or /exit leaves.
     """
     settings = _settings()
     try:
+        _require_a_model(settings)
         with logging_to(settings, settings.home / CHAT_LOG):
-            run_chat(
-                settings,
-                persona or settings.persona,
-                Console(),
-                local=local_service(settings),
-                use_remote=remote,
-            )
-    except (ConfigError, PersonaError) as error:
+            daemon = asyncio.run(current_daemon(settings.home))
+            run_chat(daemon, Console(), persona=persona, use_remote=remote)
+    except (ConfigError, PersonaError, DaemonError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
 
@@ -262,18 +262,31 @@ def local_service(
     ``command`` builds the server's command line, so a caller may add flags
     such as a thread count.
     """
-    target = model_commands.this_machine().target
-    # The remote's window, so moving a conversation to the local model never
-    # shrinks what it can hold.
-    setup = find_local(
-        settings,
-        _installer(settings),
-        target,
-        context_limit=OPENROUTER_FREE.model.context_window,
-    )
+    setup = _local_setup(settings)
     if setup is None:
         return None
     return LocalService(setup, settings.home / SERVER_LOG, command=command)
+
+
+def _local_setup(settings: Settings) -> LocalSetup | None:
+    # The remote's window, so moving a conversation to the local model never
+    # shrinks what it can hold.
+    return find_local(
+        settings,
+        _installer(settings),
+        model_commands.this_machine().target,
+        context_limit=OPENROUTER_FREE.model.context_window,
+    )
+
+
+def _require_a_model(settings: Settings) -> None:
+    """Refuse at once when there is no model at all, instead of a daemon that stops.
+
+    Raises:
+        ConfigError: If there is neither a remote key nor a local model.
+    """
+    if settings.openrouter_api_key is None and _local_setup(settings) is None:
+        raise ConfigError(NO_MODEL)
 
 
 def _local_model(settings: Settings) -> Model:

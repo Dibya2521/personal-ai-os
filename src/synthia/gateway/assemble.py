@@ -84,6 +84,13 @@ async def learn_daily_cap(
     return count.limit
 
 
+NO_MODEL: Final = (
+    "no model is available: install a local model with "
+    "`synthia models install`, or set SYNTHIA_OPENROUTER_API_KEY in .env "
+    "to ask a remote one"
+)
+
+
 def build_gateway(
     settings: Settings,
     client: httpx.AsyncClient,
@@ -102,12 +109,7 @@ def build_gateway(
     """
     key = settings.openrouter_api_key
     if key is None and local is None:
-        message = (
-            "no model is available: install a local model with "
-            "`synthia models install`, or set SYNTHIA_OPENROUTER_API_KEY in .env "
-            "to ask a remote one"
-        )
-        raise ConfigError(message)
+        raise ConfigError(NO_MODEL)
     usage = UsageLog(settings.home / GATEWAY_DB)
     guarded: Remote | None = None
     learn: Callable[[], Coroutine[None, None, int | None]] = _nothing_to_learn

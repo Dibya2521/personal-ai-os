@@ -7,10 +7,12 @@ wrong shape gets ``-32602`` naming the field, not a failure deep inside.
 
 Methods, client to daemon:
 
-- ``hello`` {} returns the daemon's ``version`` and the conversation's ``persona``.
+- ``hello`` {} returns the daemon's ``version``, the conversation's ``persona``
+  how many ``sessions`` the daemon holds, and the ``warnings`` it had at start
+  (an MCP server that did not start, a broken ``mcp.toml``).
 - ``turn`` {``text``, ``plan``, ``images``: paths} returns the turn's report,
   after notifications ``chunk``, ``tool`` and ``plan``. An answer that failed
-  is error ``-32001`` with the reason.
+  is error ``-32001`` with the reason, an image that cannot be sent ``-32002``.
 - ``think`` {``level``}, ``remote`` {``on``}, ``persona`` {``key``}, ``adjust``
   {``values``}, ``budget``, ``model``, ``tools``, ``reset`` return a reply:
   ``notes`` and ``errors``, lines to show.
@@ -37,7 +39,7 @@ from synthia.gateway.errors import GatewayError
 from synthia.gateway.types import Reasoning
 from synthia.kernel.jsonrpc import ConnectionClosedError, Peer, RpcError
 from synthia.server.host import CURRENT_ROUTES
-from synthia.server.session import ImageError, TurnReport, load_image
+from synthia.server.session import ImageError, TurnReport
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -51,6 +53,7 @@ if TYPE_CHECKING:
 
 INVALID_PARAMS: Final = -32602
 ANSWER_FAILED: Final = -32001
+IMAGE_REFUSED: Final = -32002
 APPROVE: Final = "approve"
 
 logger = logging.getLogger(__name__)
@@ -169,10 +172,13 @@ class Served:
         host: Host,
         send: Callable[[bytes], None],
         on_stop: Callable[[], None],
+        sessions: Callable[[], int] = lambda: 1,
     ) -> None:
         self.peer = Peer(send, methods=self._methods())
         self.conversation = host.conversation(self._approve)
         self._on_stop = on_stop
+        self._sessions = sessions
+        self._warnings = host.warnings
 
     async def close(self) -> None:
         """Stop serving: running turns are cancelled, the conversation closed."""
@@ -196,8 +202,12 @@ class Served:
 
     async def _hello(self, params: Params) -> object:
         checked(EmptyParams, params)
-        persona = self.conversation.session.persona.name
-        return {"version": __version__, "persona": persona}
+        return {
+            "version": __version__,
+            "persona": self.conversation.persona_name,
+            "sessions": self._sessions(),
+            "warnings": list(self._warnings),
+        }
 
     async def _think(self, params: Params) -> object:
         level = checked(ThinkParams, params).level
@@ -238,18 +248,17 @@ class Served:
 
     async def _turn(self, params: Params) -> object:
         asked = checked(TurnParams, params)
-        try:
-            images = [load_image(path) for path in asked.images]
-        except ImageError as error:
-            raise RpcError(INVALID_PARAMS, str(error)) from None
-        session = self.conversation.session
         # This handler runs in its own task, so the setting is this turn's alone.
-        CURRENT_ROUTES.set(session.routes)
+        CURRENT_ROUTES.set(self.conversation.session.routes)
+        try:
+            turn = self.conversation.turn(
+                asked.text, images=asked.images, plan=asked.plan
+            )
+        except ImageError as error:
+            raise RpcError(IMAGE_REFUSED, str(error)) from None
         report: TurnReport | None = None
         try:
-            async with aclosing(
-                session.turn(asked.text, *images, plan=asked.plan)
-            ) as steps:
+            async with aclosing(turn) as steps:
                 async for step in steps:
                     if isinstance(step, TurnReport):
                         report = step

@@ -9,20 +9,17 @@ cancels that task, every stream beneath it closes, and the prompt returns.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from typing import TYPE_CHECKING, Final, Self, cast
 
-import httpx
 from rich.status import Status
 from rich.text import Text
 
 from synthia.agent.loop import ToolFinished
 from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
-from synthia.agent.trace import TRACES, Trace
-from synthia.gateway.assemble import build_gateway
 from synthia.gateway.errors import GatewayError
-from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.interfaces.commands import (
     HELP,
     AdjustPersona,
@@ -42,31 +39,25 @@ from synthia.interfaces.commands import (
     UseRemote,
     parse,
 )
-from synthia.mcp.client import McpServers
-from synthia.persona.library import PersonaLibrary
-from synthia.server.conversation import Conversation, Reply, Talk
-from synthia.server.host import PERSONAS_DIR, TIMEOUT, start_tools
+from synthia.interfaces.daemon_client import Answer, conversation
+from synthia.persona.model import PersonaError
+from synthia.server.conversation import Reply, Talk
 from synthia.server.session import (
-    ChatSession,
     ImageError,
-    LastRoute,
     TurnReport,
-    load_image,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Callable
     from pathlib import Path
 
     from rich.console import Console
 
     from synthia.agent.policy import Approver
     from synthia.agent.tools import Tool
-    from synthia.gateway.providers import RemoteProvider
-    from synthia.gateway.types import ChatChunk, ImagePart, PromptProgress
-    from synthia.kernel.config import Settings
-    from synthia.models.service import LocalService
-    from synthia.server.session import PlanMark
+    from synthia.gateway.types import ChatChunk, PromptProgress
+    from synthia.server.discovery import DaemonInfo
+    from synthia.server.session import PlanMark, TurnItem
 
 PROMPT: Final = "you> "
 MORE: Final = "...> "
@@ -150,20 +141,29 @@ def _whole(arguments: str) -> str:
     return "\n".join(lines)
 
 
-def terminal_approver(read: ReadLine) -> Approver:
-    """Return an approver that asks in the terminal; anything but y or yes is no.
+def terminal_answer(read: ReadLine) -> Answer:
+    """Return how the terminal answers an approval; anything but y or yes is no.
 
     The question is read on the event loop's own thread, so calls made at the
     same time are asked about one after another.
     """
 
-    async def approve(tool: Tool, arguments: str) -> bool:
-        question = approval_question(tool.spec.name, arguments)
+    async def answer(tool: str, arguments: str) -> bool:
         try:
-            answer = read(question)
+            said = read(approval_question(tool, arguments))
         except EOFError:
             return False
-        return answer.strip().lower() in YES
+        return said.strip().lower() in YES
+
+    return answer
+
+
+def terminal_approver(read: ReadLine) -> Approver:
+    """Return an approver, for a conversation in this process, asking the terminal."""
+    answer = terminal_answer(read)
+
+    async def approve(tool: Tool, arguments: str) -> bool:
+        return await answer(tool.spec.name, arguments)
 
     return approve
 
@@ -333,7 +333,7 @@ class ChatApp[T: Talk]:
             case Plan(task=task):
                 await self._answer(task, plan=True)
             case ShowImage(path=path, text=text):
-                await self._image(path, text)
+                await self._answer(text, images=(path,))
             case ShowBudget():
                 self._say(await self.conversation.budget())
             case Help():
@@ -383,21 +383,18 @@ class ChatApp[T: Talk]:
         self.console.print()
         self._note("stopped; that turn is not kept")
 
-    async def _answer(self, text: str, *images: ImagePart, plan: bool = False) -> None:
-        report: TurnReport | None = None
+    async def _answer(
+        self, text: str, *, images: tuple[Path, ...] = (), plan: bool = False
+    ) -> None:
         shown = AnswerLines(self.console)
         try:
             with ThinkingLine(self.console, self._clock) as thinking:
-                async for item in self.conversation.turn(text, *images, plan=plan):
-                    if isinstance(item, TurnReport):
-                        report = item
-                    elif isinstance(item, ToolFinished):
-                        shown.call(item)
-                    elif isinstance(item, Planned | PlanStepBegun | PlanAnswerBegun):
-                        shown.mark(item)
-                    else:
-                        thinking.see(item)
-                        shown.text(item.text)
+                turn = self.conversation.turn(text, images=images, plan=plan)
+                report = await _shown(turn, thinking, shown)
+        except ImageError as error:
+            shown.end_line()
+            self._error(str(error))
+            return
         except GatewayError as error:
             shown.end_line()
             self._error(f"no answer: {error}")
@@ -408,19 +405,29 @@ class ChatApp[T: Talk]:
         elif not shown.said:
             self._note("no answer came back")
 
-    async def _image(self, path: Path, text: str) -> None:
-        try:
-            image = load_image(path)
-        except ImageError as error:
-            self._error(str(error))
-            return
-        await self._answer(text, image)
-
     def _note(self, text: str) -> None:
         self.console.print(text, style="cyan", markup=False, highlight=False)
 
     def _error(self, text: str) -> None:
         self.console.print(text, style="red", markup=False, highlight=False)
+
+
+async def _shown(
+    turn: AsyncGenerator[TurnItem], thinking: ThinkingLine, shown: AnswerLines
+) -> TurnReport | None:
+    """Show ``turn`` as it streams; return its report, if it gave one."""
+    report: TurnReport | None = None
+    async for item in turn:
+        if isinstance(item, TurnReport):
+            report = item
+        elif isinstance(item, ToolFinished):
+            shown.call(item)
+        elif isinstance(item, Planned | PlanStepBegun | PlanAnswerBegun):
+            shown.mark(item)
+        else:
+            thinking.see(item)
+            shown.text(item.text)
+    return report
 
 
 def converse[T: Talk](runner: asyncio.Runner, app: ChatApp[T], read: ReadLine) -> None:
@@ -439,66 +446,37 @@ def converse[T: Talk](runner: asyncio.Runner, app: ChatApp[T], read: ReadLine) -
             app.stopped()
 
 
-def run_chat(  # noqa: PLR0913
-    settings: Settings,
-    persona: str,
+def run_chat(
+    daemon: DaemonInfo,
     console: Console,
     read: ReadLine = input,
-    transport: httpx.AsyncBaseTransport | None = None,
     *,
-    local: LocalService | None = None,
-    remote: RemoteProvider = OPENROUTER_FREE,
+    persona: str | None = None,
     use_remote: bool = False,
 ) -> None:
-    """Hold a chat in the terminal until the user leaves.
+    """Hold a chat in the terminal, held by ``daemon``, until the user leaves.
 
-    ``local`` starts once the chat can begin and loads while it goes on; a
-    turn sent before it is ready waits for it. ``use_remote`` starts the chat
-    with turns allowed to go to the remote model, as ``/remote on`` does.
+    ``persona`` switches to that persona first; ``use_remote`` lets turns go to
+    the remote model from the start, as ``/remote on`` does.
 
     Raises:
-        ConfigError: If no model can be reached.
-        PersonaError: If a persona file is invalid or ``persona`` does not exist.
+        PersonaError: If ``persona`` does not exist.
     """
-    routes = LastRoute()
     with asyncio.Runner() as runner:
-        client = httpx.AsyncClient(transport=transport, timeout=TIMEOUT)
-        app: ChatApp[Conversation] | None = None
-        servers = McpServers([], [])
+        stack = contextlib.AsyncExitStack()
         try:
-            gateway = build_gateway(
-                settings,
-                client,
-                routes,
-                None if local is None else local.model(client),
-                remote=remote,
+            talk = runner.run(
+                stack.enter_async_context(conversation(daemon, terminal_answer(read)))
             )
-            tools, servers = runner.run(
-                start_tools(settings, lambda text: _warn(console, text), transport)
-            )
-            session = ChatSession(
-                gateway.model,
-                PersonaLibrary(settings.home / PERSONAS_DIR),
-                persona,
-                routes,
-                tools=tools,
-                approver=terminal_approver(read),
-                trace=Trace.start(settings.home / TRACES),
-            )
-            app = ChatApp(Conversation(session, gateway), console)
-            if local is not None:
-                local.start()
+            for line in talk.warnings:
+                console.print(line, style="red", markup=False, highlight=False)
+            app = ChatApp(talk, console)
+            if persona is not None:
+                switched = runner.run(talk.persona(persona))
+                if switched.errors:
+                    raise PersonaError(switched.errors[0])
             if use_remote:
                 runner.run(app.handle(UseRemote(on=True)))
             converse(runner, app, read)
         finally:
-            if local is not None:
-                local.stop()
-            if app is not None:
-                runner.run(app.conversation.close())
-            runner.run(servers.stop())
-            runner.run(client.aclose())
-
-
-def _warn(console: Console, text: str) -> None:
-    console.print(text, style="red", markup=False, highlight=False)
+            runner.run(stack.aclose())

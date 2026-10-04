@@ -24,6 +24,7 @@ from synthia.persona.library import PersonaLibrary
 from synthia.server.session import ChatSession, PlanMark, TurnReport
 from synthia.tools import agents
 from tests.agent.scripted import Scripted, calls, says
+from tests.interfaces.daemons import private_daemon
 from tests.interfaces.test_chat import (
     answer,
     app_for,
@@ -365,14 +366,8 @@ def test_the_chat_calls_a_tool_of_an_mcp_server_after_a_yes(tmp_path: Path) -> N
     screen, out = console()
     read = scripted("say hi through the server", "y")
 
-    run_chat(
-        settings(tmp_path),
-        "synthia",
-        screen,
-        read,
-        httpx.MockTransport(respond),
-        use_remote=True,
-    )
+    with private_daemon(settings(tmp_path), httpx.MockTransport(respond)) as daemon:
+        run_chat(daemon, screen, read, use_remote=True)
 
     names = [t["function"]["name"] for t in sent[0]["tools"]]  # type: ignore[index]
     assert names[5:8] == ["fetch_url", "fake__echo", "fake__add"]
@@ -393,14 +388,8 @@ def test_a_broken_server_list_is_named_and_the_chat_goes_on(tmp_path: Path) -> N
         return httpx.Response(200, content=answer("Hello."))
 
     screen, out = console()
-    run_chat(
-        settings(tmp_path),
-        "synthia",
-        screen,
-        scripted("hello"),
-        httpx.MockTransport(respond),
-        use_remote=True,
-    )
+    with private_daemon(settings(tmp_path), httpx.MockTransport(respond)) as daemon:
+        run_chat(daemon, screen, scripted("hello"), use_remote=True)
 
     text = out.getvalue()
     assert text.startswith(f"no MCP servers: {tmp_path / 'mcp.toml'} is not a valid")
@@ -445,14 +434,8 @@ def test_the_chat_calls_the_calculator_and_shows_the_call(tmp_path: Path) -> Non
 
     screen, out = console()
 
-    run_chat(
-        settings(tmp_path),
-        "synthia",
-        screen,
-        scripted("what is 6 times 7?"),
-        httpx.MockTransport(respond),
-        use_remote=True,
-    )
+    with private_daemon(settings(tmp_path), httpx.MockTransport(respond)) as daemon:
+        run_chat(daemon, screen, scripted("what is 6 times 7?"), use_remote=True)
 
     text = out.getvalue()
     # The time is the tool's own and varies with load.

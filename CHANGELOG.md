@@ -26,6 +26,17 @@ All notable changes are recorded here. The format follows
   asked before every tool call that needs a yes, and a client that goes away
   is a no. A client can stop the daemon; Ctrl+C stops it too.
 
+### Changed
+
+- `synthia chat` talks to the daemon instead of running SYNTHIA itself. It
+  uses the running daemon, or starts one in the background and waits up to
+  90 seconds for it; a daemon left from another version is restarted when no
+  other chat is open in it. The chat looks and behaves as before: tool calls
+  that need a yes are still asked in the terminal, and the daemon's start-up
+  warnings (an MCP server that did not start) are shown when the chat opens.
+  The conversation itself lives in the daemon, so it is lost if the daemon
+  stops.
+
 ### Fixed
 
 - A local answer no longer fails with "no response ... ReadTimeout" when the
