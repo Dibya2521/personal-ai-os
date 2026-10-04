@@ -370,7 +370,7 @@ def test_the_chat_calls_a_tool_of_an_mcp_server_after_a_yes(tmp_path: Path) -> N
         run_chat(daemon, screen, read, use_remote=True)
 
     names = [t["function"]["name"] for t in sent[0]["tools"]]  # type: ignore[index]
-    assert names[5:8] == ["fetch_url", "fake__echo", "fake__add"]
+    assert names[5:9] == ["search_memory", "fetch_url", "fake__echo", "fake__add"]
     assert read.prompts[1] == 'run fake__echo {"text": "hi"}? [y/N] '  # type: ignore[attr-defined]
     assert sent[1]["messages"][-1]["content"] == quote("fake__echo", "hi")  # type: ignore[index]
     assert "tool fake__echo" in out.getvalue()
@@ -447,6 +447,7 @@ def test_the_chat_calls_the_calculator_and_shows_the_call(tmp_path: Path) -> Non
         "read_file",
         "list_files",
         "run_python",
+        "search_memory",
         "fetch_url",
     ]
     assert sent[1]["messages"][-1] == {  # type: ignore[index]

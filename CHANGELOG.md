@@ -39,6 +39,10 @@ All notable changes are recorded here. The format follows
   this machine. A stopped or failed turn is not kept. `/private on` stops
   remembering the rest of a chat, `/private off` starts again, and
   `/forget` takes the last turn out of the chat and out of memory.
+- A `search_memory` tool lets SYNTHIA look back at earlier chats by words
+  and days ("what did I tell you about my cat last week?"): it reads the
+  clock for the dates, then returns up to eight earlier turns, best match
+  first, each with its day. It only reads this machine, so it never asks.
 
 ### Changed
 

@@ -24,6 +24,7 @@ from synthia import __version__
 from synthia.agent.trace import TRACES, Trace
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.providers import OPENROUTER_FREE
+from synthia.memory.recall import memory_tool
 from synthia.persona.library import PersonaLibrary
 from synthia.server.app import create_app
 from synthia.server.discovery import (
@@ -159,8 +160,9 @@ async def run_daemon(
             warnings.append(text)
             logger.warning("%s", text)
 
-        tools, servers = await start_tools(settings, warn, transport)
         memory = open_memory(settings, warn)
+        remembered = () if memory is None else (memory_tool(memory),)
+        tools, servers = await start_tools(settings, warn, transport, remembered)
         library = PersonaLibrary(settings.home / PERSONAS_DIR)
         traces = settings.home / TRACES
         local_state = no_local_model

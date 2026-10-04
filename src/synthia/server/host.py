@@ -27,10 +27,10 @@ from synthia.server.session import ChatSession, LastRoute
 from synthia.tools import local_tools, outside_tools
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     from synthia.agent.policy import Approver
-    from synthia.agent.tools import Toolbox
+    from synthia.agent.tools import Tool, Toolbox
     from synthia.gateway.assemble import Gateway
     from synthia.kernel.bus import Event
     from synthia.kernel.config import Settings
@@ -56,10 +56,12 @@ async def start_tools(
     settings: Settings,
     warn: Callable[[str], None],
     transport: httpx.AsyncBaseTransport | None = None,
+    local: Iterable[Tool] = (),
 ) -> tuple[Toolbox, McpServers]:
     """Return SYNTHIA's own tools, the outside ones, and every MCP server's.
 
-    In that order: what runs on this machine first, then what asks first.
+    In that order: what runs on this machine first (``local`` after the
+    built-in ones), then what asks first.
     A broken ``mcp.toml`` or a server that will not start is passed to
     ``warn`` and left out.
     """
@@ -72,7 +74,7 @@ async def start_tools(
     for failure in servers.failures:
         warn(f"MCP server not started: {failure}")
     tools = local_tools(settings.file_roots)
-    for tool in (*outside_tools(settings.home, transport), *servers.tools()):
+    for tool in (*local, *outside_tools(settings.home, transport), *servers.tools()):
         tools.add(tool)
     return tools, servers
 
