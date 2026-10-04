@@ -34,6 +34,7 @@ BUSY_TIMEOUT_S: Final = 5.0
 _WORD: Final = re.compile(r"\w+")
 _EARLIEST: Final = "0000"
 _LATEST: Final = "9999"
+FTS_TOKENIZER: Final = "porter unicode61"
 
 _SCHEMA: Final = (
     """
@@ -69,10 +70,10 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     PRIMARY KEY (turn, position)
 )
 """,
-    """
+    f"""
 CREATE VIRTUAL TABLE IF NOT EXISTS turns_text USING fts5(
     question, answer, calls,
-    content='turns', content_rowid='id', tokenize='porter unicode61'
+    content='turns', content_rowid='id', tokenize='{FTS_TOKENIZER}'
 )
 """,
     """
