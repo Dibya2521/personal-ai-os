@@ -24,11 +24,12 @@ peripherals, and a kernel schedules, supervises and guards all of it.
 
 ## Status
 
-**Phase 2 of 13: agency.** On top of the kernel, SYNTHIA can think and act:
-`synthia chat` talks through a model gateway that answers from a local model,
-and from a free remote model, under a daily budget, only when asked, and it
-uses tools, each call that changes something or leaves the machine asked for
-first. The rest is built
+**Phase 3 of 13: daemon.** SYNTHIA can think and act: `synthia chat` talks
+through a model gateway that answers from a local model, and from a free
+remote model, under a daily budget, only when asked, and it uses tools, each
+call that changes something or leaves the machine asked for first. It is now
+always there: one daemon holds the models and the tools, and the chat is its
+client. The rest is built
 phase by phase, and released when a capability works end to end.
 [`docs/architecture.md`](docs/architecture.md) describes the whole design and
 the order it is built in.
@@ -66,6 +67,10 @@ free remote model is optional: put an [OpenRouter](https://openrouter.ai/keys)
 key in `.env` as `SYNTHIA_OPENROUTER_API_KEY`, and turns go to it only after
 `/remote on` in the chat (or `synthia chat --remote`). `/help` lists the
 chat's commands.
+
+The first chat starts SYNTHIA's daemon in the background, and it keeps the
+model loaded for the next one. `uv run synthia status` shows it, and
+`uv run synthia stop` stops it.
 
 ## Configuration
 
@@ -163,6 +168,24 @@ in [`docs/gateway.md`](docs/gateway.md).
 - **Plan and execute.** `/plan <task>` asks the model for a list of steps,
   runs each as its own loop, re-plans once if a step does not finish, and
   writes the answer from the results, showing each step as it begins.
+
+**Daemon.** How it runs and what it speaks is described in
+[`docs/daemon.md`](docs/daemon.md), and why in
+[decision record 0011](docs/adr/0011-daemon.md).
+
+- **Always there.** `synthia serve` holds the gateway, the local model and
+  the MCP servers, started once for every conversation. `synthia chat` starts
+  it in the background when it is not running, then talks to it, so the model
+  stays loaded between chats. `synthia status` shows it; `synthia stop` stops
+  it.
+- **Local and guarded.** It listens on 127.0.0.1 only, on a free port written
+  with a random token to a file only its owner can read. A conversation needs
+  the token, and a request from a web page is refused.
+- **One protocol.** JSON-RPC 2.0 over a WebSocket. Each connection is its own
+  conversation; a tool call that needs a yes is asked of the client whose turn
+  it is, and a client that has gone away is a no.
+- **Supervised.** When the local model's server dies it is started again, and
+  the daemon's trace records when it went away, why, and when it came back.
 
 **Repository.** Every commit passes ruff with every rule enabled, pyright in
 strict mode, an import check that keeps each package from importing the ones
