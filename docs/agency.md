@@ -186,7 +186,8 @@ program it starts, unless the person writes one into an MCP server's `env`.
 ## MCP servers
 
 Any server speaking the Model Context Protocol over stdio can add tools. The
-client is SYNTHIA's own (`synthia/mcp/jsonrpc.py`, `synthia/mcp/client.py`):
+client is SYNTHIA's own (`synthia/kernel/jsonrpc.py` for JSON-RPC,
+`synthia/mcp/stdio.py` for the line framing, `synthia/mcp/client.py`):
 JSON-RPC 2.0 over newline-delimited lines of at most 8 MiB, protocol versions
 2024-11-05, 2025-03-26 and 2025-06-18.
 

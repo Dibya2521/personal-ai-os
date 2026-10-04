@@ -30,7 +30,8 @@ from synthia import __version__
 from synthia.agent.tools import TOOL_NAME, Effect, Reach, ToolError
 from synthia.gateway.types import ToolSpec
 from synthia.kernel.errors import ConfigError, SynthiaError
-from synthia.mcp.jsonrpc import Connection, ConnectionClosedError, RpcError
+from synthia.kernel.jsonrpc import ConnectionClosedError, Peer, RpcError
+from synthia.mcp.stdio import Lines, line_sender
 from synthia.tools.process_tree import ProcessTree
 from synthia.tools.run import environment_without_own, open_log
 
@@ -129,7 +130,7 @@ class McpServer:
     name: str
     config: ServerConfig
     tree: ProcessTree
-    connection: Connection
+    connection: Peer
     log: BinaryIO
     tools: list[McpTool] = field(default_factory=list[McpTool])
     _watch: asyncio.Task[None] = field(init=False)
@@ -184,13 +185,13 @@ class McpServer:
         def send(data: bytes) -> None:
             started[0].send(data)
 
-        connection = Connection(send)
+        connection = Peer(line_sender(send))
         try:
             tree = await ProcessTree.start(
                 [program, *config.command[1:]],
                 cwd=config.cwd or Path.cwd(),
                 env=environment,
-                on_output=connection.feed,
+                on_output=Lines(connection).feed,
                 errors=log,
             )
         except OSError as error:
