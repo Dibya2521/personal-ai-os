@@ -35,9 +35,10 @@ check until it is given a place in the list.
   function raises.
 - **Comments** explain why, never what.
 - **Tests:** unit tests for mechanisms, property tests for invariants, and at
-  least one test built from input the design did not anticipate. Coverage of
-  the package stays at 100 percent of branches; a line coverage shows to be
-  unreachable is deleted, not tested.
+  least one test built from input the design did not anticipate. Coverage is
+  measured by branch; the suite fails below 90 percent, and a change keeps it
+  where it is (99 percent on Linux and on Windows in October 2026). A line
+  coverage shows to be unreachable is deleted, not tested.
 - **Numbers** in documentation come from a command that can be re-run.
 - **Line endings** are LF everywhere.
 - **Never commit** a `.env` file, a model file, a dataset or an audio or video

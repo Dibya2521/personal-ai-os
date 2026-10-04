@@ -166,7 +166,8 @@ in [`docs/gateway.md`](docs/gateway.md).
 
 **Repository.** Every commit passes ruff with every rule enabled, pyright in
 strict mode, an import check that keeps each package from importing the ones
-above it, and the test suite at 100 percent branch coverage of the package,
+above it, and the test suite, which fails below 90 percent branch coverage of
+the package (CI measured 99 percent on Linux and on Windows in October 2026),
 enforced by pre-commit and again by CI on Linux and Windows. Secret scanning and
 a file-size limit guard the public history. Tests replay recorded model
 responses and never reach the network, so CI spends no budget.
