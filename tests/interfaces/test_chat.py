@@ -31,12 +31,12 @@ from synthia.interfaces.chat import (
 )
 from synthia.interfaces.cli import app
 from synthia.interfaces.commands import parse
-from synthia.interfaces.session import ChatSession, LastRoute, TurnReport
 from synthia.kernel.config import Settings
 from synthia.kernel.errors import ConfigError
 from synthia.models.service import LocalService, LocalSetup
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
+from synthia.server.session import ChatSession, LastRoute, TurnReport
 from tests.models.test_service import (
     CPU,
     TINY,

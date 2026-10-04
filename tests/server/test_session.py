@@ -15,7 +15,10 @@ from synthia.gateway.types import (
     Role,
     Usage,
 )
-from synthia.interfaces.session import (
+from synthia.kernel.bus import Event
+from synthia.persona.library import PersonaLibrary
+from synthia.persona.model import PersonaError
+from synthia.server.session import (
     MAX_IMAGE_BYTES,
     ChatSession,
     ImageError,
@@ -23,9 +26,6 @@ from synthia.interfaces.session import (
     TurnReport,
     load_image,
 )
-from synthia.kernel.bus import Event
-from synthia.persona.library import PersonaLibrary
-from synthia.persona.model import PersonaError
 
 INFO = ModelInfo("fake", 1000, vision=True, tools=False)
 

@@ -22,8 +22,8 @@ from synthia.gateway.errors import ProviderError
 from synthia.gateway.protocol import ChatModel
 from synthia.gateway.router import Route, RouteDecided, RouteReason
 from synthia.gateway.types import ChatChunk, ChatRequest, ModelInfo, Reasoning
-from synthia.interfaces.session import ChatSession
 from synthia.persona.library import PersonaLibrary
+from synthia.server.session import ChatSession
 from tests.agent.scripted import Scripted, calls, says
 
 AT = datetime(2026, 10, 2, 15, 15, tzinfo=UTC)

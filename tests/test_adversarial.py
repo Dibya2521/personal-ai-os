@@ -24,11 +24,11 @@ from synthia.gateway.providers import OPENROUTER, OPENROUTER_FREE
 from synthia.gateway.types import ChatRequest, Message
 from synthia.interfaces.chat import ChatApp
 from synthia.interfaces.commands import parse
-from synthia.interfaces.session import ChatSession, LastRoute
 from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
+from synthia.server.session import ChatSession, LastRoute
 
 KEY = "sk-or-v1-adversarial-test-key-000"  # pragma: allowlist secret
 HELLO = ChatRequest((Message.user("hello"),), use_remote=True)

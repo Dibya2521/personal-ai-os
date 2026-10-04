@@ -51,8 +51,10 @@ refined when its phase begins, and this file changes with it.
 
 Dependencies point down only. The kernel imports nothing else from the project.
 
-The packages built so far, top to bottom, are `interfaces`, `mcp`, `tools`,
-`agent`, `models`, `gateway`, `persona` and `kernel`. `mcp` sits above `tools`
+The packages built so far, top to bottom, are `interfaces`, `server`, `mcp`,
+`tools`, `agent`, `models`, `gateway`, `persona` and `kernel`. `server` holds
+the conversation (`ChatSession`) apart from any terminal, so the command line
+and the daemon serve the same one. `mcp` sits above `tools`
 because it runs each MCP server with the tools package's process tree.
 `tools` sits above `agent` because
 each tool is built from the agent's `FunctionTool`. `models` sits above

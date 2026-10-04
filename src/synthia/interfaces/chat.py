@@ -44,17 +44,17 @@ from synthia.interfaces.commands import (
     UseRemote,
     parse,
 )
-from synthia.interfaces.session import (
+from synthia.kernel.errors import ConfigError
+from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
+from synthia.persona.library import PersonaLibrary
+from synthia.persona.model import PersonaError
+from synthia.server.session import (
     ChatSession,
     ImageError,
     LastRoute,
     TurnReport,
     load_image,
 )
-from synthia.kernel.errors import ConfigError
-from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
-from synthia.persona.library import PersonaLibrary
-from synthia.persona.model import PersonaError
 from synthia.tools import local_tools, outside_tools
 
 if TYPE_CHECKING:
@@ -67,9 +67,9 @@ if TYPE_CHECKING:
     from synthia.gateway.assemble import Gateway
     from synthia.gateway.providers import RemoteProvider
     from synthia.gateway.types import ChatChunk, ImagePart, PromptProgress
-    from synthia.interfaces.session import PlanMark
     from synthia.kernel.config import Settings
     from synthia.models.service import LocalService
+    from synthia.server.session import PlanMark
 
 PROMPT: Final = "you> "
 MORE: Final = "...> "

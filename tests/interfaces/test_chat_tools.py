@@ -20,8 +20,8 @@ from synthia.interfaces.chat import (
     terminal_approver,
 )
 from synthia.interfaces.commands import Invalid, ShowTools, parse
-from synthia.interfaces.session import ChatSession, PlanMark, TurnReport
 from synthia.persona.library import PersonaLibrary
+from synthia.server.session import ChatSession, PlanMark, TurnReport
 from synthia.tools import agents
 from tests.agent.scripted import Scripted, calls, says
 from tests.interfaces.test_chat import (
