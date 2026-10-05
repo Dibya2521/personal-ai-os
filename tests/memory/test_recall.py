@@ -7,6 +7,7 @@ import pytest
 from synthia.agent.loop import ToolFinished
 from synthia.agent.tools import Effect, InvalidArgumentsError, Reach, Toolbox
 from synthia.gateway.types import ChatChunk, ChatRequest
+from synthia.memory.hybrid import Recall
 from synthia.memory.recall import MAX_PREVIEW_CHARS, NOTHING_FOUND, memory_tool
 from synthia.memory.remembering import Remembering
 from synthia.memory.store import MemoryStore, ToolUse, Turn
@@ -14,6 +15,7 @@ from synthia.persona.library import PersonaLibrary
 from synthia.server.session import ChatSession
 from synthia.tools.basic import clock_tool
 from tests.agent.scripted import Scripted, calls, says
+from tests.memory.test_hybrid import Network, embedder, remember
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -37,12 +39,12 @@ async def seeded(path: Path) -> MemoryStore:
 
 
 async def search(store: MemoryStore, **arguments: object) -> str:
-    tool = memory_tool(store, zone=lambda: IST)
+    tool = memory_tool(Recall(store), zone=lambda: IST)
     return await tool.run(json.dumps(arguments))
 
 
 async def test_it_reads_this_machine_and_never_asks(tmp_path: Path) -> None:
-    tool = memory_tool(await seeded(tmp_path / "m.db"))
+    tool = memory_tool(Recall(await seeded(tmp_path / "m.db")))
 
     found = await tool.run('{"query": "lunch", "since": "2026-09-01"}')
 
@@ -77,6 +79,19 @@ async def test_nothing_found_says_so(tmp_path: Path) -> None:
     found = await search(await seeded(tmp_path / "m.db"), query="dog")
 
     assert found == NOTHING_FOUND
+
+
+async def test_with_an_embedding_model_other_words_find_the_turn(
+    tmp_path: Path,
+) -> None:
+    store = MemoryStore(tmp_path / "m.db")
+    await remember(store, "my sister lives in pune", "my cat is called miso")
+    recall = Recall(store, embedder(Network()))
+    await recall.backfill()
+
+    found = await memory_tool(recall, lambda: IST).run(json.dumps({"query": "pet"}))
+
+    assert found.splitlines()[1] == "  person: my cat is called miso"
 
 
 async def test_a_long_answer_is_cut_and_its_tools_are_named(tmp_path: Path) -> None:
@@ -124,13 +139,15 @@ async def test_what_did_i_tell_you_last_week_is_answered_from_memory(
         answer_from_result,
     )
     morning = datetime(2026, 10, 3, 10, tzinfo=IST)
-    tools = Toolbox([clock_tool(lambda: morning), memory_tool(store, lambda: IST)])
+    tools = Toolbox(
+        [clock_tool(lambda: morning), memory_tool(Recall(store), lambda: IST)]
+    )
     session = ChatSession(
         model,
         PersonaLibrary(),
         "synthia",
         tools=tools,
-        memory=Remembering(store),
+        memory=Remembering(Recall(store)),
     )
 
     question = "what did I tell you about my cat last week?"

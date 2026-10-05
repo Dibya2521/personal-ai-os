@@ -43,6 +43,11 @@ All notable changes are recorded here. The format follows
   and days ("what did I tell you about my cat last week?"): it reads the
   clock for the dates, then returns up to eight earlier turns, best match
   first, each with its day. It only reads this machine, so it never asks.
+  With an embedding model installed it also finds a turn by meaning ("what
+  is my pet called?" finds "my cat is called Miso"), while a rare name or
+  code in the question still counts; each turn is embedded when it is
+  remembered, and turns from before are embedded in the background when
+  `synthia serve` starts.
 - Long chats keep fitting in the model's context window. Before each turn
   the oldest turns leave, whole, until the request fits with a quarter of the
   window kept free for the answer. With a local model, the turns that left
@@ -55,8 +60,8 @@ All notable changes are recorded here. The format follows
   all-MiniLM-L6-v2 quantised to 8 bits (Apache-2.0, 22.4 MB), each pinned
   to a revision and to SHA-256 digests. `synthia models install` with no
   names now also installs all-MiniLM-L6-v2, which found what was asked
-  about at least as often as bge-small on a 40-question recall set, in a
-  third to a tenth of the time: on Windows without an NVIDIA card it
+  about at least as often as bge-small on a 40-question recall set, in about
+  half the time: on Windows without an NVIDIA card it
   fetches 3.25 GB instead of 3.23 GB.
 
 ### Changed

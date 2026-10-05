@@ -3,7 +3,9 @@
 The conversation's row is made at its first remembered turn, so a client that
 only asks the daemon's status leaves nothing behind. A turn that cannot be
 written is logged and the conversation goes on, as a trace that cannot be
-written does: memory is kept beside the answers, never in their way.
+written does: memory is kept beside the answers, never in their way. The same
+holds for the vector of a turn's meaning, made after the turn is written; a
+turn left without one is embedded at the daemon's next start.
 """
 
 from __future__ import annotations
@@ -12,23 +14,27 @@ import logging
 import sqlite3
 from typing import TYPE_CHECKING
 
+from synthia.memory.store import Asked
+
 if TYPE_CHECKING:
-    from synthia.memory.store import MemoryStore, Turn
+    from synthia.memory.hybrid import Recall
+    from synthia.memory.store import Turn
 
 logger = logging.getLogger(__name__)
 
 
 class Remembering:
-    """Keep one conversation's turns in ``store`` unless it is private."""
+    """Keep one conversation's turns in ``recall``'s store unless it is private."""
 
-    def __init__(self, store: MemoryStore) -> None:
+    def __init__(self, recall: Recall) -> None:
         self.private = False
-        self._store = store
+        self._recall = recall
+        self._store = recall.store
         self._conversation: int | None = None
         self._last: int | None = None
 
     async def remember(self, turn: Turn) -> None:
-        """Keep ``turn``, unless the conversation is private."""
+        """Keep ``turn`` and its meaning, unless the conversation is private."""
         if self.private:
             return
         try:
@@ -39,6 +45,11 @@ class Remembering:
             self._last = await self._store.add_turn(self._conversation, turn)
         except (sqlite3.Error, OSError):
             logger.exception("a turn was not remembered")
+            return
+        try:
+            await self._recall.keep(Asked(self._last, turn.at, turn.question))
+        except Exception:
+            logger.exception("a turn's meaning was not kept")
 
     async def forget_last(self) -> bool:
         """Forget the last remembered turn; False if there is none to forget.
@@ -50,6 +61,7 @@ class Remembering:
         if self._last is None:
             return False
         forgotten = await self._store.forget_turn(self._last)
+        self._recall.forget(self._last)
         self._last = None
         return forgotten
 

@@ -4,12 +4,16 @@ One gateway serves every conversation, so the remote's rate limit, circuit
 breaker and daily budget are counted once for all of them. Each conversation
 still learns where its own turns were routed: the gateway's routing
 decisions go to the record of the conversation whose turn is running, found
-through a context variable that each turn sets for itself.
+through a context variable that each turn sets for itself. One memory is
+shared too, so a turn one conversation forgets is forgotten for all of them.
 """
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sqlite3
+from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import partial
@@ -21,22 +25,29 @@ import httpx
 from synthia.agent.trace import Trace
 from synthia.kernel.errors import ConfigError
 from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
+from synthia.memory.embed import EmbedError, TextEmbedder
+from synthia.memory.hybrid import Recall
 from synthia.memory.remembering import Remembering
 from synthia.memory.store import MEMORY_FILE, MemoryStore
 from synthia.memory.summary import summarize
+from synthia.models.catalogue import DEFAULT_EMBEDDER, EMBEDDERS
+from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.server.conversation import Conversation
 from synthia.server.session import ChatSession, LastRoute
 from synthia.tools import local_tools, outside_tools
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import AsyncGenerator, Callable, Iterable, Sequence
 
     from synthia.agent.policy import Approver
     from synthia.agent.tools import Tool, Toolbox
     from synthia.gateway.assemble import Gateway
     from synthia.kernel.bus import Event
     from synthia.kernel.config import Settings
+    from synthia.models.catalogue import Embedder
     from synthia.persona.library import PersonaLibrary
+
+logger = logging.getLogger(__name__)
 
 PERSONAS_DIR: Final = Path("personas")
 # OpenRouter sends keep-alive comments while a model thinks, so a minute of
@@ -81,13 +92,69 @@ async def start_tools(
     return tools, servers
 
 
-def open_memory(settings: Settings, warn: Callable[[str], None]) -> MemoryStore | None:
-    """Return the memory under ``SYNTHIA_HOME``, or None after a ``warn``."""
+def open_embedder(
+    settings: Settings,
+    warn: Callable[[str], None],
+    choices: Sequence[Embedder] = (DEFAULT_EMBEDDER, *EMBEDDERS),
+) -> TextEmbedder | None:
+    """Return the first installed embedding model of ``choices``, loaded.
+
+    None if none is installed, and memory is then searched by words alone;
+    None after a ``warn`` if the one installed cannot be loaded.
+    """
+    models = Installer(settings.home, int(settings.disk_budget_gb * BYTES_PER_GB))
+    spec = next((s for s in choices if models.installed(s)), None)
+    if spec is None:
+        logger.info("no embedding model installed: memory is searched by words")
+        return None
     try:
-        return MemoryStore(settings.home / MEMORY_FILE)
+        return TextEmbedder.load(models.path_of(spec), spec)
+    except EmbedError as error:
+        warn(f"memory is searched by words only: {error}")
+        return None
+
+
+async def open_memory(
+    settings: Settings,
+    warn: Callable[[str], None],
+    embedder: TextEmbedder | None = None,
+) -> Recall | None:
+    """Return the memory under ``SYNTHIA_HOME``, or None after a ``warn``.
+
+    The vectors already kept from ``embedder`` are read in.
+    """
+    try:
+        memory = Recall(MemoryStore(settings.home / MEMORY_FILE), embedder)
+        await memory.load()
     except (sqlite3.Error, OSError) as error:
         warn(f"nothing will be remembered: {error}")
         return None
+    return memory
+
+
+async def fill_in(memory: Recall) -> None:
+    """Embed the turns remembered without a vector; log a failure, never raise."""
+    try:
+        done = await memory.backfill()
+    except Exception:
+        logger.exception("earlier turns were not all embedded")
+        return
+    if done:
+        logger.info("embedded %d earlier turns", done)
+
+
+@asynccontextmanager
+async def filling_in(memory: Recall | None) -> AsyncGenerator[None]:
+    """Embed earlier turns in the background while the block runs; stop at its end."""
+    if memory is None:
+        yield
+        return
+    task = asyncio.create_task(fill_in(memory))
+    try:
+        yield
+    finally:
+        task.cancel()
+        await asyncio.wait([task])
 
 
 def no_local_model() -> str:
@@ -106,7 +173,7 @@ class Host:
     traces: Path | None = None
     warnings: tuple[str, ...] = ()
     local_state: Callable[[], str] = no_local_model
-    memory: MemoryStore | None = None
+    memory: Recall | None = None
 
     def conversation(self, approver: Approver) -> Conversation:
         """Return a new conversation that asks ``approver`` before each call."""
