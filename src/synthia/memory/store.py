@@ -5,7 +5,8 @@ made; their arguments and results are cut as the trace cuts them, while the
 question and the answer are kept whole, since they are what is remembered. A
 full-text index over each turn's question, answer and tool calls, kept in step
 by triggers, finds turns by their words, ranked by BM25, within an optional
-time range.
+time range. Each turn can also keep a vector of its question's meaning,
+labelled with the model that made it; forgetting the turn removes it too.
 
 The file follows the budget ledger's rules: a connection per call, write-ahead
 logging so a reader never waits for a writer, the work done off the event
@@ -15,6 +16,7 @@ loop. Times are stored as UTC ISO text, which sorts as time does.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -27,7 +29,7 @@ from synthia.agent.trace import MAX_TRACED_CHARS
 from synthia.kernel.text import mended
 
 if TYPE_CHECKING:
-    from collections.abc import Generator, Iterable
+    from collections.abc import Generator, Iterable, Sequence
 
 MEMORY_FILE: Final = Path("memory.db")
 BUSY_TIMEOUT_S: Final = 5.0
@@ -88,6 +90,13 @@ CREATE TRIGGER IF NOT EXISTS turn_unindexed AFTER DELETE ON turns BEGIN
     VALUES ('delete', old.id, old.question, old.answer, old.calls);
 END
 """,
+    """
+CREATE TABLE IF NOT EXISTS turn_vectors (
+    turn INTEGER PRIMARY KEY REFERENCES turns(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    vector BLOB NOT NULL
+)
+""",
 )
 _COLUMNS: Final = "t.id, t.conversation, t.at, t.question, t.answer"
 
@@ -125,6 +134,35 @@ class Remembered:
     question: str
     answer: str
     tools: tuple[ToolUse, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Asked:
+    """A remembered turn's question and when it was asked."""
+
+    turn: int
+    at: datetime
+    question: str
+
+
+@dataclass(frozen=True, slots=True)
+class StoredVector:
+    """A turn's vector as the store keeps it: float32 numbers as bytes."""
+
+    turn: int
+    at: datetime
+    vector: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class WordScores:
+    """The turns holding a query's words, each with its BM25 score (higher is better).
+
+    ``turns`` is how many turns the index holds, which BM25's scores depend on.
+    """
+
+    scores: dict[int, float]
+    turns: int
 
 
 def _stamp(at: datetime) -> str:
@@ -177,6 +215,39 @@ class MemoryStore:
         first; with none, the newest turns in the range.
         """
         return await asyncio.to_thread(self._search, query, since, until, limit)
+
+    async def word_scores(
+        self,
+        query: str,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 10,
+    ) -> WordScores:
+        """Return the ``limit`` turns best for ``query``'s words, within the dates."""
+        return await asyncio.to_thread(self._word_scores, query, since, until, limit)
+
+    async def turns(self, ids: Sequence[int]) -> list[Remembered]:
+        """Return the turns ``ids`` that are still remembered, in the order given."""
+        return await asyncio.to_thread(self._turns, ids)
+
+    async def unembedded(self, model: str, limit: int) -> list[Asked]:
+        """Return up to ``limit`` turns with no vector from ``model``, oldest first."""
+        return await asyncio.to_thread(self._unembedded, model, limit)
+
+    async def put_vectors(
+        self, model: str, vectors: Sequence[tuple[int, bytes]]
+    ) -> list[int]:
+        """Keep each turn's vector from ``model``, replacing any before it.
+
+        Return the turns whose vector was kept: a turn forgotten meanwhile is
+        skipped.
+        """
+        return await asyncio.to_thread(self._put_vectors, model, vectors)
+
+    async def vectors(self, model: str) -> list[StoredVector]:
+        """Return every vector kept from ``model``, with the time of its turn."""
+        return await asyncio.to_thread(self._vectors, model)
 
     async def conversation(self, conversation: int) -> list[Remembered]:
         """Return every turn of ``conversation``, oldest first."""
@@ -283,6 +354,80 @@ class MemoryStore:
                     (*window, limit),
                 ).fetchall()
             return self._remembered(connection, rows)
+
+    def _word_scores(
+        self,
+        query: str,
+        since: datetime | None,
+        until: datetime | None,
+        limit: int,
+    ) -> WordScores:
+        window = (
+            _EARLIEST if since is None else _stamp(since),
+            _LATEST if until is None else _stamp(until),
+        )
+        expression = match_expression(query)
+        with self._opened() as connection:
+            (count,) = connection.execute("SELECT count(*) FROM turns").fetchone()
+            if not expression:
+                return WordScores({}, count)
+            rows = connection.execute(
+                "SELECT t.id, bm25(turns_text) FROM turns_text"
+                " JOIN turns t ON t.id = turns_text.rowid"
+                " WHERE turns_text MATCH ? AND t.at >= ? AND t.at < ?"
+                " ORDER BY bm25(turns_text), t.at DESC LIMIT ?",
+                (expression, *window, limit),
+            ).fetchall()
+        # FTS5 negates BM25 so that ascending order is best first.
+        return WordScores({turn: -score for turn, score in rows}, count)
+
+    def _turns(self, ids: Sequence[int]) -> list[Remembered]:
+        with self._opened() as connection:
+            rows = connection.execute(
+                f"SELECT {_COLUMNS} FROM turns t"  # noqa: S608 - constant columns
+                " WHERE t.id IN (SELECT value FROM json_each(?))",
+                (json.dumps(list(ids)),),
+            ).fetchall()
+            found = {turn.id: turn for turn in self._remembered(connection, rows)}
+        return [found[id_] for id_ in ids if id_ in found]
+
+    def _unembedded(self, model: str, limit: int) -> list[Asked]:
+        with self._opened() as connection:
+            rows = connection.execute(
+                "SELECT t.id, t.at, t.question FROM turns t"
+                " LEFT JOIN turn_vectors v ON v.turn = t.id AND v.model = ?"
+                " WHERE v.turn IS NULL ORDER BY t.id LIMIT ?",
+                (model, limit),
+            ).fetchall()
+        return [Asked(turn, datetime.fromisoformat(at), q) for turn, at, q in rows]
+
+    def _put_vectors(
+        self, model: str, vectors: Sequence[tuple[int, bytes]]
+    ) -> list[int]:
+        kept: list[int] = []
+        with self._transaction() as connection:
+            for turn, vector in vectors:
+                cursor = connection.execute(
+                    "INSERT INTO turn_vectors (turn, model, vector)"
+                    " SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM turns WHERE id = ?)"
+                    " ON CONFLICT (turn) DO UPDATE"
+                    " SET model = excluded.model, vector = excluded.vector",
+                    (turn, model, vector, turn),
+                )
+                if cursor.rowcount:
+                    kept.append(turn)
+        return kept
+
+    def _vectors(self, model: str) -> list[StoredVector]:
+        with self._opened() as connection:
+            rows = connection.execute(
+                "SELECT v.turn, t.at, v.vector FROM turn_vectors v"
+                " JOIN turns t ON t.id = v.turn WHERE v.model = ? ORDER BY v.turn",
+                (model,),
+            ).fetchall()
+        return [
+            StoredVector(turn, datetime.fromisoformat(at), v) for turn, at, v in rows
+        ]
 
     def _conversation(self, conversation: int) -> list[Remembered]:
         with self._opened() as connection:

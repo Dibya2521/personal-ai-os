@@ -5,9 +5,12 @@ from pathlib import Path
 import pytest
 
 from synthia.agent.trace import MAX_TRACED_CHARS
+from synthia.memory.bm25 import Bm25Index
 from synthia.memory.store import (
+    Asked,
     MemoryStore,
     Remembered,
+    StoredVector,
     ToolUse,
     Turn,
     match_expression,
@@ -194,3 +197,105 @@ async def test_a_long_tool_result_is_cut_as_the_trace_cuts_it(
 
     assert found.tools[0].result == "x" * MAX_TRACED_CHARS
     assert found.tools[0].ok is False
+
+
+async def test_word_scores_are_bm25_over_the_whole_turn_best_first(
+    store: MemoryStore,
+) -> None:
+    read = ToolUse("read_file", '{"path": "pune.md"}', "x", ok=True)
+    texts = [
+        ("my sister Asha lives in Pune", "Noted, Asha in Pune.", ()),
+        ("the weather today", "Sunny in Pune.", ()),
+        ("open my notes", "Done.", (read,)),
+        ("nothing related", "Fine.", ()),
+    ]
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    ids = [
+        await store.add_turn(chat, said(q, a, MONDAY, *tools)) for q, a, tools in texts
+    ]
+    words = Bm25Index()
+    for id_, (q, a, tools) in zip(ids, texts, strict=True):
+        calls = "\n".join(f"{t.name} {t.arguments}" for t in tools)
+        words.add(id_, f"{q} {a} {calls}")
+
+    found = await store.word_scores("Asha Pune", limit=10)
+
+    assert found.turns == len(texts)
+    assert list(found.scores) == ids[:3]
+    assert found.scores == pytest.approx(words.scores("Asha Pune"), rel=1e-12)
+
+
+async def test_word_scores_keep_to_the_dates_and_the_limit(store: MemoryStore) -> None:
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    first = await store.add_turn(chat, said("Asha Asha", "a", MONDAY))
+    later = MONDAY + timedelta(days=2)
+    await store.add_turn(chat, said("Asha", "b", later))
+
+    best = await store.word_scores("Asha", limit=1)
+    early = await store.word_scores("Asha", until=MONDAY + timedelta(days=1))
+    none = await store.word_scores("  ?! ")
+
+    assert list(best.scores) == [first]
+    assert list(early.scores) == [first]
+    assert (none.scores, none.turns) == ({}, 2)
+
+
+async def test_turns_come_back_in_the_order_asked_without_the_forgotten(
+    store: MemoryStore,
+) -> None:
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    a, b, c = [await store.add_turn(chat, said(q, "x", MONDAY)) for q in "abc"]
+    await store.forget_turn(b)
+
+    found = await store.turns([c, b, a, 404])
+
+    assert asked(found) == ["c", "a"]
+
+
+async def test_vectors_are_kept_per_model_with_the_time_of_their_turn(
+    store: MemoryStore,
+) -> None:
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    later = MONDAY + timedelta(hours=1)
+    first = await store.add_turn(chat, said("first", "x", MONDAY))
+    second = await store.add_turn(chat, said("second", "x", later))
+
+    kept = await store.put_vectors("mini", [(first, b"\x01\x02"), (second, b"\x03")])
+
+    assert kept == [first, second]
+    assert await store.vectors("mini") == [
+        StoredVector(first, MONDAY, b"\x01\x02"),
+        StoredVector(second, later, b"\x03"),
+    ]
+    assert await store.vectors("bge") == []
+
+
+async def test_turns_without_a_vector_from_the_model_in_use_are_listed(
+    store: MemoryStore,
+) -> None:
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    first = await store.add_turn(chat, said("first", "x", MONDAY))
+    second = await store.add_turn(chat, said("second", "x", MONDAY))
+    await store.put_vectors("mini", [(first, b"\x01")])
+
+    assert await store.unembedded("mini", 10) == [Asked(second, MONDAY, "second")]
+    assert [a.turn for a in await store.unembedded("bge", 1)] == [first]
+
+    await store.put_vectors("bge", [(first, b"\x02")])
+
+    assert [a.turn for a in await store.unembedded("mini", 10)] == [first, second]
+    assert await store.vectors("bge") == [StoredVector(first, MONDAY, b"\x02")]
+
+
+async def test_a_forgotten_turn_takes_its_vector_and_gets_no_new_one(
+    store: MemoryStore,
+) -> None:
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    turn = await store.add_turn(chat, said("forget me", "x", MONDAY))
+    await store.put_vectors("mini", [(turn, b"\x01")])
+
+    await store.forget_turn(turn)
+
+    assert await store.vectors("mini") == []
+    assert await store.put_vectors("mini", [(turn, b"\x01")]) == []
+    assert await store.vectors("mini") == []
