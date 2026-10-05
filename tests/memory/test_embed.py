@@ -11,7 +11,7 @@ from synthia.memory.embed import SEGMENT_IDS, EmbedError, Feeds, TextEmbedder
 from synthia.memory.wordpiece import WordPiece
 from synthia.models.catalogue import Embedder, Pooling, find
 from synthia.models.install import BYTES_PER_GB, Installer
-from tests.memory.test_wordpiece import SPECIALS, made_up_text
+from tests.memory.test_wordpiece import SPECIALS, bert_spec, made_up_text
 from tests.models.fakes import EMBEDDER
 
 WORDS = ("my", "cat", "is", "called", "miso", "budget", "meeting", "friday", "?")
@@ -119,6 +119,18 @@ def test_a_network_of_the_wrong_width_is_refused() -> None:
     spec = replace(EMBEDDER, dimensions=5)
     with pytest.raises(EmbedError, match="gives 4 numbers, not 5"):
         TextEmbedder(spec, WordPiece(VOCABULARY), Network(), token_types=True)
+
+
+def test_a_damaged_network_file_is_reported_as_a_model_that_cannot_load(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / EMBEDDER.tokenizer.name).write_text(
+        bert_spec(VOCABULARY, EMBEDDER.max_tokens), encoding="utf-8"
+    )
+    (tmp_path / EMBEDDER.model.name).write_bytes(b"n" * 3000)
+
+    with pytest.raises(EmbedError, match=r"tiny-embedder.*Protobuf"):
+        TextEmbedder.load(tmp_path, EMBEDDER)
 
 
 def test_a_model_that_is_not_installed_cannot_load(tmp_path: Path) -> None:

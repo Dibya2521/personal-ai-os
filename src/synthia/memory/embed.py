@@ -24,7 +24,7 @@ import numpy as np
 import onnxruntime as ort
 
 from synthia.kernel.errors import SynthiaError
-from synthia.memory.wordpiece import TokenizerError, WordPiece
+from synthia.memory.wordpiece import WordPiece
 from synthia.models.catalogue import Pooling
 
 if TYPE_CHECKING:
@@ -96,7 +96,9 @@ class TextEmbedder:
                 options,
                 providers=["CPUExecutionProvider"],
             )
-        except (OSError, RuntimeError, TokenizerError) as error:
+        # onnxruntime raises 15 classes with no base but Exception
+        # (InvalidProtobuf for a damaged file, NoSuchFile, Fail...).
+        except Exception as error:
             message = f"cannot load the embedding model {spec.id}: {error}"
             raise EmbedError(message) from error
 
