@@ -2,6 +2,7 @@ import pytest
 
 from synthia.kernel.config import DEFAULT_LOCAL_MODEL
 from synthia.models.catalogue import (
+    DEFAULT_EMBEDDER,
     EMBEDDERS,
     LLAMA_CPP_BUILD,
     MODELS,
@@ -79,6 +80,7 @@ def test_an_embedder_is_its_network_and_its_tokenizer() -> None:
         512,
     )
     assert find("all-minilm-l6-v2-int8").size == 23_026_053 + 466_247
+    assert DEFAULT_EMBEDDER.id == "all-minilm-l6-v2-int8"
 
 
 def test_this_laptops_download_is_the_recorded_total() -> None:

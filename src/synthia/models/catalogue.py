@@ -388,6 +388,9 @@ EMBEDDERS: Final = (
         max_tokens=256,
     ),
 )
+# Measured on benchmarks/data/recall_set.json: at least bge-small's recall at
+# 1 and 5, a third to a tenth of its time to embed a turn, a sixth of its size.
+DEFAULT_EMBEDDER: Final = EMBEDDERS[1]
 _SYSTEMS: Final = {"windows": "windows", "linux": "linux", "darwin": "macos"}
 _MACHINES: Final = {
     "amd64": "x64",

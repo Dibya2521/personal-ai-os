@@ -23,6 +23,7 @@ from rich.progress import (
 from rich.table import Table
 
 from synthia.models.catalogue import (
+    DEFAULT_EMBEDDER,
     EMBEDDERS,
     MODELS,
     RUNTIMES,
@@ -67,7 +68,7 @@ def this_machine() -> Machine:
 
 
 def suggested(
-    machine: Machine, model: Model, embedder: Embedder = EMBEDDERS[0]
+    machine: Machine, model: Model, embedder: Embedder = DEFAULT_EMBEDDER
 ) -> tuple[Item, ...]:
     """Return what ``synthia models install`` installs when given no names.
 
@@ -116,7 +117,7 @@ def list_table(
     installer: Installer,
     machine: Machine,
     model: str,
-    embedder: str = EMBEDDERS[0].id,
+    embedder: str = DEFAULT_EMBEDDER.id,
 ) -> Table:
     """Return every catalogue item with its size and state; * marks a pick.
 

@@ -54,8 +54,10 @@ All notable changes are recorded here. The format follows
   earlier turns by meaning: bge-small-en-v1.5 (MIT, 127.6 MB) and
   all-MiniLM-L6-v2 quantised to 8 bits (Apache-2.0, 22.4 MB), each pinned
   to a revision and to SHA-256 digests. `synthia models install` with no
-  names now also installs bge-small-en-v1.5: on Windows without an NVIDIA
-  card it fetches 3.35 GB instead of 3.23 GB.
+  names now also installs all-MiniLM-L6-v2, which found what was asked
+  about at least as often as bge-small on a 40-question recall set, in a
+  third to a tenth of the time: on Windows without an NVIDIA card it
+  fetches 3.25 GB instead of 3.23 GB.
 
 ### Changed
 
