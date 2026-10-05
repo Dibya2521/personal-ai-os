@@ -155,12 +155,16 @@ class Recall:
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int,
+        at_least: float = -math.inf,
     ) -> list[Recalled]:
         """Return up to ``limit`` turns from ``since`` up to ``until``, best first.
 
-        With no words in ``query``, the newest turns in the range, scored 0.
+        Only turns scoring ``at_least`` are returned. With no words in
+        ``query``, the newest turns in the range, scored 0.
         """
         if not match_expression(query):
+            if at_least > 0.0:
+                return []
             newest = await self.store.search("", since=since, until=until, limit=limit)
             return [Recalled(turn, 0.0) for turn in newest]
         words = await self.store.word_scores(
@@ -172,6 +176,7 @@ class Recall:
             near = self._vectors.similarities(vector, since=since, until=until)
             similar = near.nearest(CANDIDATES) | near.of(words.scores.keys())
         scores = fused(similar, words, self.word_weight)
-        best = heapq.nlargest(limit, scores.items(), key=lambda s: (s[1], s[0]))
+        enough = [(turn, score) for turn, score in scores.items() if score >= at_least]
+        best = heapq.nlargest(limit, enough, key=lambda s: (s[1], s[0]))
         turns = await self.store.turns([turn for turn, _ in best])
         return [Recalled(turn, scores[turn.id]) for turn in turns]

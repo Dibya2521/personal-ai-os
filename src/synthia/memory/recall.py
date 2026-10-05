@@ -32,7 +32,8 @@ MAX_PREVIEW_CHARS: Final = 300
 NOTHING_FOUND: Final = "nothing found in earlier conversations"
 
 
-def _local_zone() -> tzinfo | None:
+def local_zone() -> tzinfo | None:
+    """Return this machine's time zone, the one its clock tool names days in."""
     return datetime.now().astimezone().tzinfo
 
 
@@ -57,7 +58,7 @@ def shown(turn: Remembered, zone: tzinfo | None) -> str:
 
 
 def memory_tool(
-    recall: Recall, zone: Callable[[], tzinfo | None] = _local_zone
+    recall: Recall, zone: Callable[[], tzinfo | None] = local_zone
 ) -> FunctionTool:
     """Return the tool that searches what ``recall`` remembers."""
 

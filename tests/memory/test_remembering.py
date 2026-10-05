@@ -1,6 +1,6 @@
 import logging
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 
 import numpy as np
@@ -8,7 +8,7 @@ import pytest
 
 from synthia.memory.embed import Feeds
 from synthia.memory.hybrid import Recall
-from synthia.memory.remembering import Remembering
+from synthia.memory.remembering import REMINDED, REMINDER_HEADER, Remembering
 from synthia.memory.store import MemoryStore, Turn
 from tests.memory.test_hybrid import Network, embedder
 from tests.models.fakes import EMBEDDER
@@ -115,3 +115,59 @@ async def test_a_turn_whose_meaning_cannot_be_made_is_still_remembered(
     assert "a turn's meaning was not kept" in caplog.text
     assert [t.question for t in await store.search("cat")] == ["my cat"]
     assert [a.question for a in await store.unembedded(EMBEDDER.id, 5)] == ["my cat"]
+
+
+def utc() -> tzinfo:
+    return UTC
+
+
+async def test_a_reminder_holds_close_turns_of_other_conversations_only(
+    store: MemoryStore,
+) -> None:
+    recall = Recall(store, embedder(Network()))
+    earlier = Remembering(recall)
+    await earlier.remember(turn("my cat is called miso"))
+    await earlier.remember(turn("my sister lives in pune"))
+    now = Remembering(recall)
+    await now.remember(turn("the pet cat is asleep"))
+
+    reminder = await now.reminder("what is the name of the pet", zone=utc)
+
+    assert reminder == (
+        f"{REMINDER_HEADER}\n"
+        "Saturday 2026-10-03 12:00 (conversation 1, turn 1)\n"
+        "  person: my cat is called miso\n"
+        "  SYNTHIA: ok\n\n"
+    )
+
+
+async def test_a_reminder_holds_at_most_three_turns(store: MemoryStore) -> None:
+    recall = Recall(store, embedder(Network()))
+    earlier = Remembering(recall)
+    for question in ("my cat", "the cat", "a pet cat", "cat miso", "my pet"):
+        await earlier.remember(turn(question))
+
+    reminder = await Remembering(recall).reminder("my pet cat", zone=utc)
+
+    assert reminder.count("  person: ") == REMINDED == 3
+
+
+async def test_nothing_is_recalled_before_a_question_without_an_embedding_model(
+    store: MemoryStore,
+) -> None:
+    recall = Recall(store)
+    await Remembering(recall).remember(turn("my cat is called miso"))
+
+    assert await Remembering(recall).reminder("my cat is called miso") == ""
+
+
+async def test_a_search_that_fails_leaves_the_question_alone(
+    store: MemoryStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    memory = Remembering(Recall(store, embedder(FailsAfterStart())))
+
+    with caplog.at_level(logging.ERROR, "synthia.memory.remembering"):
+        reminder = await memory.reminder("what is the name of the pet")
+
+    assert reminder == ""
+    assert "earlier conversations were not searched" in caplog.text

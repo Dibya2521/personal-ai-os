@@ -16,6 +16,9 @@ from synthia.gateway.types import (
     Usage,
 )
 from synthia.kernel.bus import Event
+from synthia.memory.hybrid import Recall
+from synthia.memory.remembering import REMINDER_HEADER, Remembering
+from synthia.memory.store import MemoryStore
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
 from synthia.server.session import (
@@ -26,6 +29,7 @@ from synthia.server.session import (
     TurnReport,
     load_image,
 )
+from tests.memory.test_hybrid import Network, embedder, remember
 
 INFO = ModelInfo("fake", 1000, vision=True, tools=False)
 
@@ -92,6 +96,32 @@ async def test_a_turn_streams_the_answer_then_reports_it(
     assert reports == [
         TurnReport("direct", "vendor/echo", 40, 3, 0.75, reasoning=Reasoning.AUTO)
     ]
+
+
+async def test_close_earlier_turns_go_before_the_question_not_into_the_history(
+    library: PersonaLibrary, tmp_path: Path
+) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    recall = Recall(store, embedder(Network()))
+    await remember(store, "my cat is called miso", "my sister lives in pune")
+    await recall.backfill()
+    model = Echo()
+    chat = ChatSession(
+        model, library, "synthia", clock=Ticks(), memory=Remembering(recall)
+    )
+    question = "what is the name of the pet"
+
+    await run(chat, question)
+    await run(chat, "thanks")
+
+    asked = model.requests[0].messages[-1].text
+    assert asked.startswith(f"{REMINDER_HEADER}\n")
+    assert "  person: my cat is called miso\n" in asked
+    assert "pune" not in asked
+    assert asked.endswith(f"\n\n{question}")
+    assert chat.history[0].text == question
+    assert model.requests[1].messages[1].text == question
+    assert [t.question for t in await store.search("name pet")] == [question]
 
 
 async def test_every_request_starts_with_the_persona_and_carries_the_history(

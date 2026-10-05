@@ -169,6 +169,21 @@ async def test_a_question_with_no_words_gets_the_newest_turns(
         ("newer", 0.0),
         ("older", 0.0),
     ]
+    assert await recall.find(" ?! ", limit=5, at_least=0.5) == []
+
+
+async def test_only_turns_scoring_at_least_the_floor_come_back(
+    store: MemoryStore,
+) -> None:
+    await remember(store, "my sister lives in pune", "my cat is called miso")
+    recall = await recall_over(store, Network())
+
+    everything = await recall.find("what is the name of the pet", limit=5)
+    close = await recall.find("what is the name of the pet", limit=5, at_least=0.5)
+
+    assert len(everything) == 2
+    assert asked(close) == ["my cat is called miso"]
+    assert close[0].score >= 0.5
 
 
 async def test_kept_vectors_are_loaded_not_embedded_again(store: MemoryStore) -> None:

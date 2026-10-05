@@ -292,12 +292,17 @@ class ChatSession:
         The turn runs as an agent over :attr:`tools`; with none, it is one
         request, as it always was. With ``plan`` it runs as a plan of steps,
         and the plan, each step's start and the answer's start are yielded too.
+        Earlier conversations close to ``text`` go before it in the request,
+        never into the history: after the turn the history holds ``text``
+        alone, so old reminders do not fill the window, and a server that
+        reuses the start of the last prompt has only that question to read again.
 
         Raises:
             GatewayError: If the answer failed; the history is unchanged.
         """
-        self.make_room(text, *images)
-        request = self.request(text, *images)
+        asked = await self._asked(text)
+        self.make_room(asked, *images)
+        request = self.request(asked, *images)
         started = self._clock()
         asked_at = utc_now()
         before = len(self.history)
@@ -314,24 +319,34 @@ class ChatSession:
             return
         # The persona's system message is rebuilt every turn, so it is not kept.
         self.history = list(finished.messages[1:])
+        if asked != text:
+            self.history[before] = Message.user(text, *images)
         self._starts.append(before)
         report = self._report(request, taken.answers, self._clock() - started)
         if not plan:
             self._learn(request, taken.answers)
         self._summarize_leaving()
-        if self.memory is not None:
-            await self.memory.remember(
-                Turn(
-                    text,
-                    finished.text,
-                    asked_at,
-                    self.persona.name,
-                    report.route,
-                    report.model,
-                    tuple(taken.uses),
-                )
+        await self._remember(
+            Turn(
+                text,
+                finished.text,
+                asked_at,
+                self.persona.name,
+                report.route,
+                report.model,
+                tuple(taken.uses),
             )
+        )
         yield report
+
+    async def _asked(self, text: str) -> str:
+        if self.memory is None:
+            return text
+        return await self.memory.reminder(text) + text
+
+    async def _remember(self, turn: Turn) -> None:
+        if self.memory is not None:
+            await self.memory.remember(turn)
 
     def _learn(self, request: ChatRequest, answers: list[ChatResponse]) -> None:
         usage = answers[0].usage if answers else None

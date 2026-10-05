@@ -48,6 +48,14 @@ All notable changes are recorded here. The format follows
   code in the question still counts; each turn is embedded when it is
   remembered, and turns from before are embedded in the background when
   `synthia serve` starts.
+- With an embedding model installed, SYNTHIA is reminded of earlier
+  conversations without having to search: before each question, up to three
+  turns from other chats that come close to it are put in front of it,
+  marked as SYNTHIA's memory and not the person's words. Only close turns
+  qualify: on a 60-question recall set a reminder came with the turn the
+  question was about for 25 % of questions, with something else for 3 %,
+  and with nothing for the rest. The chat's history keeps the question
+  alone, so reminders never fill the context window.
 - Long chats keep fitting in the model's context window. Before each turn
   the oldest turns leave, whole, until the request fits with a quarter of the
   window kept free for the answer. With a local model, the turns that left
