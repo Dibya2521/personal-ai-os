@@ -7,7 +7,7 @@ import pytest
 from tokenizers import Tokenizer
 
 from synthia.kernel.config import default_home
-from synthia.memory.embed import BATCH, SEGMENT_IDS, EmbedError, Feeds, TextEmbedder
+from synthia.memory.embed import SEGMENT_IDS, EmbedError, Feeds, TextEmbedder
 from synthia.memory.wordpiece import WordPiece
 from synthia.models.catalogue import Embedder, Pooling, find
 from synthia.models.install import BYTES_PER_GB, Installer
@@ -20,7 +20,8 @@ TABLE = (
     np.random.default_rng(0).standard_normal((len(VOCABULARY), 4)).astype(np.float32)
 )
 TEXTS = [
-    " ".join(random.Random(n).choices(WORDS, k=n % 7 + 1)) for n in range(2 * BATCH + 3)
+    " ".join(random.Random(n).choices(WORDS, k=n % 7 + 1))
+    for n in range(2 * EMBEDDER.batch + 3)
 ]
 
 
@@ -81,9 +82,20 @@ def test_texts_run_in_batches_shortest_first() -> None:
     embedding.vectors(TEXTS)
 
     widths = [feeds["input_ids"].shape[1] for feeds in network.fed]
-    assert [len(feeds["input_ids"]) for feeds in network.fed] == [BATCH, BATCH, 3]
+    assert [len(feeds["input_ids"]) for feeds in network.fed] == [16, 16, 3]
     assert widths == sorted(widths)
     assert all(SEGMENT_IDS in feeds for feeds in network.fed)
+
+
+def test_a_model_that_runs_one_text_at_a_time_is_fed_one_at_a_time() -> None:
+    network = Network()
+    spec = replace(EMBEDDER, batch=1)
+    embedding = TextEmbedder(spec, WordPiece(VOCABULARY), network, token_types=True)
+    network.fed.clear()
+
+    embedding.vectors(TEXTS[:3])
+
+    assert [len(feeds["input_ids"]) for feeds in network.fed] == [1, 1, 1]
 
 
 def test_token_types_are_fed_only_to_a_network_that_takes_them() -> None:
@@ -146,3 +158,17 @@ def test_an_installed_tokenizer_matches_the_tokenizers_library(name: str) -> Non
     assert [ours.ids(t, spec.max_tokens) for t in texts] == [
         theirs.encode(t).ids for t in texts
     ]
+
+
+@pytest.mark.parametrize("name", ["bge-small-en-v1.5", "all-minilm-l6-v2-int8"])
+def test_an_installed_model_gives_a_text_one_vector_whatever_is_beside_it(
+    name: str,
+) -> None:
+    spec, path = installed(name)
+    embedding = TextEmbedder.load(path, spec)
+    texts = ["My cat is called Miso.", *TEXTS, "a much longer text " * 12]
+
+    together = embedding.vectors(texts)
+    alone = np.stack([embedding.vectors([text])[0] for text in texts])
+
+    np.testing.assert_array_equal(together, alone)

@@ -125,7 +125,13 @@ class Pooling(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Embedder:
-    """A sentence embedding model: an ONNX file and its WordPiece tokenizer."""
+    """A sentence embedding model: an ONNX file and its WordPiece tokenizer.
+
+    ``batch`` is how many texts may run through the network together. A model
+    quantised to int8 as it runs takes each layer's scale from the whole
+    batch, padding included, so its vector for a text changes with the texts
+    beside it; such a model runs one text at a time.
+    """
 
     id: str
     repo: str
@@ -136,6 +142,7 @@ class Embedder:
     pooling: Pooling
     dimensions: int
     max_tokens: int
+    batch: int
 
     @property
     def files(self) -> tuple[Download, ...]:
@@ -359,6 +366,7 @@ EMBEDDERS: Final = (
         Pooling.CLS,
         dimensions=384,
         max_tokens=512,
+        batch=16,
     ),
     Embedder(
         "all-minilm-l6-v2-int8",
@@ -386,10 +394,13 @@ EMBEDDERS: Final = (
         dimensions=384,
         # sentence-transformers trains and runs it with at most 256 tokens.
         max_tokens=256,
+        # Batched, a text's vector moved by up to 0.028 with its neighbours.
+        batch=1,
     ),
 )
-# Measured on benchmarks/data/recall_set.json: at least bge-small's recall at
-# 1 and 5, a third to a tenth of its time to embed a turn, a sixth of its size.
+# Measured on benchmarks/data/recall_set.json: bge-small's recall at 1 (0.625),
+# more at 5 (0.925 against 0.875), about half its time to embed a turn even one
+# text at a time against bge's sixteen, a sixth of its size.
 DEFAULT_EMBEDDER: Final = EMBEDDERS[1]
 _SYSTEMS: Final = {"windows": "windows", "linux": "linux", "darwin": "macos"}
 _MACHINES: Final = {

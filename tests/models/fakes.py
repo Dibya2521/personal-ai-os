@@ -66,6 +66,7 @@ EMBEDDER = Embedder(
     Pooling.CLS,
     dimensions=4,
     max_tokens=8,
+    batch=16,
 )
 CPU = Runtime(Target.WINDOWS_X64, Backend.CPU, (described("cpu.zip", SERVER_ZIP),))
 CUDA = Runtime(

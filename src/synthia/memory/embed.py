@@ -1,9 +1,10 @@
 """Sentences to vectors, with an installed embedding model, on this machine.
 
 The ONNX network runs on the CPU through onnxruntime. Texts are tokenized
-with SYNTHIA's own WordPiece, sorted by length and run in batches, so a
-batch pads to its longest text rather than to the longest of all; each
-vector comes back in the order its text was given. The per-token outputs
+with SYNTHIA's own WordPiece, sorted by length and run in batches of the
+size the catalogue gives the model, so a batch pads to its longest text
+rather than to the longest of all; each vector comes back in the order its
+text was given. The per-token outputs
 become one vector the way the model was trained (the [CLS] token, or the
 mean over the text's tokens) and are scaled to length 1, so the dot product
 of two vectors is their cosine similarity.
@@ -39,7 +40,6 @@ type Network = Callable[[Feeds], NDArray[np.float32]]
 """Token ids, attention mask and (if the model takes them) token types in;
 one row of numbers per token out, shaped (texts, tokens, dimensions)."""
 
-BATCH: Final = 16
 PADDING_ID: Final = 0
 # BERT's segment ids: which sentence of a pair each token belongs to.
 SEGMENT_IDS: Final = "token_type_ids"
@@ -111,8 +111,9 @@ class TextEmbedder:
         out = np.zeros((len(texts), self.spec.dimensions), np.float32)
         ids = [self._tokens.ids(text, self.spec.max_tokens) for text in texts]
         order = sorted(range(len(texts)), key=lambda i: len(ids[i]))
-        for start in range(0, len(order), BATCH):
-            batch = order[start : start + BATCH]
+        size = self.spec.batch
+        for start in range(0, len(order), size):
+            batch = order[start : start + size]
             out[batch] = self._pooled([ids[i] for i in batch])
         return out
 
