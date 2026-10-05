@@ -1,5 +1,6 @@
 import random
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -137,6 +138,9 @@ class Corpus:
         self.table.execute("DELETE FROM t WHERE rowid = ?", (document,))
         assert self.index.remove(document)
 
+    def close(self) -> None:
+        self.table.close()
+
     def assert_same_scores(self, queries: int) -> None:
         for _ in range(queries):
             words = self.rng.sample(self.words, self.rng.randint(1, 4))
@@ -152,17 +156,17 @@ class Corpus:
 
 def test_scores_are_fts5_scores_through_adds_replaces_and_removals() -> None:
     rng = random.Random(11)
-    corpus = Corpus(rng)
-    for document in range(1, 501):
-        corpus.put(document)
-    corpus.assert_same_scores(100)
+    with closing(Corpus(rng)) as corpus:
+        for document in range(1, 501):
+            corpus.put(document)
+        corpus.assert_same_scores(100)
 
-    for document in rng.sample(range(1, 501), 100):
-        corpus.remove(document)
-    for document in rng.sample(range(1, 601), 100):
-        corpus.put(document)
+        for document in rng.sample(range(1, 501), 100):
+            corpus.remove(document)
+        for document in rng.sample(range(1, 601), 100):
+            corpus.put(document)
 
-    corpus.assert_same_scores(100)
+        corpus.assert_same_scores(100)
 
 
 def test_search_ranks_best_first_and_newest_first_on_ties() -> None:
