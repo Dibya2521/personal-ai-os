@@ -8,6 +8,10 @@ from synthia.agent.trace import MAX_TRACED_CHARS
 from synthia.memory.bm25 import Bm25Index
 from synthia.memory.store import (
     Asked,
+    Fact,
+    FactKind,
+    FactVector,
+    Forgotten,
     MemoryStore,
     Remembered,
     StoredVector,
@@ -299,3 +303,105 @@ async def test_a_forgotten_turn_takes_its_vector_and_gets_no_new_one(
     assert await store.vectors("mini") == []
     assert await store.put_vectors("mini", [(turn, b"\x01")]) == []
     assert await store.vectors("mini") == []
+
+
+async def a_turn(store: MemoryStore, question: str = "q") -> int:
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    return await store.add_turn(chat, said(question, "x", MONDAY))
+
+
+async def test_facts_come_back_newest_first_with_their_kind(store: MemoryStore) -> None:
+    turn = await a_turn(store)
+    later = MONDAY + timedelta(hours=1)
+    cat = await store.add_fact(turn, "The cat is Miso.", FactKind.FACT, MONDAY)
+    tea = await store.add_fact(turn, "Likes green tea.", FactKind.PREFERENCE, later)
+
+    assert await store.facts() == [
+        Fact(tea or 0, "Likes green tea.", FactKind.PREFERENCE, turn, later),
+        Fact(cat or 0, "The cat is Miso.", FactKind.FACT, turn, MONDAY),
+    ]
+
+
+async def test_nothing_is_learned_from_a_forgotten_turn(store: MemoryStore) -> None:
+    turn = await a_turn(store)
+    await store.forget_turn(turn)
+
+    assert await store.add_fact(turn, "Lost.", FactKind.FACT, MONDAY) is None
+    assert await store.facts(held=False) == []
+
+
+async def test_a_changed_fact_is_kept_with_its_end_and_what_changed_it(
+    store: MemoryStore,
+) -> None:
+    turn = await a_turn(store)
+    later = MONDAY + timedelta(days=3)
+    pune = await store.add_fact(turn, "Sister lives in Pune.", FactKind.FACT, MONDAY)
+    mumbai = await store.add_fact(turn, "Sister lives in Mumbai.", FactKind.FACT, later)
+    assert pune is not None
+    assert mumbai is not None
+
+    assert await store.end_fact(pune, later, mumbai)
+    assert not await store.end_fact(pune, later, mumbai)
+
+    assert [f.text for f in await store.facts()] == ["Sister lives in Mumbai."]
+    old = (await store.facts(held=False))[1]
+    assert (old.id, old.until, old.replaced_by) == (pune, later, mumbai)
+
+
+async def test_a_forgotten_turn_takes_its_facts_and_their_vectors(
+    store: MemoryStore,
+) -> None:
+    kept = await a_turn(store, "kept")
+    gone = await a_turn(store, "gone")
+    stays = await store.add_fact(kept, "Stays.", FactKind.FACT, MONDAY)
+    leaves = await store.add_fact(gone, "Leaves.", FactKind.FACT, MONDAY)
+    assert stays is not None
+    assert leaves is not None
+    await store.put_fact_vectors("mini", [(stays, b"\x01"), (leaves, b"\x02")])
+
+    await store.forget_turn(gone)
+
+    assert [f.text for f in await store.facts(held=False)] == ["Stays."]
+    assert await store.fact_vectors("mini") == [FactVector(stays, b"\x01")]
+
+
+async def test_a_forgotten_fact_is_gone_and_gets_no_new_vector(
+    store: MemoryStore,
+) -> None:
+    fact = await store.add_fact(await a_turn(store), "Gone.", FactKind.FACT, MONDAY)
+    assert fact is not None
+
+    assert await store.forget_fact(fact)
+    assert not await store.forget_fact(fact)
+    assert await store.facts(held=False) == []
+    assert await store.put_fact_vectors("mini", [(fact, b"\x01")]) == []
+
+
+async def test_vectors_of_changed_facts_are_not_loaded(store: MemoryStore) -> None:
+    turn = await a_turn(store)
+    old = await store.add_fact(turn, "Old.", FactKind.FACT, MONDAY)
+    new = await store.add_fact(turn, "New.", FactKind.FACT, MONDAY)
+    assert old is not None
+    assert new is not None
+    await store.put_fact_vectors("mini", [(old, b"\x01"), (new, b"\x02")])
+    await store.end_fact(old, MONDAY, new)
+
+    assert await store.fact_vectors("mini") == [FactVector(new, b"\x02")]
+    assert await store.fact_vectors("bge") == []
+
+
+async def test_forgetting_a_topic_takes_what_holds_all_its_words(
+    store: MemoryStore,
+) -> None:
+    sister = await a_turn(store, "my sister Asha lives in Pune")
+    other = await a_turn(store, "Asha from work called")
+    await store.add_fact(sister, "Sister is a doctor.", FactKind.FACT, MONDAY)
+    await store.add_fact(other, "Asha's sister plays chess.", FactKind.FACT, MONDAY)
+    await store.add_fact(other, "Works with Asha.", FactKind.FACT, MONDAY)
+
+    forgotten = await store.forget_about("Asha sister")
+
+    assert forgotten == Forgotten(facts=2, turns=(sister,))
+    assert asked(await store.search("Asha")) == ["Asha from work called"]
+    assert [f.text for f in await store.facts()] == ["Works with Asha."]
+    assert await store.forget_about(" ?! ") == Forgotten(0, ())

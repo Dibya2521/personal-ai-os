@@ -22,6 +22,7 @@ import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -97,6 +98,40 @@ CREATE TABLE IF NOT EXISTS turn_vectors (
     vector BLOB NOT NULL
 )
 """,
+    """
+CREATE TABLE IF NOT EXISTS facts (
+    id INTEGER PRIMARY KEY,
+    text TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    turn INTEGER NOT NULL REFERENCES turns(id) ON DELETE CASCADE,
+    since TEXT NOT NULL,
+    until TEXT,
+    replaced_by INTEGER REFERENCES facts(id) ON DELETE SET NULL
+)
+""",
+    "CREATE INDEX IF NOT EXISTS facts_by_turn ON facts(turn)",
+    f"""
+CREATE VIRTUAL TABLE IF NOT EXISTS facts_text USING fts5(
+    text, content='facts', content_rowid='id', tokenize='{FTS_TOKENIZER}'
+)
+""",
+    """
+CREATE TRIGGER IF NOT EXISTS fact_indexed AFTER INSERT ON facts BEGIN
+    INSERT INTO facts_text(rowid, text) VALUES (new.id, new.text);
+END
+""",
+    """
+CREATE TRIGGER IF NOT EXISTS fact_unindexed AFTER DELETE ON facts BEGIN
+    INSERT INTO facts_text(facts_text, rowid, text) VALUES ('delete', old.id, old.text);
+END
+""",
+    """
+CREATE TABLE IF NOT EXISTS fact_vectors (
+    fact INTEGER PRIMARY KEY REFERENCES facts(id) ON DELETE CASCADE,
+    model TEXT NOT NULL,
+    vector BLOB NOT NULL
+)
+""",
 )
 _COLUMNS: Final = "t.id, t.conversation, t.at, t.question, t.answer"
 
@@ -165,6 +200,46 @@ class WordScores:
     turns: int
 
 
+class FactKind(StrEnum):
+    """What a learned fact is about: how things are, or what the person likes."""
+
+    FACT = "fact"
+    PREFERENCE = "preference"
+
+
+@dataclass(frozen=True, slots=True)
+class Fact:
+    """Something learned about the person, from the turn ``turn``.
+
+    ``until`` is set when a newer fact, ``replaced_by``, changed it; a fact
+    with no ``until`` is still held true.
+    """
+
+    id: int
+    text: str
+    kind: FactKind
+    turn: int
+    since: datetime
+    until: datetime | None = None
+    replaced_by: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FactVector:
+    """A fact's vector as the store keeps it: float32 numbers as bytes."""
+
+    fact: int
+    vector: bytes
+
+
+@dataclass(frozen=True, slots=True)
+class Forgotten:
+    """What forgetting a topic took: how many facts, and which turns."""
+
+    facts: int
+    turns: tuple[int, ...]
+
+
 def _stamp(at: datetime) -> str:
     return at.astimezone(UTC).isoformat(timespec="microseconds")
 
@@ -179,6 +254,11 @@ def match_expression(query: str) -> str:
     Each word is quoted, so nothing a person types is read as FTS5 syntax.
     """
     return " OR ".join(f'"{word}"' for word in _WORD.findall(query))
+
+
+def match_all_expression(query: str) -> str:
+    """Return ``query`` as an FTS5 expression matching only text with all its words."""
+    return " AND ".join(f'"{word}"' for word in _WORD.findall(query))
 
 
 class MemoryStore:
@@ -248,6 +328,46 @@ class MemoryStore:
     async def vectors(self, model: str) -> list[StoredVector]:
         """Return every vector kept from ``model``, with the time of its turn."""
         return await asyncio.to_thread(self._vectors, model)
+
+    async def add_fact(
+        self, turn: int, text: str, kind: FactKind, at: datetime
+    ) -> int | None:
+        """Keep a fact learned from ``turn`` and return its id.
+
+        None if the turn has been forgotten meanwhile: what was learned from
+        a forgotten turn is not kept.
+        """
+        return await asyncio.to_thread(self._add_fact, turn, text, kind, at)
+
+    async def end_fact(self, fact: int, at: datetime, replaced_by: int) -> bool:
+        """Mark ``fact`` as no longer true from ``at``, changed by ``replaced_by``."""
+        return await asyncio.to_thread(self._end_fact, fact, at, replaced_by)
+
+    async def facts(self, *, held: bool = True) -> list[Fact]:
+        """Return the facts held true (with ``held`` False, all), newest first."""
+        return await asyncio.to_thread(self._facts, held=held)
+
+    async def forget_fact(self, fact: int) -> bool:
+        """Forget ``fact`` and its vector; False if there was no such fact."""
+        return await asyncio.to_thread(self._forget_fact, fact)
+
+    async def forget_about(self, words: str) -> Forgotten:
+        """Forget every fact and every turn holding all of ``words``.
+
+        A forgotten turn takes the facts learned from it too; all of them
+        count in :attr:`Forgotten.facts`.
+        """
+        return await asyncio.to_thread(self._forget_about, words)
+
+    async def put_fact_vectors(
+        self, model: str, vectors: Sequence[tuple[int, bytes]]
+    ) -> list[int]:
+        """Keep each fact's vector from ``model``; return the facts still kept."""
+        return await asyncio.to_thread(self._put_fact_vectors, model, vectors)
+
+    async def fact_vectors(self, model: str) -> list[FactVector]:
+        """Return the vectors from ``model`` of the facts still held true."""
+        return await asyncio.to_thread(self._fact_vectors, model)
 
     async def conversation(self, conversation: int) -> list[Remembered]:
         """Return every turn of ``conversation``, oldest first."""
@@ -476,3 +596,100 @@ class MemoryStore:
                 "DELETE FROM conversations WHERE id = ?", (conversation,)
             )
             return cursor.rowcount
+
+    def _add_fact(
+        self, turn: int, text: str, kind: FactKind, at: datetime
+    ) -> int | None:
+        with self._opened() as connection:
+            cursor = connection.execute(
+                "INSERT INTO facts (text, kind, turn, since)"
+                " SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM turns WHERE id = ?)",
+                (mended(text), kind.value, turn, _stamp(at), turn),
+            )
+            return int(cursor.lastrowid or 0) if cursor.rowcount else None
+
+    def _end_fact(self, fact: int, at: datetime, replaced_by: int) -> bool:
+        with self._opened() as connection:
+            cursor = connection.execute(
+                "UPDATE facts SET until = ?, replaced_by = ?"
+                " WHERE id = ? AND until IS NULL",
+                (_stamp(at), replaced_by, fact),
+            )
+            return cursor.rowcount > 0
+
+    def _facts(self, *, held: bool) -> list[Fact]:
+        with self._opened() as connection:
+            rows = connection.execute(
+                "SELECT id, text, kind, turn, since, until, replaced_by FROM facts"
+                " WHERE until IS NULL OR NOT ? ORDER BY since DESC, id DESC",
+                (held,),
+            ).fetchall()
+        return [
+            Fact(
+                id_,
+                text,
+                FactKind(kind),
+                turn,
+                datetime.fromisoformat(since),
+                None if until is None else datetime.fromisoformat(until),
+                replaced_by,
+            )
+            for id_, text, kind, turn, since, until, replaced_by in rows
+        ]
+
+    def _forget_fact(self, fact: int) -> bool:
+        with self._opened() as connection:
+            cursor = connection.execute("DELETE FROM facts WHERE id = ?", (fact,))
+            return cursor.rowcount > 0
+
+    def _forget_about(self, words: str) -> Forgotten:
+        expression = match_all_expression(words)
+        if not expression:
+            return Forgotten(0, ())
+        with self._transaction() as connection:
+            (before,) = connection.execute("SELECT count(*) FROM facts").fetchone()
+            connection.execute(
+                "DELETE FROM facts WHERE id IN"
+                " (SELECT rowid FROM facts_text WHERE facts_text MATCH ?)",
+                (expression,),
+            )
+            turns = tuple(
+                turn
+                for (turn,) in connection.execute(
+                    "SELECT rowid FROM turns_text WHERE turns_text MATCH ?",
+                    (expression,),
+                )
+            )
+            connection.execute(
+                "DELETE FROM turns WHERE id IN (SELECT value FROM json_each(?))",
+                (json.dumps(list(turns)),),
+            )
+            (after,) = connection.execute("SELECT count(*) FROM facts").fetchone()
+        return Forgotten(before - after, turns)
+
+    def _put_fact_vectors(
+        self, model: str, vectors: Sequence[tuple[int, bytes]]
+    ) -> list[int]:
+        kept: list[int] = []
+        with self._transaction() as connection:
+            for fact, vector in vectors:
+                cursor = connection.execute(
+                    "INSERT INTO fact_vectors (fact, model, vector)"
+                    " SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM facts WHERE id = ?)"
+                    " ON CONFLICT (fact) DO UPDATE"
+                    " SET model = excluded.model, vector = excluded.vector",
+                    (fact, model, vector, fact),
+                )
+                if cursor.rowcount:
+                    kept.append(fact)
+        return kept
+
+    def _fact_vectors(self, model: str) -> list[FactVector]:
+        with self._opened() as connection:
+            rows = connection.execute(
+                "SELECT v.fact, v.vector FROM fact_vectors v"
+                " JOIN facts f ON f.id = v.fact"
+                " WHERE v.model = ? AND f.until IS NULL ORDER BY v.fact",
+                (model,),
+            ).fetchall()
+        return [FactVector(fact, vector) for fact, vector in rows]
