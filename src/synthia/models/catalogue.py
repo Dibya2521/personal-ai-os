@@ -116,15 +116,62 @@ class Model:
         return self.projector is not None
 
 
+class Pooling(StrEnum):
+    """How an embedding model's per-token outputs become one vector."""
+
+    CLS = "cls"
+    MEAN = "mean"
+
+
+@dataclass(frozen=True, slots=True)
+class Embedder:
+    """A sentence embedding model: an ONNX file and its WordPiece tokenizer."""
+
+    id: str
+    repo: str
+    revision: str
+    licence: str
+    model: Download
+    tokenizer: Download
+    pooling: Pooling
+    dimensions: int
+    max_tokens: int
+
+    @property
+    def files(self) -> tuple[Download, ...]:
+        """Every file of the model, the network first."""
+        return (self.model, self.tokenizer)
+
+    @property
+    def size(self) -> int:
+        """Bytes to download."""
+        return sum(file.size for file in self.files)
+
+
+type Item = Runtime | Model | Embedder
+"""Anything ``synthia models`` can install."""
+
+
 def _release(name: str, size: int, sha256: str) -> Download:
     return Download(name, f"{_RELEASES}/{name}", size, sha256)
 
 
-def _hugging_face(
-    repo: str, revision: str, name: str, size: int, sha256: str
+def _hugging_face(  # noqa: PLR0913
+    repo: str,
+    revision: str,
+    name: str,
+    size: int,
+    sha256: str,
+    *,
+    path: str | None = None,
 ) -> Download:
+    """Return a file of ``repo`` at ``revision``, saved as ``name``.
+
+    ``path`` is where it sits in the repository, when not at the top as ``name``.
+    """
+    where = path or name
     return Download(
-        name, f"https://huggingface.co/{repo}/resolve/{revision}/{name}", size, sha256
+        name, f"https://huggingface.co/{repo}/resolve/{revision}/{where}", size, sha256
     )
 
 
@@ -271,6 +318,76 @@ MODELS: Final = (
         ),
     ),
 )
+
+_BGE_REPO: Final = "BAAI/bge-small-en-v1.5"
+_BGE_REVISION: Final = (
+    # pragma: allowlist nextline secret
+    "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+)
+_MINILM_REPO: Final = "sentence-transformers/all-MiniLM-L6-v2"
+_MINILM_REVISION: Final = (
+    # pragma: allowlist nextline secret
+    "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+)
+
+# From GET https://huggingface.co/api/models/<repo>/tree/<revision>. The ONNX
+# files are in Git LFS, whose id is their SHA-256; tokenizer.json is a plain git
+# file, so its SHA-256 was taken from a copy whose git blob id matched the tree.
+EMBEDDERS: Final = (
+    Embedder(
+        "bge-small-en-v1.5",
+        _BGE_REPO,
+        _BGE_REVISION,
+        "mit",
+        _hugging_face(
+            _BGE_REPO,
+            _BGE_REVISION,
+            "model.onnx",
+            133_093_490,
+            # pragma: allowlist nextline secret
+            "828e1496d7fabb79cfa4dcd84fa38625c0d3d21da474a00f08db0f559940cf35",
+            path="onnx/model.onnx",
+        ),
+        _hugging_face(
+            _BGE_REPO,
+            _BGE_REVISION,
+            "tokenizer.json",
+            711_396,
+            # pragma: allowlist nextline secret
+            "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+        ),
+        Pooling.CLS,
+        dimensions=384,
+        max_tokens=512,
+    ),
+    Embedder(
+        "all-minilm-l6-v2-int8",
+        _MINILM_REPO,
+        _MINILM_REVISION,
+        "apache-2.0",
+        _hugging_face(
+            _MINILM_REPO,
+            _MINILM_REVISION,
+            "model.onnx",
+            23_026_053,
+            # pragma: allowlist nextline secret
+            "4278337fd0ff3c68bfb6291042cad8ab363e1d9fbc43dcb499fe91c871902474",
+            path="onnx/model_qint8_avx512.onnx",
+        ),
+        _hugging_face(
+            _MINILM_REPO,
+            _MINILM_REVISION,
+            "tokenizer.json",
+            466_247,
+            # pragma: allowlist nextline secret
+            "be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037",
+        ),
+        Pooling.MEAN,
+        dimensions=384,
+        # sentence-transformers trains and runs it with at most 256 tokens.
+        max_tokens=256,
+    ),
+)
 _SYSTEMS: Final = {"windows": "windows", "linux": "linux", "darwin": "macos"}
 _MACHINES: Final = {
     "amd64": "x64",
@@ -308,13 +425,13 @@ def recommended(target: Target, *, nvidia: bool) -> tuple[Runtime, ...]:
     return tuple(builds[b] for b in order if b in builds)
 
 
-def find(name: str) -> Runtime | Model:
-    """Return the runtime or model called ``name``.
+def find(name: str) -> Item:
+    """Return the runtime, model or embedding model called ``name``.
 
     Raises:
         KeyError: If nothing in the catalogue has that name.
     """
-    for item in (*RUNTIMES, *MODELS):
+    for item in (*RUNTIMES, *MODELS, *EMBEDDERS):
         if item.id == name:
             return item
     raise KeyError(name)

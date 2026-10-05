@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Final
 
 from synthia.kernel.errors import SynthiaError
 from synthia.models.archive import unpack, unpacked_size
-from synthia.models.catalogue import Model, Runtime
+from synthia.models.catalogue import Runtime
 from synthia.models.download import fetch, part_path
 
 if TYPE_CHECKING:
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
     import httpx
 
-    from synthia.models.catalogue import Download
+    from synthia.models.catalogue import Download, Item
 
 BYTES_PER_MB: Final = 1024**2
 BYTES_PER_GB: Final = 1024**3
@@ -88,15 +88,15 @@ class Installer:
         self._budget = budget_bytes
         self._free_bytes = free_bytes
 
-    def path_of(self, item: Runtime | Model) -> Path:
+    def path_of(self, item: Item) -> Path:
         """Return where ``item`` is installed."""
-        kind = MODELS_DIR if isinstance(item, Model) else RUNTIMES_DIR
+        kind = RUNTIMES_DIR if isinstance(item, Runtime) else MODELS_DIR
         return self._home / kind / item.id
 
     def _downloads_of(self, runtime: Runtime) -> Path:
         return self._home / DOWNLOADS_DIR / runtime.id
 
-    def installed(self, item: Runtime | Model) -> bool:
+    def installed(self, item: Item) -> bool:
         """Return whether ``item`` is completely installed."""
         path = self.path_of(item)
         if isinstance(item, Runtime):
@@ -113,14 +113,14 @@ class Installer:
             for d in (MODELS_DIR, RUNTIMES_DIR, DOWNLOADS_DIR)
         )
 
-    def to_download(self, item: Runtime | Model) -> int:
+    def to_download(self, item: Item) -> int:
         """Return the bytes still to fetch for ``item``; part files count as fetched."""
         if self.installed(item):
             return 0
-        if isinstance(item, Model):
-            files, directory = item.files, self.path_of(item)
-        else:
+        if isinstance(item, Runtime):
             files, directory = item.archives, self._downloads_of(item)
+        else:
+            files, directory = item.files, self.path_of(item)
         return sum(self._missing(f, directory) for f in files)
 
     @staticmethod
@@ -151,7 +151,7 @@ class Installer:
     async def install(
         self,
         client: httpx.AsyncClient,
-        item: Runtime | Model,
+        item: Item,
         on_progress: Callable[[Download, int], None] = _discard,
     ) -> Path:
         """Install ``item`` and return where it is; already installed is a no-op.
@@ -166,7 +166,7 @@ class Installer:
             return path
         needed = await asyncio.to_thread(self.to_download, item)
         await asyncio.to_thread(self._check_room, item.id, needed)
-        if isinstance(item, Model):
+        if not isinstance(item, Runtime):
             for file in item.files:
                 await _fetch(client, file, path, on_progress)
             return path
@@ -184,7 +184,7 @@ class Installer:
         (target / COMPLETE_MARKER).write_text(f"{runtime.build}\n", encoding="utf-8")
         shutil.rmtree(self._downloads_of(runtime))
 
-    def remove(self, item: Runtime | Model) -> int:
+    def remove(self, item: Item) -> int:
         """Delete ``item`` and its half-downloaded files; return the bytes freed."""
         paths = [self.path_of(item)]
         if isinstance(item, Runtime):

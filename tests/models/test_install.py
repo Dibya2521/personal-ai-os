@@ -4,7 +4,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from synthia.models.catalogue import Download, Model, Runtime
+from synthia.models.catalogue import Download, Item
 from synthia.models.download import part_path
 from synthia.models.install import (
     BYTES_PER_GB,
@@ -14,7 +14,18 @@ from synthia.models.install import (
     free_bytes,
     size_text,
 )
-from tests.models.fakes import BOMB, CPU, CUDA, MODEL, PROJECTOR, WEIGHTS, Files
+from tests.models.fakes import (
+    BOMB,
+    CPU,
+    CUDA,
+    EMBEDDER,
+    MODEL,
+    NETWORK,
+    PROJECTOR,
+    VOCABULARY,
+    WEIGHTS,
+    Files,
+)
 
 PLENTY = 100 * BYTES_PER_GB
 
@@ -28,7 +39,7 @@ class Bound:
 
     async def install(
         self,
-        item: Runtime | Model,
+        item: Item,
         on_progress: Callable[[Download, int], None] | None = None,
     ) -> Path:
         if on_progress is None:
@@ -58,6 +69,21 @@ async def test_a_model_installs_every_file_and_reports_progress(
     assert models.of.installed(MODEL)
     assert models.of.to_download(MODEL) == 0
     assert seen == {"m.gguf": len(WEIGHTS), "mmproj.gguf": len(PROJECTOR)}
+
+
+async def test_an_embedding_model_installs_beside_the_chat_models(
+    tmp_path: Path,
+) -> None:
+    models = installer(tmp_path, Files())
+
+    path = await models.install(EMBEDDER)
+
+    assert path == tmp_path / "models" / "tiny-embedder"
+    assert (path / "e.onnx").read_bytes() == NETWORK
+    assert (path / "tokenizer.json").read_bytes() == VOCABULARY
+    assert models.of.installed(EMBEDDER)
+    assert models.of.remove(EMBEDDER) == len(NETWORK) + len(VOCABULARY)
+    assert not models.of.installed(EMBEDDER)
 
 
 async def test_a_runtime_is_unpacked_marked_and_its_archives_removed(

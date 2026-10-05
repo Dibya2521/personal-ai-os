@@ -41,7 +41,7 @@ from synthia.server.daemon import run_daemon
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from synthia.models.catalogue import Model, Runtime
+    from synthia.models.catalogue import Item, Model
 
 app = typer.Typer(
     name="synthia",
@@ -282,7 +282,7 @@ def _installer(settings: Settings) -> Installer:
     return Installer(settings.home, int(settings.disk_budget_gb * BYTES_PER_GB))
 
 
-def _items(names: list[str]) -> tuple[Runtime | Model, ...]:
+def _items(names: list[str]) -> tuple[Item, ...]:
     try:
         return model_commands.resolve(names)
     except KeyError as error:

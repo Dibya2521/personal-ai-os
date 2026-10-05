@@ -54,15 +54,16 @@ def test_this_machine_reads_the_platform() -> None:
     assert this_machine().target == target_of(platform.system(), platform.machine())
 
 
-def test_suggested_is_the_builds_for_here_and_the_configured_model() -> None:
+def test_suggested_is_the_builds_the_configured_model_and_the_embedder() -> None:
     picks = suggested(WINDOWS, MODEL)
 
     assert [getattr(p, "backend", None) for p in picks] == [
         Backend.VULKAN,
         Backend.CPU,
         None,
+        None,
     ]
-    assert picks[-1] is MODEL
+    assert picks[-2:] == (MODEL, find("bge-small-en-v1.5"))
     assert suggested(Machine(None, nvidia=True), MODEL) == ()
 
 
@@ -75,8 +76,11 @@ def test_the_configured_model_must_be_a_catalogue_model() -> None:
 
 
 def test_resolve_keeps_order_drops_repeats_and_names_every_unknown() -> None:
-    assert resolve([DEFAULT_LOCAL_MODEL, DEFAULT_LOCAL_MODEL]) == (
+    assert resolve(
+        [DEFAULT_LOCAL_MODEL, "all-minilm-l6-v2-int8", DEFAULT_LOCAL_MODEL]
+    ) == (
         find(DEFAULT_LOCAL_MODEL),
+        find("all-minilm-l6-v2-int8"),
     )
     with pytest.raises(KeyError, match="gpt-5, llama-9"):
         resolve(["gpt-5", DEFAULT_LOCAL_MODEL, "llama-9"])
@@ -102,6 +106,8 @@ def test_the_list_shows_each_state_and_marks_the_picks(tmp_path: Path) -> None:
     assert rows[DEFAULT_LOCAL_MODEL][-1] == "partial"
     assert rows["llama.cpp-b11130-linux-x64-cpu"][0] != "*"
     assert rows["llama.cpp-b11130-linux-x64-cpu"][-1] == "-"
+    assert rows["bge-small-en-v1.5"] == ["*", "bge-small-en-v1.5", "127.6", "MB", "-"]
+    assert rows["all-minilm-l6-v2-int8"][0] != "*"
 
 
 async def test_install_shows_the_plan_asks_and_installs(tmp_path: Path) -> None:
@@ -199,7 +205,8 @@ def test_install_asks_first_and_no_means_nothing(
     result = runner.invoke(app, ["models", "install"], input="n\n")
 
     assert result.exit_code == 0
-    assert "download 3.23 GB and install? [y/N]" in result.stdout
+    assert "bge-small-en-v1.5                    127.6 MB to download" in result.stdout
+    assert "download 3.35 GB and install? [y/N]" in result.stdout
     assert "nothing installed" in result.stdout
 
 

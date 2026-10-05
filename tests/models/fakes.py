@@ -6,7 +6,15 @@ import zipfile
 
 import httpx
 
-from synthia.models.catalogue import Backend, Download, Model, Runtime, Target
+from synthia.models.catalogue import (
+    Backend,
+    Download,
+    Embedder,
+    Model,
+    Pooling,
+    Runtime,
+    Target,
+)
 
 
 def zipped(members: dict[str, bytes]) -> bytes:
@@ -25,6 +33,8 @@ def described(name: str, data: bytes) -> Download:
 
 WEIGHTS = b"w" * 5000
 PROJECTOR = b"p" * 700
+NETWORK = b"n" * 3000
+VOCABULARY = b'{"model": {}}'
 SERVER_ZIP = zipped({"llama-server.exe": b"MZ" * 300})
 CUDART_ZIP = zipped({"cudart64_12.dll": b"cu" * 200})
 # Deflate shrinks a megabyte of zeros to about a kilobyte: cheap to fetch, big unpacked.
@@ -35,6 +45,8 @@ FILES = {
     "cpu.zip": SERVER_ZIP,
     "cudart.zip": CUDART_ZIP,
     "bomb.zip": BOMB_ZIP,
+    "e.onnx": NETWORK,
+    "tokenizer.json": VOCABULARY,
 }
 MODEL = Model(
     "tiny",
@@ -43,6 +55,17 @@ MODEL = Model(
     "mit",
     described("m.gguf", WEIGHTS),
     described("mmproj.gguf", PROJECTOR),
+)
+EMBEDDER = Embedder(
+    "tiny-embedder",
+    "r",
+    "abc",
+    "mit",
+    described("e.onnx", NETWORK),
+    described("tokenizer.json", VOCABULARY),
+    Pooling.CLS,
+    dimensions=4,
+    max_tokens=8,
 )
 CPU = Runtime(Target.WINDOWS_X64, Backend.CPU, (described("cpu.zip", SERVER_ZIP),))
 CUDA = Runtime(

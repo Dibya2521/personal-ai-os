@@ -23,10 +23,11 @@ from rich.progress import (
 from rich.table import Table
 
 from synthia.models.catalogue import (
+    EMBEDDERS,
     MODELS,
     RUNTIMES,
+    Embedder,
     Model,
-    Runtime,
     Target,
     find,
     recommended,
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
     import httpx
     from rich.console import Console
 
-    from synthia.models.catalogue import Download
+    from synthia.models.catalogue import Download, Item
     from synthia.models.install import Installer
 
 INSTALLED: Final = "installed"
@@ -65,11 +66,16 @@ def this_machine() -> Machine:
     )
 
 
-def suggested(machine: Machine, model: Model) -> tuple[Runtime | Model, ...]:
-    """Return what ``synthia models install`` installs when given no names."""
+def suggested(
+    machine: Machine, model: Model, embedder: Embedder = EMBEDDERS[0]
+) -> tuple[Item, ...]:
+    """Return what ``synthia models install`` installs when given no names.
+
+    The embedding model memory uses comes after the chat model.
+    """
     if machine.target is None:
         return ()
-    return (*recommended(machine.target, nvidia=machine.nvidia), model)
+    return (*recommended(machine.target, nvidia=machine.nvidia), model, embedder)
 
 
 def configured(name: str) -> Model:
@@ -84,7 +90,7 @@ def configured(name: str) -> Model:
     raise KeyError(name)
 
 
-def resolve(names: Sequence[str]) -> tuple[Runtime | Model, ...]:
+def resolve(names: Sequence[str]) -> tuple[Item, ...]:
     """Return the catalogue items called ``names``.
 
     Raises:
@@ -97,30 +103,36 @@ def resolve(names: Sequence[str]) -> tuple[Runtime | Model, ...]:
 
 
 def _known(name: str) -> bool:
-    return any(item.id == name for item in (*RUNTIMES, *MODELS))
+    return any(item.id == name for item in (*RUNTIMES, *MODELS, *EMBEDDERS))
 
 
-def _state(installer: Installer, item: Runtime | Model) -> str:
+def _state(installer: Installer, item: Item) -> str:
     if installer.installed(item):
         return INSTALLED
     return PARTIAL if installer.to_download(item) < item.size else MISSING
 
 
-def list_table(installer: Installer, machine: Machine, model: str) -> Table:
+def list_table(
+    installer: Installer,
+    machine: Machine,
+    model: str,
+    embedder: str = EMBEDDERS[0].id,
+) -> Table:
     """Return every catalogue item with its size and state; * marks a pick.
 
-    ``model`` is marked by name, so the list still shows when it names nothing.
+    ``model`` and ``embedder`` are marked by name, so the list still shows
+    when they name nothing.
     """
     picks: set[str] = (
         set()
         if machine.target is None
         else {r.id for r in recommended(machine.target, nvidia=machine.nvidia)}
-        | {model}
+        | {model, embedder}
     )
     table = Table(box=None, pad_edge=False)
     for column in ("", "name", "size", "state"):
         table.add_column(column)
-    for item in (*RUNTIMES, *MODELS):
+    for item in (*RUNTIMES, *MODELS, *EMBEDDERS):
         mark = "*" if item.id in picks else ""
         table.add_row(mark, item.id, size_text(item.size), _state(installer, item))
     return table
@@ -129,7 +141,7 @@ def list_table(installer: Installer, machine: Machine, model: str) -> Table:
 async def install(
     installer: Installer,
     client: httpx.AsyncClient,
-    items: Sequence[Runtime | Model],
+    items: Sequence[Item],
     console: Console,
     confirm: Callable[[str], bool],
 ) -> None:
@@ -172,9 +184,7 @@ async def install(
             await installer.install(client, item, advance)
 
 
-def remove(
-    installer: Installer, items: Sequence[Runtime | Model], console: Console
-) -> None:
+def remove(installer: Installer, items: Sequence[Item], console: Console) -> None:
     """Delete ``items`` and say how much disk each gave back."""
     for item in items:
         freed = installer.remove(item)

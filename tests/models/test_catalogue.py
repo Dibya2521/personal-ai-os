@@ -2,12 +2,15 @@ import pytest
 
 from synthia.kernel.config import DEFAULT_LOCAL_MODEL
 from synthia.models.catalogue import (
+    EMBEDDERS,
     LLAMA_CPP_BUILD,
     MODELS,
     RUNTIMES,
     Backend,
     Download,
+    Embedder,
     Model,
+    Pooling,
     Runtime,
     Target,
     find,
@@ -25,13 +28,14 @@ ASSET_TARGET = {
 
 
 def test_every_name_in_the_catalogue_is_unique() -> None:
-    ids = [item.id for item in (*RUNTIMES, *MODELS)]
-    files = [d.name for r in RUNTIMES for d in r.archives] + [
-        f.name for m in MODELS for f in m.files
+    ids = [item.id for item in (*RUNTIMES, *MODELS, *EMBEDDERS)]
+    # Each item downloads into a folder of its own, so a name is unique per item.
+    per_item = [[d.name for d in r.archives] for r in RUNTIMES] + [
+        [f.name for f in m.files] for m in (*MODELS, *EMBEDDERS)
     ]
 
     assert len(ids) == len(set(ids))
-    assert len(files) == len(set(files))
+    assert all(len(names) == len(set(names)) for names in per_item)
 
 
 @pytest.mark.parametrize("runtime", RUNTIMES, ids=lambda r: r.id)
@@ -51,11 +55,30 @@ def test_each_runtime_archive_is_the_build_it_claims(runtime: Runtime) -> None:
 
 
 def test_model_files_come_from_the_pinned_revision() -> None:
-    for model in MODELS:
+    for model in (*MODELS, *EMBEDDERS):
         for file in model.files:
-            assert file.url == (
-                f"https://huggingface.co/{model.repo}/resolve/{model.revision}/{file.name}"
+            assert file.url.startswith(
+                f"https://huggingface.co/{model.repo}/resolve/{model.revision}/"
             )
+    assert [e.model.url.rsplit("/", 2)[-2:] for e in EMBEDDERS] == [
+        ["onnx", "model.onnx"],
+        ["onnx", "model_qint8_avx512.onnx"],
+    ]
+    assert all(e.tokenizer.url.endswith("/tokenizer.json") for e in EMBEDDERS)
+
+
+def test_an_embedder_is_its_network_and_its_tokenizer() -> None:
+    embedder = find("bge-small-en-v1.5")
+
+    assert isinstance(embedder, Embedder)
+    assert embedder.files == (embedder.model, embedder.tokenizer)
+    assert embedder.size == 133_093_490 + 711_396
+    assert (embedder.pooling, embedder.dimensions, embedder.max_tokens) == (
+        Pooling.CLS,
+        384,
+        512,
+    )
+    assert find("all-minilm-l6-v2-int8").size == 23_026_053 + 466_247
 
 
 def test_this_laptops_download_is_the_recorded_total() -> None:

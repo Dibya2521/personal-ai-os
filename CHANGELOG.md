@@ -50,6 +50,12 @@ All notable changes are recorded here. The format follows
   machine, never sent to the remote model) that SYNTHIA keeps seeing; without
   one they are only dropped. How many characters make a token is learned
   from the prompt size the model reports for each turn.
+- `synthia models` knows two sentence embedding models, for memory to find
+  earlier turns by meaning: bge-small-en-v1.5 (MIT, 127.6 MB) and
+  all-MiniLM-L6-v2 quantised to 8 bits (Apache-2.0, 22.4 MB), each pinned
+  to a revision and to SHA-256 digests. `synthia models install` with no
+  names now also installs bge-small-en-v1.5: on Windows without an NVIDIA
+  card it fetches 3.35 GB instead of 3.23 GB.
 
 ### Changed
 
