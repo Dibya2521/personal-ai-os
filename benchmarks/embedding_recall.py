@@ -2,9 +2,10 @@
 
     uv run python benchmarks/embedding_recall.py
 
-The recall set (``benchmarks/data/recall_set.json``) holds 40 things a
-person tells SYNTHIA, each with a question asked later in other words, and
-120 turns about other things. Every question is searched against all 160
+This benchmark reads two parts of the recall set
+(``benchmarks/data/recall_set.json``): 40 things a person tells SYNTHIA,
+each with a question asked later in other words (``pairs``), and 120 turns
+about other things (``other``). Every question is searched against all 160
 turns by each method: SYNTHIA's own BM25 (words), and each installed
 embedding model (meaning, cosine similarity). A question counts as found at
 k when the turn it asks about is among the first k. Reported per method:
