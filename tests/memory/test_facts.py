@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from synthia.gateway.types import ChatChunk, Reasoning, Role
-from synthia.memory.facts import FactKeeper
+from synthia.memory.facts import EXAMPLES, INSTRUCTIONS, FactKeeper, Learned
 from synthia.memory.store import FactKind, MemoryStore, Turn
 from tests.agent.scripted import Scripted, says
 from tests.memory.test_hybrid import Network, embedder
@@ -83,8 +83,9 @@ async def test_the_request_shows_the_exchange_and_never_leaves_the_machine(
     await (await keeper(store, model)).learn(turn, MONDAY, "hello", "a" * 1500)
 
     (request,) = model.requests
-    system, user = request.messages
+    system, *examples, user = request.messages
     assert system.role is Role.SYSTEM
+    assert tuple(examples) == EXAMPLES
     assert user.text == (
         "Known facts:\n(none)\n\nThe person said:\nhello\n\n"
         f"SYNTHIA answered:\n{'a' * 1000}"
@@ -95,6 +96,21 @@ async def test_the_request_shows_the_exchange_and_never_leaves_the_machine(
         0.0,
     )
     assert request.response_schema is not None
+
+
+def test_the_worked_examples_answer_in_the_form_asked_for() -> None:
+    asked, answered = EXAMPLES[0::2], EXAMPLES[1::2]
+
+    replies = [Learned.model_validate_json(m.text) for m in answered]
+
+    assert '{"facts": []}' not in INSTRUCTIONS
+    assert [m.role for m in asked] == [Role.USER, Role.USER]
+    assert [len(r.facts) for r in replies] == [3, 0]
+    assert [f.kind for f in replies[0].facts] == [
+        FactKind.FACT,
+        FactKind.FACT,
+        FactKind.PREFERENCE,
+    ]
 
 
 async def test_a_fact_that_changes_a_shown_one_replaces_it(store: MemoryStore) -> None:
@@ -113,7 +129,7 @@ async def test_a_fact_that_changes_a_shown_one_replaces_it(store: MemoryStore) -
 
     assert (
         "Known facts:\n1. my sister lives in pune\n"
-        in model.requests[1].messages[1].text
+        in model.requests[1].messages[-1].text
     )
     assert await held(store) == [("my sister lives in mumbai", FactKind.FACT)]
     old = next(f for f in await store.facts(held=False) if f.id == pune)
@@ -181,7 +197,7 @@ async def test_a_forgotten_fact_is_neither_shown_nor_in_the_way_of_learning_it_a
 
     again = await facts.learn(turn, LATER, "my cat is called miso", "Noted.")
 
-    assert model.requests[1].messages[1].text.startswith("Known facts:\n(none)\n")
+    assert model.requests[1].messages[-1].text.startswith("Known facts:\n(none)\n")
     assert len(again) == 1
     assert await held(store) == [("my cat is called miso", FactKind.FACT)]
 
@@ -202,7 +218,7 @@ async def test_a_replacement_that_repeats_another_fact_ends_the_old_one_by_it(
     again = await facts.learn(turn, LATER, "my sister lives in pune", "Noted.")
 
     assert "Known facts:\n1. my sister lives in pune\n" in (
-        model.requests[1].messages[1].text
+        model.requests[1].messages[-1].text
     )
     assert again == []
     assert await held(store) == [("my sister lives in mumbai", FactKind.FACT)]

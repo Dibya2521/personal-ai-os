@@ -53,7 +53,7 @@ INSTRUCTIONS: Final = (
     "Leave out questions, general knowledge, passing moods, and anything only "
     "SYNTHIA said. Do not repeat a known fact. If a new fact changes a known "
     'fact, give that known fact\'s number in "replaces". If the exchange adds '
-    'nothing lasting, return {"facts": []}.'
+    "nothing lasting, give an empty list."
 )
 
 
@@ -75,16 +75,47 @@ class Learned(BaseModel):
     facts: list[NewFact] = Field(max_length=MAX_NEW)
 
 
-def learning_request(question: str, answer: str, known: Sequence[Fact]) -> ChatRequest:
-    """Return the request that asks what an exchange teaches about the person."""
-    numbered = "\n".join(f"{n}. {fact.text}" for n, fact in enumerate(known, 1))
-    exchange = (
+def shown_exchange(question: str, answer: str, known: Sequence[str] = ()) -> str:
+    """Return an exchange as the model is shown it, after the known facts."""
+    numbered = "\n".join(f"{n}. {text}" for n, text in enumerate(known, 1))
+    return (
         f"Known facts:\n{numbered or '(none)'}\n\n"
         f"The person said:\n{question}\n\n"
         f"SYNTHIA answered:\n{answer[:MAX_ANSWER_CHARS]}"
     )
+
+
+# Without worked examples the model gave an empty list for 11 of 15 exchanges
+# that state facts; with these two, for none, and none for 9 with no facts.
+EXAMPLES: Final = (
+    Message.user(
+        shown_exchange(
+            "My brother Arjun is a doctor in Delhi, and I'd rather you call me Sam.",
+            "Nice to meet you, Sam. A doctor in Delhi must be busy.",
+        )
+    ),
+    Message.assistant(
+        '{"facts": ['
+        '{"text": "The person\'s brother is called Arjun.", "kind": "fact", '
+        '"replaces": null}, '
+        '{"text": "Arjun is a doctor in Delhi.", "kind": "fact", "replaces": null}, '
+        '{"text": "The person wants to be called Sam.", "kind": "preference", '
+        '"replaces": null}]}'
+    ),
+    Message.user(
+        shown_exchange(
+            "How long should I boil an egg?", "About nine minutes for a hard yolk."
+        )
+    ),
+    Message.assistant('{"facts": []}'),
+)
+
+
+def learning_request(question: str, answer: str, known: Sequence[Fact]) -> ChatRequest:
+    """Return the request that asks what an exchange teaches about the person."""
+    exchange = shown_exchange(question, answer, [fact.text for fact in known])
     return ChatRequest(
-        (Message.system(INSTRUCTIONS), Message.user(exchange)),
+        (Message.system(INSTRUCTIONS), *EXAMPLES, Message.user(exchange)),
         temperature=0.0,
         reasoning=Reasoning.OFF,
         use_remote=False,
