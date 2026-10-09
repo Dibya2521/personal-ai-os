@@ -7,9 +7,11 @@ import numpy as np
 import pytest
 
 from synthia.memory.embed import Feeds
+from synthia.memory.facts import FactKeeper, FactLearning
 from synthia.memory.hybrid import Recall
 from synthia.memory.remembering import REMINDED, REMINDER_HEADER, Remembering
 from synthia.memory.store import MemoryStore, Turn
+from tests.agent.scripted import Scripted
 from tests.memory.test_hybrid import Network, embedder
 from tests.models.fakes import EMBEDDER
 
@@ -65,8 +67,8 @@ async def test_a_turn_that_cannot_be_kept_is_logged_and_the_chat_goes_on(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    async def broken(conversation: int, kept: Turn) -> int:
-        del conversation, kept
+    async def broken(conversation: int, kept: Turn, *, to_learn: bool = False) -> int:
+        del conversation, kept, to_learn
         message = "database is locked"
         raise sqlite3.OperationalError(message)
 
@@ -171,3 +173,24 @@ async def test_a_search_that_fails_leaves_the_question_alone(
 
     assert reminder == ""
     assert "earlier conversations were not searched" in caplog.text
+
+
+async def test_with_facts_learned_each_kept_turn_waits_for_the_learner(
+    store: MemoryStore,
+) -> None:
+    recall = Recall(store, embedder(Network()))
+    learning = FactLearning(FactKeeper(store, embedder(Network()), Scripted()), store)
+    memory = Remembering(recall, learning)
+    await memory.remember(turn("my cat is called miso"))
+    memory.private = True
+    await memory.remember(turn("a secret"))
+
+    waiting = await store.to_learn(5)
+
+    assert [t.question for t in waiting] == ["my cat is called miso"]
+
+
+async def test_without_facts_learned_no_turn_waits(store: MemoryStore) -> None:
+    await Remembering(Recall(store)).remember(turn("my cat is called miso"))
+
+    assert await store.to_learn(5) == []

@@ -21,12 +21,15 @@ written on this machine.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field
 
-from synthia.gateway.structured import generate
+from synthia.gateway.errors import GatewayError
+from synthia.gateway.structured import StructuredOutputError, generate
 from synthia.gateway.types import ChatRequest, Message, Reasoning
 from synthia.memory.store import FactKind
 from synthia.memory.vectors import VectorSet
@@ -37,10 +40,14 @@ if TYPE_CHECKING:
 
     from synthia.gateway.protocol import ChatModel
     from synthia.memory.embed import TextEmbedder
-    from synthia.memory.store import Fact, MemoryStore
+    from synthia.memory.store import Fact, MemoryStore, Remembered
     from synthia.memory.vectors import Vectors
 
+logger = logging.getLogger(__name__)
+
 SHOWN: Final = 5
+BATCH: Final = 8
+TRIES: Final = 3
 MAX_NEW: Final = 5
 MAX_FACT_CHARS: Final = 200
 MAX_ANSWER_CHARS: Final = 1000
@@ -134,11 +141,26 @@ class FactKeeper:
         self._held = VectorSet(embedder.spec.dimensions)
 
     async def load(self) -> None:
-        """Hold the vectors of the facts still held true."""
+        """Hold the vectors of the facts still held true, embedding any without one.
+
+        A fact has no vector from this embedder after a change of embedding
+        model, or when its vector could not be written.
+        """
+        model = self._embedder.spec.id
         held = {fact.id: fact for fact in await self._store.facts()}
-        for kept in await self._store.fact_vectors(self._embedder.spec.id):
+        for kept in await self._store.fact_vectors(model):
             vector = np.frombuffer(kept.vector, np.float32)
             self._held.add(kept.fact, held[kept.fact].since, vector)
+        missing = [fact for fact in held.values() if fact.id not in self._held]
+        if not missing:
+            return
+        vectors = await self._embedder.embed([fact.text for fact in missing])
+        pairs = list(zip(missing, vectors, strict=True))
+        await self._store.put_fact_vectors(
+            model, [(fact.id, vector.tobytes()) for fact, vector in pairs]
+        )
+        for fact, vector in pairs:
+            self._held.add(fact.id, fact.since, vector)
 
     async def learn(
         self, turn: int, at: datetime, question: str, answer: str
@@ -198,6 +220,61 @@ class FactKeeper:
     async def _end(self, fact: Fact, at: datetime, replaced_by: int) -> None:
         await self._store.end_fact(fact.id, at, replaced_by)
         self._held.remove(fact.id)
+
+
+class FactLearning:
+    """Learns from the turns waiting in the store, one at a time, in the background.
+
+    The waiting turns are a table, not a queue in memory, so a stop or a
+    crash loses none: whatever is left is learned from after the next start,
+    a turn cut off part way included, so its first facts may be found twice.
+    A turn is dropped only when the model's answer is never valid, or after
+    :data:`TRIES` failures of another kind.
+    """
+
+    def __init__(self, keeper: FactKeeper, store: MemoryStore) -> None:
+        self._keeper = keeper
+        self._store = store
+        self._waiting = asyncio.Event()
+        self._waiting.set()
+
+    def wake(self) -> None:
+        """Say that a turn is waiting to be learned from."""
+        self._waiting.set()
+
+    async def run(self) -> None:
+        """Learn from each waiting turn, oldest first, until cancelled."""
+        while True:
+            await self._waiting.wait()
+            self._waiting.clear()
+            try:
+                await self._drain()
+            except Exception:
+                logger.exception("facts were not learned; trying at the next turn")
+
+    async def _drain(self) -> None:
+        while waiting := await self._store.to_learn(BATCH):
+            for turn in waiting:
+                if not await self._learn(turn):
+                    return
+
+    async def _learn(self, turn: Remembered) -> bool:
+        """Learn from ``turn``; False when it should be tried again later."""
+        try:
+            await self._keeper.learn(turn.id, turn.at, turn.question, turn.answer)
+        except StructuredOutputError:
+            logger.warning("no facts from turn %d: the answer was not valid", turn.id)
+        except GatewayError:
+            logger.warning("facts wait for the local model", exc_info=True)
+            return False
+        except Exception:
+            if await self._store.tried(turn.id, most=TRIES):
+                logger.exception("no facts from turn %d after %d tries", turn.id, TRIES)
+                return True
+            logger.exception("facts from turn %d wait for another try", turn.id)
+            return False
+        await self._store.learned(turn.id)
+        return True
 
 
 def _shown(known: Sequence[Fact], number: int | None) -> Fact | None:

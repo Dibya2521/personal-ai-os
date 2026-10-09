@@ -1,17 +1,34 @@
 import asyncio
 import logging
+import sqlite3
 from pathlib import Path
 
+import httpx
 import pytest
 
+from synthia.agent.policy import nobody_approves
+from synthia.agent.tools import Toolbox
+from synthia.gateway.assemble import build_gateway
 from synthia.kernel.config import Settings
 from synthia.memory.hybrid import Recall
 from synthia.memory.store import MEMORY_FILE, MemoryStore
 from synthia.models.install import BYTES_PER_GB, Installer
-from synthia.server.host import fill_in, filling_in, open_embedder, open_memory
+from synthia.persona.library import PersonaLibrary
+from synthia.server.host import (
+    Host,
+    fill_in,
+    in_background,
+    open_embedder,
+    open_learning,
+    open_memory,
+    publish_route,
+)
+from tests.agent.scripted import Scripted, says
+from tests.memory.test_facts import Watched, found, until_learned
 from tests.memory.test_hybrid import Network, embedder, remember
 from tests.memory.test_remembering import FailsAfterStart
 from tests.models.fakes import EMBEDDER, NETWORK, VOCABULARY
+from tests.server.test_daemon import Local
 
 
 def test_with_no_embedding_model_installed_memory_is_searched_by_words(
@@ -119,15 +136,84 @@ class Stuck(Recall):
         return 0
 
 
-async def test_filling_in_is_stopped_when_serving_ends(tmp_path: Path) -> None:
+async def test_work_in_the_background_is_stopped_when_serving_ends(
+    tmp_path: Path,
+) -> None:
     memory = Stuck(MemoryStore(tmp_path / MEMORY_FILE))
 
-    async with filling_in(memory):
+    async with in_background(fill_in(memory)):
         await asyncio.wait_for(memory.started.wait(), timeout=1)
 
     assert memory.cancelled
 
 
-async def test_without_memory_there_is_nothing_to_fill_in() -> None:
-    async with filling_in(None):
+async def test_with_no_work_the_background_is_empty() -> None:
+    async with in_background():
         pass
+
+
+async def test_facts_are_learned_only_with_memory_meaning_and_a_local_model(
+    tmp_path: Path,
+) -> None:
+    store = MemoryStore(tmp_path / MEMORY_FILE)
+    warnings: list[str] = []
+
+    without = [
+        await open_learning(None, Scripted(), warnings.append, local=True),
+        await open_learning(Recall(store), Scripted(), warnings.append, local=True),
+        await open_learning(
+            Recall(store, embedder(Network())), Scripted(), warnings.append, local=False
+        ),
+    ]
+    learning = await open_learning(
+        Recall(store, embedder(Network())), Scripted(), warnings.append, local=True
+    )
+
+    assert without == [None, None, None]
+    assert learning is not None
+    assert warnings == []
+
+
+async def test_a_finished_turn_is_learned_from_in_the_background(
+    tmp_path: Path,
+) -> None:
+    store = Watched(tmp_path / MEMORY_FILE)
+    memory = Recall(store, embedder(Network()))
+    model = Local(says("Noted."), found(("my cat is called miso", "fact")))
+    warnings: list[str] = []
+    async with httpx.AsyncClient() as client:
+        gateway = build_gateway(Settings(home=tmp_path), client, publish_route, model)
+        learning = await open_learning(
+            memory, gateway.model, warnings.append, local=gateway.router.has_local
+        )
+        host = Host(
+            gateway,
+            PersonaLibrary(),
+            "synthia",
+            Toolbox(),
+            memory=memory,
+            learning=learning,
+        )
+        conversation = host.conversation(nobody_approves)
+
+        async with in_background(*host.background()):
+            async for _ in conversation.turn("my cat is called miso"):
+                pass
+            await until_learned(store)
+
+    assert warnings == []
+    assert [f.text for f in await store.facts()] == ["my cat is called miso"]
+    assert model.requests[1].use_remote is False
+
+
+async def test_facts_that_cannot_be_read_are_warned_about(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path / MEMORY_FILE)
+    memory = Recall(store, embedder(Network()))
+    warnings: list[str] = []
+    with sqlite3.connect(tmp_path / MEMORY_FILE) as connection:
+        connection.execute("DROP TABLE fact_vectors")
+    connection.close()
+
+    assert await open_learning(memory, Scripted(), warnings.append, local=True) is None
+    (warning,) = warnings
+    assert warning.startswith("no facts will be learned: no such table")

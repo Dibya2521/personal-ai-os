@@ -1,14 +1,29 @@
+import asyncio
+import contextlib
 import json
+import logging
+import sqlite3
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from synthia.gateway.types import ChatChunk, Reasoning, Role
-from synthia.memory.facts import EXAMPLES, INSTRUCTIONS, FactKeeper, Learned
-from synthia.memory.store import FactKind, MemoryStore, Turn
+from synthia.gateway.errors import GatewayError
+from synthia.gateway.structured import DEFAULT_REPAIRS
+from synthia.gateway.types import ChatChunk, ChatRequest, Reasoning, Role
+from synthia.memory.facts import (
+    EXAMPLES,
+    INSTRUCTIONS,
+    TRIES,
+    FactKeeper,
+    FactLearning,
+    Learned,
+)
+from synthia.memory.store import FactKind, MemoryStore, Remembered, Turn
 from tests.agent.scripted import Scripted, says
 from tests.memory.test_hybrid import Network, embedder
+from tests.memory.test_remembering import FailsAfterStart
 from tests.models.fakes import EMBEDDER
 
 MONDAY = datetime(2026, 9, 28, 9, 0, tzinfo=UTC)
@@ -32,9 +47,43 @@ def found(*facts: tuple[str, str] | tuple[str, str, int]) -> list[ChatChunk]:
     )
 
 
+class Watched(MemoryStore):
+    """A store that says when a waiting turn has been dealt with."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.changed = asyncio.Event()
+
+    async def learned(self, turn: int) -> bool:
+        done = await super().learned(turn)
+        self.changed.set()
+        return done
+
+    async def tried(self, turn: int, *, most: int) -> bool:
+        dropped = await super().tried(turn, most=most)
+        self.changed.set()
+        return dropped
+
+
+class FailsOnce(Watched):
+    """A store whose first look for waiting turns fails."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.failed = False
+
+    async def to_learn(self, limit: int) -> list[Remembered]:
+        if not self.failed:
+            self.failed = True
+            self.changed.set()
+            message = "database is locked"
+            raise sqlite3.OperationalError(message)
+        return await super().to_learn(limit)
+
+
 @pytest.fixture
-def store(tmp_path: Path) -> MemoryStore:
-    return MemoryStore(tmp_path / "memory.db")
+def store(tmp_path: Path) -> Watched:
+    return Watched(tmp_path / "memory.db")
 
 
 async def a_turn(store: MemoryStore, question: str) -> int:
@@ -287,3 +336,156 @@ async def test_facts_held_before_are_loaded_and_changed_ones_left_out(
 
     assert await restarted.learn(first, LATER, "mumbai", "Noted.") == []
     assert len(await restarted.learn(first, LATER, "pune", "Noted.")) == 1
+
+
+async def test_facts_without_a_vector_are_embedded_when_loaded(
+    store: MemoryStore,
+) -> None:
+    turn = await a_turn(store, "my cat is called miso")
+    fact = await store.add_fact(turn, "my cat is called miso", FactKind.FACT, MONDAY)
+    model = Scripted(found(("my cat is called miso", "fact")))
+
+    facts = await keeper(store, model)
+
+    assert [v.fact for v in await store.fact_vectors(EMBEDDER.id)] == [fact]
+    assert await facts.learn(turn, LATER, "my cat is called miso", "Noted.") == []
+
+
+async def waiting_turn(store: MemoryStore, question: str) -> int:
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    return await store.add_turn(
+        chat, Turn(question, "Noted.", MONDAY, "SYNTHIA", "local", "m"), to_learn=True
+    )
+
+
+async def until_learned(store: Watched) -> None:
+    while True:
+        store.changed.clear()
+        if not await store.to_learn(1):
+            return
+        await asyncio.wait_for(store.changed.wait(), timeout=5)
+
+
+@contextlib.asynccontextmanager
+async def learning(
+    store: MemoryStore, model: Scripted, network: Network | None = None
+) -> AsyncGenerator[FactLearning]:
+    kept = FactKeeper(store, embedder(network or Network()), model)
+    await kept.load()
+    learner = FactLearning(kept, store)
+    task = asyncio.create_task(learner.run())
+    try:
+        yield learner
+    finally:
+        task.cancel()
+        await asyncio.wait([task])
+
+
+async def test_turns_left_waiting_are_learned_from_oldest_first_at_start(
+    store: Watched,
+) -> None:
+    await waiting_turn(store, "my cat is called miso")
+    await waiting_turn(store, "my sister lives in pune")
+    model = Scripted(
+        found(("my cat is called miso", "fact")),
+        found(("my sister lives in pune", "fact")),
+    )
+
+    async with learning(store, model):
+        await until_learned(store)
+
+    assert [r.messages[-1].text.split("\n")[4] for r in model.requests] == [
+        "my cat is called miso",
+        "my sister lives in pune",
+    ]
+    assert {text for text, _ in await held(store)} == {
+        "my cat is called miso",
+        "my sister lives in pune",
+    }
+
+
+async def test_a_turn_remembered_later_wakes_the_learner(store: Watched) -> None:
+    model = Scripted(found(("my cat is called miso", "fact")))
+
+    async with learning(store, model) as learner:
+        await waiting_turn(store, "my cat is called miso")
+        learner.wake()
+        await until_learned(store)
+
+    assert await held(store) == [("my cat is called miso", FactKind.FACT)]
+
+
+async def test_an_answer_that_is_never_valid_drops_its_turn_only(
+    store: Watched, caplog: pytest.LogCaptureFixture
+) -> None:
+    await waiting_turn(store, "my cat is called miso")
+    await waiting_turn(store, "my sister lives in pune")
+    model = Scripted(
+        *[says("not json")] * (DEFAULT_REPAIRS + 1),
+        found(("my sister lives in pune", "fact")),
+    )
+
+    with caplog.at_level(logging.WARNING, "synthia.memory.facts"):
+        async with learning(store, model):
+            await until_learned(store)
+
+    assert await held(store) == [("my sister lives in pune", FactKind.FACT)]
+    assert "the answer was not valid" in caplog.text
+
+
+async def test_a_model_that_does_not_answer_leaves_the_turn_waiting(
+    store: Watched,
+) -> None:
+    turn = await waiting_turn(store, "my cat is called miso")
+    asked = asyncio.Event()
+
+    def down(_: ChatRequest) -> list[ChatChunk]:
+        asked.set()
+        message = "the local model is not running"
+        raise GatewayError(message)
+
+    model = Scripted(down, found(("my cat is called miso", "fact")))
+
+    async with learning(store, model) as learner:
+        await asyncio.wait_for(asked.wait(), timeout=5)
+        assert [t.id for t in await store.to_learn(5)] == [turn]
+        learner.wake()
+        await until_learned(store)
+
+    assert await held(store) == [("my cat is called miso", FactKind.FACT)]
+
+
+async def test_a_turn_that_fails_otherwise_is_tried_again_then_dropped(
+    store: Watched, caplog: pytest.LogCaptureFixture
+) -> None:
+    turn = await waiting_turn(store, "my cat is called miso")
+
+    with caplog.at_level(logging.ERROR, "synthia.memory.facts"):
+        async with learning(store, Scripted(), FailsAfterStart()) as learner:
+            for _ in range(TRIES - 1):
+                await asyncio.wait_for(store.changed.wait(), timeout=5)
+                store.changed.clear()
+                assert [t.id for t in await store.to_learn(5)] == [turn]
+                learner.wake()
+            await until_learned(store)
+
+    assert await store.facts() == []
+    assert caplog.text.count(f"facts from turn {turn} wait for another try") == 2
+    assert f"no facts from turn {turn} after 3 tries" in caplog.text
+
+
+async def test_a_store_that_fails_is_logged_and_the_learner_goes_on(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = FailsOnce(tmp_path / "memory.db")
+    model = Scripted(found(("my cat is called miso", "fact")))
+
+    with caplog.at_level(logging.ERROR, "synthia.memory.facts"):
+        async with learning(store, model) as learner:
+            await asyncio.wait_for(store.changed.wait(), timeout=5)
+            await waiting_turn(store, "my cat is called miso")
+            learner.wake()
+            await until_learned(store)
+
+    assert "facts were not learned" in caplog.text
+    assert await held(store) == [("my cat is called miso", FactKind.FACT)]

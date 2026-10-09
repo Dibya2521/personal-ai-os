@@ -6,7 +6,9 @@ written is logged and the conversation goes on, as a trace that cannot be
 written does: memory is kept beside the answers, never in their way. The same
 holds for the vector of a turn's meaning, made after the turn is written; a
 turn left without one is embedded at the daemon's next start, and for the
-reminder of earlier conversations put before each question.
+reminder of earlier conversations put before each question. With facts being
+learned, each remembered turn also waits for the background learner, which is
+woken, never awaited.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from datetime import tzinfo
 
+    from synthia.memory.facts import FactLearning
     from synthia.memory.hybrid import Recall
     from synthia.memory.store import Turn
 
@@ -41,10 +44,12 @@ REMINDER_HEADER: Final = (
 class Remembering:
     """Keep one conversation's turns in ``recall``'s store unless it is private."""
 
-    def __init__(self, recall: Recall) -> None:
+    def __init__(self, recall: Recall, learning: FactLearning | None = None) -> None:
+        """Remember into ``recall``; with ``learning``, learn facts from each turn."""
         self.private = False
         self._recall = recall
         self._store = recall.store
+        self._learning = learning
         self._conversation: int | None = None
         self._last: int | None = None
 
@@ -57,10 +62,14 @@ class Remembering:
                 self._conversation = await self._store.begin_conversation(
                     turn.persona, turn.at
                 )
-            self._last = await self._store.add_turn(self._conversation, turn)
+            self._last = await self._store.add_turn(
+                self._conversation, turn, to_learn=self._learning is not None
+            )
         except (sqlite3.Error, OSError):
             logger.exception("a turn was not remembered")
             return
+        if self._learning is not None:
+            self._learning.wake()
         try:
             await self._recall.keep(Asked(self._last, turn.at, turn.question))
         except Exception:

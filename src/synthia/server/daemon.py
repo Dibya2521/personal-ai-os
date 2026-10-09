@@ -39,9 +39,10 @@ from synthia.server.host import (
     PERSONAS_DIR,
     TIMEOUT,
     Host,
-    filling_in,
+    in_background,
     no_local_model,
     open_embedder,
+    open_learning,
     open_memory,
     publish_route,
     start_tools,
@@ -163,8 +164,12 @@ async def run_daemon(
             logger.warning("%s", text)
 
         memory = await open_memory(settings, warn, open_embedder(settings, warn))
-        remembered = () if memory is None else (memory_tool(memory),)
-        tools, servers = await start_tools(settings, warn, transport, remembered)
+        learning = await open_learning(
+            memory, gateway.model, warn, local=gateway.router.has_local
+        )
+        tools, servers = await start_tools(
+            settings, warn, transport, () if memory is None else (memory_tool(memory),)
+        )
         library = PersonaLibrary(settings.home / PERSONAS_DIR)
         traces = settings.home / TRACES
         local_state = no_local_model
@@ -181,8 +186,9 @@ async def run_daemon(
                 tuple(warnings),
                 local_state,
                 memory,
+                learning,
             )
-            async with filling_in(memory):
+            async with in_background(*host.background()):
                 await serve(host, settings.home, stop=stop)
         finally:
             if local is not None:

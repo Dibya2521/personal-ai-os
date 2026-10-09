@@ -26,6 +26,7 @@ from synthia.agent.trace import Trace
 from synthia.kernel.errors import ConfigError
 from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
 from synthia.memory.embed import EmbedError, TextEmbedder
+from synthia.memory.facts import FactKeeper, FactLearning
 from synthia.memory.hybrid import Recall
 from synthia.memory.remembering import Remembering
 from synthia.memory.store import MEMORY_FILE, MemoryStore
@@ -37,11 +38,18 @@ from synthia.server.session import ChatSession, LastRoute
 from synthia.tools import local_tools, outside_tools
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Iterable, Sequence
+    from collections.abc import (
+        AsyncGenerator,
+        Callable,
+        Coroutine,
+        Iterable,
+        Sequence,
+    )
 
     from synthia.agent.policy import Approver
     from synthia.agent.tools import Tool, Toolbox
     from synthia.gateway.assemble import Gateway
+    from synthia.gateway.protocol import ChatModel
     from synthia.kernel.bus import Event
     from synthia.kernel.config import Settings
     from synthia.models.catalogue import Embedder
@@ -143,18 +151,43 @@ async def fill_in(memory: Recall) -> None:
         logger.info("embedded %d earlier turns", done)
 
 
+async def open_learning(
+    memory: Recall | None,
+    model: ChatModel,
+    warn: Callable[[str], None],
+    *,
+    local: bool,
+) -> FactLearning | None:
+    """Return the learner of facts about the person, or None when it cannot run.
+
+    It needs memory, an embedding model and a ``local`` model: facts are
+    written on this machine and compared by meaning. A memory whose facts
+    cannot be read is passed to ``warn``.
+    """
+    if memory is None or memory.embedder is None or not local:
+        return None
+    keeper = FactKeeper(memory.store, memory.embedder, model)
+    try:
+        await keeper.load()
+    except (sqlite3.Error, OSError, EmbedError) as error:
+        warn(f"no facts will be learned: {error}")
+        return None
+    return FactLearning(keeper, memory.store)
+
+
 @asynccontextmanager
-async def filling_in(memory: Recall | None) -> AsyncGenerator[None]:
-    """Embed earlier turns in the background while the block runs; stop at its end."""
-    if memory is None:
-        yield
-        return
-    task = asyncio.create_task(fill_in(memory))
+async def in_background(
+    *work: Coroutine[object, object, None],
+) -> AsyncGenerator[None]:
+    """Run each of ``work`` while the block runs; cancel what is left at its end."""
+    tasks = [asyncio.create_task(each) for each in work]
     try:
         yield
     finally:
-        task.cancel()
-        await asyncio.wait([task])
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.wait(tasks)
 
 
 def no_local_model() -> str:
@@ -174,6 +207,16 @@ class Host:
     warnings: tuple[str, ...] = ()
     local_state: Callable[[], str] = no_local_model
     memory: Recall | None = None
+    learning: FactLearning | None = None
+
+    def background(self) -> list[Coroutine[object, object, None]]:
+        """Return the work that runs beside serving: embedding and learning."""
+        work: list[Coroutine[object, object, None]] = []
+        if self.memory is not None:
+            work.append(fill_in(self.memory))
+        if self.learning is not None:
+            work.append(self.learning.run())
+        return work
 
     def conversation(self, approver: Approver) -> Conversation:
         """Return a new conversation that asks ``approver`` before each call."""
@@ -185,7 +228,9 @@ class Host:
             tools=self.tools,
             approver=approver,
             trace=None if self.traces is None else Trace.start(self.traces),
-            memory=None if self.memory is None else Remembering(self.memory),
+            memory=(
+                None if self.memory is None else Remembering(self.memory, self.learning)
+            ),
             summarizer=(
                 partial(summarize, self.gateway.model)
                 if self.gateway.router.has_local

@@ -405,3 +405,62 @@ async def test_forgetting_a_topic_takes_what_holds_all_its_words(
     assert asked(await store.search("Asha")) == ["Asha from work called"]
     assert [f.text for f in await store.facts()] == ["Works with Asha."]
     assert await store.forget_about(" ?! ") == Forgotten(0, ())
+
+
+async def test_turns_to_learn_from_wait_oldest_first_until_learned(
+    store: MemoryStore,
+) -> None:
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    first = await store.add_turn(chat, said("first", "a", MONDAY), to_learn=True)
+    await store.add_turn(chat, said("not asked", "b", MONDAY))
+    second = await store.add_turn(chat, said("second", "c", MONDAY), to_learn=True)
+    third = await store.add_turn(chat, said("third", "d", MONDAY), to_learn=True)
+
+    waiting = await store.to_learn(2)
+
+    assert [(t.id, t.question, t.answer) for t in waiting] == [
+        (first, "first", "a"),
+        (second, "second", "c"),
+    ]
+    assert await store.learned(first)
+    assert not await store.learned(first)
+    assert [t.id for t in await store.to_learn(10)] == [second, third]
+
+
+async def test_a_turn_stops_waiting_at_its_last_failed_try(store: MemoryStore) -> None:
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    turn = await store.add_turn(chat, said("q", "a", MONDAY), to_learn=True)
+
+    tries = [await store.tried(turn, most=3) for _ in range(3)]
+
+    assert tries == [False, False, True]
+    assert await store.to_learn(10) == []
+    assert not await store.tried(turn, most=3)
+
+
+async def test_a_forgotten_turn_no_longer_waits_to_be_learned_from(
+    store: MemoryStore,
+) -> None:
+    chat = await store.begin_conversation("SYNTHIA", MONDAY)
+    turn = await store.add_turn(chat, said("q", "a", MONDAY), to_learn=True)
+
+    await store.forget_turn(turn)
+
+    assert await store.to_learn(10) == []
+
+
+async def test_a_store_made_before_the_learning_queue_gains_it_empty(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "memory.db"
+    older = MemoryStore(path)
+    await older.add_turn(
+        await older.begin_conversation("SYNTHIA", MONDAY), said("q", "a", MONDAY)
+    )
+    with sqlite3.connect(path) as connection:
+        connection.execute("DROP TABLE facts_pending")
+    connection.close()
+
+    reopened = MemoryStore(path)
+
+    assert await reopened.to_learn(10) == []

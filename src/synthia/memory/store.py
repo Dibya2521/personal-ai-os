@@ -132,6 +132,12 @@ CREATE TABLE IF NOT EXISTS fact_vectors (
     vector BLOB NOT NULL
 )
 """,
+    """
+CREATE TABLE IF NOT EXISTS facts_pending (
+    turn INTEGER PRIMARY KEY REFERENCES turns(id) ON DELETE CASCADE,
+    attempts INTEGER NOT NULL DEFAULT 0
+)
+""",
 )
 _COLUMNS: Final = "t.id, t.conversation, t.at, t.question, t.answer"
 
@@ -277,9 +283,15 @@ class MemoryStore:
         """Record a conversation starting now and return its id."""
         return await asyncio.to_thread(self._begin, persona, at)
 
-    async def add_turn(self, conversation: int, turn: Turn) -> int:
-        """Remember ``turn`` in ``conversation`` and return its id."""
-        return await asyncio.to_thread(self._add, conversation, turn)
+    async def add_turn(
+        self, conversation: int, turn: Turn, *, to_learn: bool = False
+    ) -> int:
+        """Remember ``turn`` in ``conversation`` and return its id.
+
+        With ``to_learn``, the turn also waits in :meth:`to_learn` until
+        :meth:`learned`, kept in the same transaction so a stop loses neither.
+        """
+        return await asyncio.to_thread(self._add, conversation, turn, to_learn=to_learn)
 
     async def search(
         self,
@@ -359,6 +371,21 @@ class MemoryStore:
         """
         return await asyncio.to_thread(self._forget_about, words)
 
+    async def to_learn(self, limit: int) -> list[Remembered]:
+        """Return up to ``limit`` turns waiting to be learned from, oldest first."""
+        return await asyncio.to_thread(self._to_learn, limit)
+
+    async def learned(self, turn: int) -> bool:
+        """Stop ``turn`` waiting to be learned from; False if it was not waiting."""
+        return await asyncio.to_thread(self._learned, turn)
+
+    async def tried(self, turn: int, *, most: int) -> bool:
+        """Count a failed try at learning from ``turn``.
+
+        True when that was try ``most`` and the turn stopped waiting.
+        """
+        return await asyncio.to_thread(self._tried, turn, most)
+
     async def put_fact_vectors(
         self, model: str, vectors: Sequence[tuple[int, bytes]]
     ) -> list[int]:
@@ -411,7 +438,7 @@ class MemoryStore:
             )
             return int(cursor.lastrowid or 0)
 
-    def _add(self, conversation: int, turn: Turn) -> int:
+    def _add(self, conversation: int, turn: Turn, *, to_learn: bool) -> int:
         calls = "\n".join(f"{use.name} {use.arguments}" for use in turn.tools)
         with self._transaction() as connection:
             cursor = connection.execute(
@@ -444,6 +471,10 @@ class MemoryStore:
                     for position, use in enumerate(turn.tools)
                 ],
             )
+            if to_learn:
+                connection.execute(
+                    "INSERT INTO facts_pending (turn) VALUES (?)", (turn_id,)
+                )
             return turn_id
 
     def _search(
@@ -581,6 +612,34 @@ class MemoryStore:
                 )
             )
         return found
+
+    def _to_learn(self, limit: int) -> list[Remembered]:
+        with self._opened() as connection:
+            rows = connection.execute(
+                f"SELECT {_COLUMNS} FROM turns t"  # noqa: S608 - constant columns
+                " JOIN facts_pending p ON p.turn = t.id ORDER BY t.id LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return self._remembered(connection, rows)
+
+    def _learned(self, turn: int) -> bool:
+        with self._opened() as connection:
+            cursor = connection.execute(
+                "DELETE FROM facts_pending WHERE turn = ?", (turn,)
+            )
+            return cursor.rowcount > 0
+
+    def _tried(self, turn: int, most: int) -> bool:
+        with self._transaction() as connection:
+            connection.execute(
+                "UPDATE facts_pending SET attempts = attempts + 1 WHERE turn = ?",
+                (turn,),
+            )
+            cursor = connection.execute(
+                "DELETE FROM facts_pending WHERE turn = ? AND attempts >= ?",
+                (turn, most),
+            )
+            return cursor.rowcount > 0
 
     def _forget_turn(self, turn: int) -> bool:
         with self._opened() as connection:
