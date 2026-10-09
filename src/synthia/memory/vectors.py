@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Final
 import numpy as np
 
 if TYPE_CHECKING:
-    from collections.abc import Collection
+    from collections.abc import Collection, Iterator
     from datetime import datetime
 
     from numpy.typing import NDArray
@@ -84,6 +84,10 @@ class VectorSet:
     def __contains__(self, id_: object) -> bool:
         """Return whether a vector is held for ``id_``."""
         return id_ in self._rows
+
+    def __iter__(self) -> Iterator[int]:
+        """Iterate over the ids of the held vectors."""
+        return iter(self._rows)
 
     def add(self, id_: int, at: datetime, vector: Vectors) -> None:
         """Hold ``vector`` for the turn ``id_`` from ``at``, replacing any before.

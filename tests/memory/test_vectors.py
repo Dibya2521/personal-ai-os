@@ -63,6 +63,7 @@ def test_a_removed_vector_is_never_found_and_the_rest_still_are(
 
     assert found == pytest.approx({2: 0.0, 3: HALF})
     assert (len(three), 1 in three, 3 in three) == (2, False, True)
+    assert sorted(three) == [2, 3]
 
 
 def test_the_vector_moved_into_a_removed_place_can_be_removed_too(
