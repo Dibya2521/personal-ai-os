@@ -15,7 +15,9 @@ Methods, client to daemon:
   is error ``-32001`` with the reason, an image that cannot be sent ``-32002``.
 - ``think`` {``level``}, ``remote`` {``on``}, ``private`` {``on``}, ``persona``
   {``key``}, ``adjust`` {``values``}, ``budget``, ``model``, ``tools``,
-  ``reset``, ``forget`` return a reply: ``notes`` and ``errors``, lines to show.
+  ``reset``, ``forget``, ``facts``, ``forget_fact`` {``fact``: its number},
+  ``forget_about`` {``words``} return a reply: ``notes`` and ``errors``, lines
+  to show.
 - ``status`` {} returns how many ``sessions`` the daemon holds and the
   ``local`` model's state: ``ready``, ``starting``, ``stopped`` or ``none``.
 - ``stop`` {} stops the daemon.
@@ -95,6 +97,18 @@ class AdjustParams(_Params):
     """Trait sliders to move."""
 
     values: dict[str, float] = Field(min_length=1)
+
+
+class FactParams(_Params):
+    """The number of a fact, as ``facts`` lists it."""
+
+    fact: int = Field(ge=1)
+
+
+class WordsParams(_Params):
+    """Words that whatever is forgotten holds, all of them."""
+
+    words: str = Field(min_length=1)
 
 
 class EmptyParams(_Params):
@@ -202,6 +216,9 @@ class Served:
             "reset": self._reset,
             "private": self._private,
             "forget": self._forget,
+            "facts": self._facts,
+            "forget_fact": self._forget_fact,
+            "forget_about": self._forget_about,
             "status": self._status,
             "stop": self._stop,
         }
@@ -230,6 +247,18 @@ class Served:
     async def _forget(self, params: Params) -> object:
         checked(EmptyParams, params)
         return reply_of(await self.conversation.forget())
+
+    async def _facts(self, params: Params) -> object:
+        checked(EmptyParams, params)
+        return reply_of(await self.conversation.facts())
+
+    async def _forget_fact(self, params: Params) -> object:
+        fact = checked(FactParams, params).fact
+        return reply_of(await self.conversation.forget_fact(fact))
+
+    async def _forget_about(self, params: Params) -> object:
+        words = checked(WordsParams, params).words
+        return reply_of(await self.conversation.forget_about(words))
 
     async def _persona(self, params: Params) -> object:
         key = checked(PersonaParams, params).key

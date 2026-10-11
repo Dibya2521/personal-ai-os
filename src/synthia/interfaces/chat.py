@@ -26,6 +26,8 @@ from synthia.interfaces.commands import (
     Command,
     Exit,
     Forget,
+    ForgetAbout,
+    ForgetFact,
     Help,
     Invalid,
     KeepPrivate,
@@ -33,6 +35,7 @@ from synthia.interfaces.commands import (
     Reset,
     Say,
     ShowBudget,
+    ShowFacts,
     ShowImage,
     ShowModel,
     ShowTools,
@@ -354,16 +357,17 @@ class ChatApp[T: Talk]:
         | UseRemote
         | KeepPrivate
         | Forget
+        | ShowFacts
+        | ForgetFact
+        | ForgetAbout
         | ShowModel
         | ShowTools
         | Reset,
     ) -> Reply:
         conversation = self.conversation
         match command:
-            case KeepPrivate(on=on):
-                reply = await conversation.private(on=on)
-            case Forget():
-                reply = await conversation.forget()
+            case KeepPrivate() | Forget() | ShowFacts() | ForgetFact() | ForgetAbout():
+                reply = await self._memory_reply(command)
             case SwitchPersona(key=key):
                 reply = await conversation.persona(key)
             case AdjustPersona(values=values):
@@ -379,6 +383,22 @@ class ChatApp[T: Talk]:
             case _:
                 reply = await conversation.reset()
         return reply
+
+    async def _memory_reply(
+        self, command: KeepPrivate | Forget | ShowFacts | ForgetFact | ForgetAbout
+    ) -> Reply:
+        conversation = self.conversation
+        match command:
+            case KeepPrivate(on=on):
+                return await conversation.private(on=on)
+            case Forget():
+                return await conversation.forget()
+            case ShowFacts():
+                return await conversation.facts()
+            case ForgetFact(fact=fact):
+                return await conversation.forget_fact(fact)
+            case _:
+                return await conversation.forget_about(command.words)
 
     def _say(self, reply: Reply) -> None:
         for line in reply.notes:

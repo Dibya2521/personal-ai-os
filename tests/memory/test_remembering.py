@@ -1,6 +1,6 @@
 import logging
 import sqlite3
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 
 import numpy as np
@@ -9,10 +9,15 @@ import pytest
 from synthia.memory.embed import Feeds
 from synthia.memory.facts import FactKeeper, FactLearning
 from synthia.memory.hybrid import Recall
-from synthia.memory.remembering import REMINDED, REMINDER_HEADER, Remembering
-from synthia.memory.store import MemoryStore, Turn
+from synthia.memory.remembering import (
+    PINNED_HEADER,
+    REMINDED,
+    REMINDER_HEADER,
+    Remembering,
+)
+from synthia.memory.store import Fact, FactKind, Forgotten, MemoryStore, Turn
 from tests.agent.scripted import Scripted
-from tests.memory.test_hybrid import Network, embedder
+from tests.memory.test_hybrid import Network, asked, embedder
 from tests.models.fakes import EMBEDDER
 
 AT = datetime(2026, 10, 3, 12, 0, tzinfo=UTC)
@@ -194,3 +199,229 @@ async def test_without_facts_learned_no_turn_waits(store: MemoryStore) -> None:
     await Remembering(Recall(store)).remember(turn("my cat is called miso"))
 
     assert await store.to_learn(5) == []
+
+
+async def learned(store: MemoryStore, *texts: str) -> list[int]:
+    """Keep ``texts`` as facts learned a minute apart, oldest first."""
+    conversation = await store.begin_conversation("SYNTHIA", AT)
+    source = await store.add_turn(conversation, turn("about me"))
+    ids: list[int] = []
+    for minute, text in enumerate(texts):
+        at = AT + timedelta(minutes=minute)
+        fact = await store.add_fact(source, text, FactKind.FACT, at)
+        assert fact is not None
+        ids.append(fact)
+    return ids
+
+
+async def source_of(store: MemoryStore) -> int:
+    """Return the turn the facts were learned from."""
+    return (await store.facts())[0].turn
+
+
+async def test_pinned_facts_are_the_ones_held_newest_first(store: MemoryStore) -> None:
+    pune, _, mumbai = await learned(
+        store, "Lives in Pune.", "Has a cat named Miso.", "Lives in Mumbai."
+    )
+    await store.end_fact(pune, AT + timedelta(minutes=3), mumbai)
+
+    pinned = await Remembering(Recall(store)).pinned(1000)
+
+    assert pinned == f"{PINNED_HEADER}\n- Lives in Mumbai.\n- Has a cat named Miso."
+
+
+async def test_pinned_facts_end_at_the_last_whole_fact_that_fits(
+    store: MemoryStore,
+) -> None:
+    await learned(store, "Has a cat named Miso.", "Lives in Mumbai.")
+    newest = f"{PINNED_HEADER}\n- Lives in Mumbai."
+    both = f"{newest}\n- Has a cat named Miso."
+
+    async def pinned(max_chars: int) -> str:
+        return await Remembering(Recall(store)).pinned(max_chars)
+
+    assert await pinned(len(both)) == both
+    assert await pinned(len(both) - 1) == newest
+    assert await pinned(len(newest)) == newest
+    assert await pinned(len(newest) - 1) == ""
+
+
+async def test_nothing_is_pinned_before_any_fact_is_learned(
+    store: MemoryStore,
+) -> None:
+    assert await Remembering(Recall(store)).pinned(1000) == ""
+
+
+async def test_facts_that_cannot_be_read_pin_nothing_and_are_logged(
+    store: MemoryStore,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def broken(*, held: bool = True) -> list[Fact]:
+        del held
+        message = "database is locked"
+        raise sqlite3.OperationalError(message)
+
+    await learned(store, "Has a cat named Miso.")
+    memory = Remembering(Recall(store))
+    monkeypatch.setattr(store, "facts", broken)
+
+    with caplog.at_level(logging.ERROR, "synthia.memory.remembering"):
+        pinned = await memory.pinned(1000)
+    monkeypatch.undo()
+
+    assert pinned == ""
+    assert "facts about the person were not read" in caplog.text
+    assert await memory.pinned(1000) == f"{PINNED_HEADER}\n- Has a cat named Miso."
+
+
+async def test_facts_that_cannot_be_read_later_pin_nothing_for_that_turn_only(
+    store: MemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(*, held: bool = True) -> list[Fact]:
+        del held
+        message = "database is locked"
+        raise sqlite3.OperationalError(message)
+
+    await learned(store, "Has a cat named Miso.")
+    memory = Remembering(Recall(store))
+    first = await memory.pinned(1000)
+    monkeypatch.setattr(store, "facts", broken)
+    unread = await memory.pinned(1000)
+    monkeypatch.undo()
+    await store.add_fact(await source_of(store), "Lives in Mumbai.", FactKind.FACT, AT)
+
+    assert unread == ""
+    assert (
+        await memory.pinned(1000)
+        == first
+        == (f"{PINNED_HEADER}\n- Has a cat named Miso.")
+    )
+
+
+async def test_a_pinned_fact_the_learner_ends_stays_pinned_until_the_next_conversation(
+    store: MemoryStore,
+) -> None:
+    (pune,) = await learned(store, "Lives in Pune.")
+    memory = Remembering(Recall(store))
+    first = await memory.pinned(1000)
+    later = AT + timedelta(minutes=1)
+    mumbai = await store.add_fact(
+        await source_of(store), "Lives in Mumbai.", FactKind.FACT, later
+    )
+    assert mumbai is not None
+    await store.end_fact(pune, later, mumbai)
+
+    assert await memory.pinned(1000) == first == f"{PINNED_HEADER}\n- Lives in Pune."
+    memory.begin_again()
+    assert await memory.pinned(1000) == f"{PINNED_HEADER}\n- Lives in Mumbai."
+
+
+async def test_pinned_facts_are_taken_once_until_one_of_them_is_forgotten(
+    store: MemoryStore,
+) -> None:
+    (miso,) = await learned(store, "Has a cat named Miso.")
+    here, elsewhere = Remembering(Recall(store)), Remembering(Recall(store))
+    first = await here.pinned(1000)
+    await store.add_fact(await source_of(store), "Lives in Mumbai.", FactKind.FACT, AT)
+
+    unchanged = await here.pinned(1000)
+    await elsewhere.forget_fact(miso)
+
+    assert unchanged == first == f"{PINNED_HEADER}\n- Has a cat named Miso."
+    assert await here.pinned(1000) == f"{PINNED_HEADER}\n- Lives in Mumbai."
+
+
+async def test_a_pinned_fact_whose_id_went_to_a_new_fact_is_taken_afresh(
+    store: MemoryStore,
+) -> None:
+    _, pune = await learned(store, "Has a cat named Miso.", "Lives in Pune.")
+    memory = Remembering(Recall(store))
+    await memory.pinned(1000)
+    source = await source_of(store)
+    await store.forget_fact(pune)
+    later = AT + timedelta(minutes=5)
+
+    reused = await store.add_fact(source, "Lives in Mumbai.", FactKind.FACT, later)
+
+    assert reused == pune
+    assert await memory.pinned(1000) == (
+        f"{PINNED_HEADER}\n- Lives in Mumbai.\n- Has a cat named Miso."
+    )
+
+
+async def test_a_new_conversation_takes_the_facts_afresh(store: MemoryStore) -> None:
+    await learned(store, "Has a cat named Miso.")
+    memory = Remembering(Recall(store))
+    await memory.pinned(1000)
+    await store.add_fact(await source_of(store), "Lives in Mumbai.", FactKind.FACT, AT)
+
+    memory.begin_again()
+
+    assert await memory.pinned(1000) == (
+        f"{PINNED_HEADER}\n- Lives in Mumbai.\n- Has a cat named Miso."
+    )
+
+
+async def test_a_forgotten_fact_comes_back_once_and_is_held_no_more(
+    store: MemoryStore,
+) -> None:
+    miso, mumbai = await learned(store, "Has a cat named Miso.", "Lives in Mumbai.")
+    memory = Remembering(Recall(store))
+
+    forgotten = await memory.forget_fact(miso)
+
+    assert forgotten is not None
+    assert forgotten.text == "Has a cat named Miso."
+    assert await memory.forget_fact(miso) is None
+    assert [f.id for f in await memory.facts()] == [mumbai]
+
+
+async def test_forgetting_the_newer_version_of_a_fact_leaves_the_older_ended(
+    store: MemoryStore,
+) -> None:
+    pune, mumbai = await learned(store, "Lives in Pune.", "Lives in Mumbai.")
+    moved = AT + timedelta(minutes=2)
+    await store.end_fact(pune, moved, mumbai)
+    memory = Remembering(Recall(store))
+
+    await memory.forget_fact(mumbai)
+
+    assert await memory.facts() == []
+    (older,) = await store.facts(held=False)
+    assert (older.text, older.until, older.replaced_by) == (
+        "Lives in Pune.",
+        moved,
+        None,
+    )
+
+
+async def test_a_forgotten_topic_leaves_recall_and_the_last_turn_stays(
+    store: MemoryStore,
+) -> None:
+    recall = Recall(store, embedder(Network()))
+    memory = Remembering(recall)
+    await memory.remember(turn("my cat is called miso"))
+    await memory.remember(turn("my sister lives in pune"))
+
+    forgotten = await memory.forget_about("miso")
+
+    assert forgotten == Forgotten(0, (1,))
+    # A vector left behind would take the one place and fetch nothing.
+    assert asked(await recall.find("pet", limit=1)) == ["my sister lives in pune"]
+    assert await memory.forget_last()
+
+
+async def test_forget_never_takes_a_turn_of_another_conversation(
+    store: MemoryStore,
+) -> None:
+    recall = Recall(store, embedder(Network()))
+    here, elsewhere = Remembering(recall), Remembering(recall)
+    await here.remember(turn("my cat is called miso"))
+    await elsewhere.forget_about("miso")
+    # SQLite gives the freed id to the next turn, wherever it is said.
+    await elsewhere.remember(turn("my sister lives in pune"))
+
+    assert not await here.forget_last()
+    assert [t.id for t in await store.search("")] == [1]
+    assert asked(await recall.find("pet", limit=1)) == ["my sister lives in pune"]

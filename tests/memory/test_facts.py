@@ -275,6 +275,44 @@ async def test_a_replacement_that_repeats_another_fact_ends_the_old_one_by_it(
     assert (old.until, old.replaced_by) == (LATER, mumbai)
 
 
+class ForgetsWhileAnswering(Scripted):
+    """A model during whose answer the person forgets ``fact``."""
+
+    def __init__(self, store: MemoryStore, *replies: list[ChatChunk]) -> None:
+        super().__init__(*replies)
+        self.store = store
+        self.fact: int | None = None
+
+    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
+        if self.fact is not None:
+            await self.store.forget_fact(self.fact)
+        async for chunk in super().stream(request):
+            yield chunk
+
+
+async def test_a_fact_forgotten_while_the_model_answers_is_not_repeated_by_its_answer(
+    store: MemoryStore,
+) -> None:
+    turn = await a_turn(store, "my sister lives in pune")
+    model = ForgetsWhileAnswering(
+        store,
+        found(
+            ("my sister lives in pune", "fact"), ("my sister lives in mumbai", "fact")
+        ),
+        found(("my sister lives in mumbai", "fact", 1)),
+    )
+    facts = await keeper(store, model)
+    pune, model.fact = await facts.learn(
+        turn, MONDAY, "my sister lives in pune", "Noted."
+    )
+
+    (mumbai,) = await facts.learn(turn, LATER, "my sister lives in pune", "Noted.")
+
+    assert await held(store) == [("my sister lives in mumbai", FactKind.FACT)]
+    old = next(f for f in await store.facts(held=False) if f.id == pune)
+    assert (old.until, old.replaced_by) == (LATER, mumbai)
+
+
 async def test_a_number_that_was_not_shown_replaces_nothing(store: MemoryStore) -> None:
     turn = await a_turn(store, "my sister lives in pune")
     model = Scripted(

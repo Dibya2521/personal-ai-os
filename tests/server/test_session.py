@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -17,8 +18,8 @@ from synthia.gateway.types import (
 )
 from synthia.kernel.bus import Event
 from synthia.memory.hybrid import Recall
-from synthia.memory.remembering import REMINDER_HEADER, Remembering
-from synthia.memory.store import MemoryStore
+from synthia.memory.remembering import PINNED_HEADER, REMINDER_HEADER, Remembering
+from synthia.memory.store import FactKind, MemoryStore
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
 from synthia.server.session import (
@@ -29,7 +30,7 @@ from synthia.server.session import (
     TurnReport,
     load_image,
 )
-from tests.memory.test_hybrid import Network, embedder, remember
+from tests.memory.test_hybrid import MONDAY, Network, embedder, remember
 
 INFO = ModelInfo("fake", 1000, vision=True, tools=False)
 
@@ -122,6 +123,33 @@ async def test_close_earlier_turns_go_before_the_question_not_into_the_history(
     assert chat.history[0].text == question
     assert model.requests[1].messages[1].text == question
     assert [t.question for t in await store.search("name pet")] == [question]
+
+
+async def test_facts_are_pinned_once_a_conversation_and_again_after_a_reset(
+    library: PersonaLibrary, tmp_path: Path
+) -> None:
+    store = MemoryStore(tmp_path / "memory.db")
+    (source,) = await remember(store, "about me")
+    await store.add_fact(source, "Has a cat named Miso.", FactKind.FACT, MONDAY)
+    model = Echo()
+    chat = ChatSession(
+        model, library, "synthia", clock=Ticks(), memory=Remembering(Recall(store))
+    )
+
+    await run(chat, "one")
+    later = MONDAY + timedelta(minutes=1)
+    await store.add_fact(source, "Lives in Mumbai.", FactKind.FACT, later)
+    await run(chat, "two")
+    chat.reset()
+    await run(chat, "three")
+
+    persona = library.get("synthia").system_prompt()
+    cat = f"{persona}\n\n{PINNED_HEADER}\n- Has a cat named Miso."
+    assert [r.messages[0].text for r in model.requests] == [
+        cat,
+        cat,
+        f"{persona}\n\n{PINNED_HEADER}\n- Lives in Mumbai.\n- Has a cat named Miso.",
+    ]
 
 
 async def test_every_request_starts_with_the_persona_and_carries_the_history(

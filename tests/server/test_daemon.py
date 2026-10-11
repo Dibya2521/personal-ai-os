@@ -264,11 +264,18 @@ async def test_commands_answer_with_lines_to_show(tmp_path: Path) -> None:
             await talk.call("reset"),
             await talk.call("private", {"on": True}),
             await talk.call("forget"),
+            await talk.call("facts"),
+            await talk.call("forget_fact", {"fact": 1}),
+            await talk.call("forget_about", {"words": "miso"}),
         ]
 
+    no_memory = {"notes": ["nothing is remembered in this conversation"], "errors": []}
     assert replies[4:] == [
-        {"notes": ["nothing is remembered in this conversation"], "errors": []},
+        no_memory,
         {"notes": ["no turn to forget"], "errors": []},
+        no_memory,
+        no_memory,
+        no_memory,
     ]
     assert replies[:4] == [
         {
@@ -298,8 +305,17 @@ async def test_commands_answer_with_lines_to_show(tmp_path: Path) -> None:
         ("turn", {"text": "hi", "colour": "red"}, "colour: Extra inputs"),
         ("think", {"level": "max"}, "level: Input should be"),
         ("budget", {"now": True}, "now: Extra inputs"),
+        ("forget_fact", {"fact": 0}, "fact: Input should be greater than or equal"),
+        ("forget_about", {"words": ""}, "words: String should have at least 1"),
     ],
-    ids=["no-text", "unknown-field", "bad-level", "params-for-none"],
+    ids=[
+        "no-text",
+        "unknown-field",
+        "bad-level",
+        "params-for-none",
+        "fact-zero",
+        "no-words",
+    ],
 )
 async def test_params_that_do_not_fit_are_refused_by_name(
     tmp_path: Path, method: str, params: Params, problem: str

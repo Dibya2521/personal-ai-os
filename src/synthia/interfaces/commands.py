@@ -81,6 +81,25 @@ class Forget:
 
 
 @dataclass(frozen=True, slots=True)
+class ShowFacts:
+    """List the facts learned about the person, by number."""
+
+
+@dataclass(frozen=True, slots=True)
+class ForgetFact:
+    """Forget the fact numbered ``fact``."""
+
+    fact: int
+
+
+@dataclass(frozen=True, slots=True)
+class ForgetAbout:
+    """Forget every fact and turn holding all of ``words``."""
+
+    words: str
+
+
+@dataclass(frozen=True, slots=True)
 class ShowBudget:
     """Print today's remote budget."""
 
@@ -127,6 +146,9 @@ type Command = (
     | UseRemote
     | KeepPrivate
     | Forget
+    | ShowFacts
+    | ForgetFact
+    | ForgetAbout
     | ShowBudget
     | ShowModel
     | ShowTools
@@ -147,6 +169,9 @@ HELP: Final = """\
 /remote [on|off]           send turns to the remote model, or keep them local
 /private [on|off]          stop remembering this conversation, or start again
 /forget                    forget the last turn, here and in memory
+/facts                     what SYNTHIA has learned about you, by number
+/forget fact <number>      forget one of those facts
+/forget about <words>      forget every fact and turn holding all the words
 /budget                    today's remote requests
 /model                     the models behind the router, and the last route
 /tools                     the tools SYNTHIA may call, and which ask first
@@ -159,7 +184,7 @@ _SIMPLE: Final[dict[str, Command]] = {
     "model": ShowModel(),
     "tools": ShowTools(),
     "reset": Reset(),
-    "forget": Forget(),
+    "facts": ShowFacts(),
     "help": Help(),
     "exit": Exit(),
     "quit": Exit(),
@@ -246,6 +271,25 @@ def _plan(rest: str) -> Command:
     return Plan(rest) if rest else Invalid("/plan needs a task")
 
 
+def _forget(rest: str) -> Command:
+    if not rest:
+        return Forget()
+    what, _, value = rest.partition(" ")
+    value = value.strip()
+    if what == "fact":
+        refused = Invalid("/forget fact needs a fact's number; /facts lists them")
+        if not value.isascii() or not value.isdecimal():
+            return refused
+        try:
+            number = int(value)
+        except ValueError:
+            return refused
+        return ForgetFact(number) if number >= 1 else refused
+    if what == "about":
+        return ForgetAbout(value) if value else Invalid("/forget about needs words")
+    return Invalid("/forget takes nothing, fact <number> or about <words>")
+
+
 _WITH_ARGUMENTS: Final[dict[str, Callable[[str], Command]]] = {
     "plan": _plan,
     "persona": _persona,
@@ -253,4 +297,5 @@ _WITH_ARGUMENTS: Final[dict[str, Callable[[str], Command]]] = {
     "think": _think,
     "remote": _remote,
     "private": _private,
+    "forget": _forget,
 }

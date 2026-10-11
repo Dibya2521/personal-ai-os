@@ -56,6 +56,24 @@ All notable changes are recorded here. The format follows
   question was about for 25 % of questions, with something else for 3 %,
   and with nothing for the rest. The chat's history keeps the question
   alone, so reminders never fill the context window.
+- SYNTHIA learns lasting facts about the person from each turn ("Has a
+  sister in Pune.", "Prefers short answers."). With a local model and an
+  embedding model installed, the daemon asks the local model in the
+  background, never the remote one, after each remembered turn; private
+  chats are never learned from. A newer fact that changes an older one ends
+  the older one, and a near-identical repeat is not kept twice. On a
+  24-exchange set with the expected facts written before any run, the local
+  qwen3.5-4b found them with precision 0.952 and recall 0.95 (a found fact
+  matching an expected one at cosine 0.7), and handled 8 of 8 changed
+  facts. The facts held, newest first and up to about 1,000 tokens, go into
+  each conversation's system prompt when it starts, after `/reset`, and
+  again when a fact in it is forgotten; with `/remote on` they go to the
+  remote model with the rest of the prompt. `/facts` lists them by number,
+  `/forget fact <number>` forgets one, and `/forget about <words>` forgets
+  every fact and every remembered turn holding all the words, with the
+  facts learned from those turns, and says how many of each. A forgotten
+  fact leaves the prompt of every open chat at its next turn; what was said
+  in the current chat stays in it until `/reset`.
 - Long chats keep fitting in the model's context window. Before each turn
   the oldest turns leave, whole, until the request fits with a quarter of the
   window kept free for the answer. With a local model, the turns that left

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from synthia.memory.hybrid import CANDIDATES
@@ -22,12 +23,12 @@ from synthia.memory.recall import local_zone, shown
 from synthia.memory.store import Asked
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
     from datetime import tzinfo
 
     from synthia.memory.facts import FactLearning
     from synthia.memory.hybrid import Recall
-    from synthia.memory.store import Turn
+    from synthia.memory.store import Fact, Forgotten, Turn
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,35 @@ REMINDER_HEADER: Final = (
     "From SYNTHIA's memory of earlier conversations, not written by the "
     "person; use it only if it helps:"
 )
+PINNED_HEADER: Final = (
+    "What SYNTHIA has learned about the person in earlier conversations, "
+    "newest first; the person may have changed since:"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _Pinned:
+    """The facts block a conversation took, and the (id, text) of each fact in it."""
+
+    block: str
+    facts: frozenset[tuple[int, str]]
+
+
+def _pinned(facts: Iterable[Fact], max_chars: int) -> _Pinned:
+    lines: list[str] = []
+    taken: set[tuple[int, str]] = set()
+    used = len(PINNED_HEADER)
+    for fact in facts:
+        if fact.until is not None:
+            continue
+        line = f"- {fact.text}"
+        used += len(line) + 1
+        if used > max_chars:
+            break
+        lines.append(line)
+        taken.add((fact.id, fact.text))
+    block = "\n".join((PINNED_HEADER, *lines)) if lines else ""
+    return _Pinned(block, frozenset(taken))
 
 
 class Remembering:
@@ -52,6 +82,7 @@ class Remembering:
         self._learning = learning
         self._conversation: int | None = None
         self._last: int | None = None
+        self._pinned: _Pinned | None = None
 
     async def remember(self, turn: Turn) -> None:
         """Keep ``turn`` and its meaning, unless the conversation is private."""
@@ -84,10 +115,67 @@ class Remembering:
         """
         if self._last is None:
             return False
-        forgotten = await self._store.forget_turn(self._last)
-        self._recall.forget(self._last)
+        forgotten = await self._store.forget_turn(
+            self._last, conversation=self._conversation
+        )
+        if forgotten:
+            self._recall.forget(self._last)
         self._last = None
         return forgotten
+
+    async def facts(self) -> list[Fact]:
+        """Return the facts held true about the person, newest first.
+
+        Raises:
+            sqlite3.Error: If the store could not be read.
+            OSError: If its file could not be opened.
+        """
+        return await self._store.facts()
+
+    async def forget_fact(self, fact: int) -> Fact | None:
+        """Forget the fact numbered ``fact`` and return it; None if there is none.
+
+        Raises:
+            sqlite3.Error: If the store could not be changed.
+            OSError: If its file could not be opened.
+        """
+        known = {f.id: f for f in await self._store.facts(held=False)}
+        if fact not in known or not await self._store.forget_fact(fact):
+            return None
+        return known[fact]
+
+    async def forget_about(self, words: str) -> Forgotten:
+        """Forget every fact and every turn holding all of ``words``.
+
+        Raises:
+            sqlite3.Error: If the store could not be changed.
+            OSError: If its file could not be opened.
+        """
+        forgotten = await self._store.forget_about(words)
+        for turn in forgotten.turns:
+            self._recall.forget(turn)
+        return forgotten
+
+    async def pinned(self, max_chars: int) -> str:
+        """Return the facts held, newest first, as lines for the system message.
+
+        Whole facts only, up to ``max_chars`` with the header; "" when there
+        are none. Taken once per conversation, since a system message that
+        changes makes a server that reuses the start of the last prompt read
+        it all again; taken afresh after :meth:`begin_again`, or once a fact
+        in it is forgotten, here or in another conversation. A store that
+        cannot be read is logged and pins nothing for that turn, since what
+        was taken may hold a fact forgotten since.
+        """
+        try:
+            facts = await self._store.facts(held=False)
+        except (sqlite3.Error, OSError):
+            logger.exception("facts about the person were not read")
+            return ""
+        known = {(fact.id, fact.text) for fact in facts}
+        if self._pinned is None or not self._pinned.facts <= known:
+            self._pinned = _pinned(facts, max_chars)
+        return self._pinned.block
 
     async def reminder(
         self, text: str, zone: Callable[[], tzinfo | None] = local_zone
@@ -120,3 +208,4 @@ class Remembering:
         """Remember the turns from here on as a new conversation."""
         self._conversation = None
         self._last = None
+        self._pinned = None

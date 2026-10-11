@@ -170,15 +170,14 @@ class FactKeeper:
         Raises:
             GatewayError: If the local model failed or gave no valid answer.
         """
-        held = {fact.id: fact for fact in await self._store.facts()}
-        for gone in [fact for fact in self._held if fact not in held]:
-            self._held.remove(gone)
-        known = await self._closest(question, held)
+        known = await self._closest(question, await self._reconciled())
         request = learning_request(question, answer, known)
         learned = (await generate(self._model, request, Learned)).facts
         if not learned:
             return []
         vectors = await self._embedder.embed([new.text for new in learned])
+        # The person may have forgotten facts while the model was answering.
+        await self._reconciled()
         kept: list[int] = []
         for new, vector in zip(learned, vectors, strict=True):
             replaced = _shown(known, new.replaces)
@@ -198,6 +197,13 @@ class FactKeeper:
                 await self._end(replaced, at, fact)
             kept.append(fact)
         return kept
+
+    async def _reconciled(self) -> dict[int, Fact]:
+        """Return the facts held, after letting go of the vectors of any forgotten."""
+        held = {fact.id: fact for fact in await self._store.facts()}
+        for gone in [fact for fact in self._held if fact not in held]:
+            self._held.remove(gone)
+        return held
 
     async def _closest(self, question: str, held: Mapping[int, Fact]) -> list[Fact]:
         (vector,) = await self._embedder.embed([question])

@@ -73,6 +73,7 @@ DEFAULT_REASONING: Final = Reasoning.AUTO
 # No deadline: the answer streams in view and Ctrl+C stops it when the person
 # chooses; a long local answer at 2 threads can pass the agent's 5 minutes.
 CHAT_LIMITS: Final = Limits(deadline_s=None)
+PINNED_TOKENS: Final = 1000
 
 type PlanMark = Planned | PlanStepBegun | PlanAnswerBegun
 """Where a planned turn is: the plan made, a step begun, the answer begun."""
@@ -210,6 +211,7 @@ class ChatSession:
         self.routes = routes or LastRoute()
         self.reasoning = DEFAULT_REASONING
         self.use_remote = False
+        self._pinned = ""
 
     def persona_names(self) -> tuple[str, ...]:
         """Return the keys of every persona the session can switch to."""
@@ -280,6 +282,8 @@ class ChatSession:
 
     def _system(self) -> Message:
         prompt = self.persona.system_prompt()
+        if self._pinned:
+            prompt += f"\n\n{self._pinned}"
         if self.summary:
             prompt += f"\n\nEarlier in this conversation, in short: {self.summary}"
         return Message.system(prompt)
@@ -300,7 +304,7 @@ class ChatSession:
         Raises:
             GatewayError: If the answer failed; the history is unchanged.
         """
-        asked = await self._asked(text)
+        asked = await self._prepared(text)
         self.make_room(asked, *images)
         request = self.request(asked, *images)
         started = self._clock()
@@ -339,9 +343,12 @@ class ChatSession:
         )
         yield report
 
-    async def _asked(self, text: str) -> str:
+    async def _prepared(self, text: str) -> str:
         if self.memory is None:
             return text
+        self._pinned = await self.memory.pinned(
+            int(PINNED_TOKENS * self.window.chars_per_token)
+        )
         return await self.memory.reminder(text) + text
 
     async def _remember(self, turn: Turn) -> None:

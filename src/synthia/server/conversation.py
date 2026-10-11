@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
 
 from synthia.agent.policy import Decision
+from synthia.memory.store import FactKind
 from synthia.persona.model import PersonaError
 from synthia.server.session import load_image
 
@@ -55,6 +56,11 @@ def note(*lines: str) -> Reply:
 def error(*lines: str) -> Reply:
     """Return a reply of ``lines`` saying what went wrong."""
     return Reply(errors=lines)
+
+
+def counted(count: int, thing: str) -> str:
+    """Return ``count`` and ``thing``, plural unless it is one."""
+    return f"{count} {thing}" if count == 1 else f"{count} {thing}s"
 
 
 class Talk(Protocol):
@@ -114,6 +120,18 @@ class Talk(Protocol):
 
     async def forget(self) -> Reply:
         """Forget the last turn."""
+        ...
+
+    async def facts(self) -> Reply:
+        """List the facts learned about the person."""
+        ...
+
+    async def forget_fact(self, fact: int) -> Reply:
+        """Forget one fact by its number."""
+        ...
+
+    async def forget_about(self, words: str) -> Reply:
+        """Forget every fact and turn holding all of ``words``."""
         ...
 
 
@@ -245,6 +263,58 @@ class Conversation:
                 logger.exception("a turn was not forgotten")
                 return error(f"the last turn could not be forgotten: {problem}")
         return note("the last turn is forgotten")
+
+    async def facts(self) -> Reply:
+        """List the facts held about the person, newest first, by number."""
+        memory = self.session.memory
+        if memory is None:
+            return note(NO_MEMORY)
+        try:
+            held = await memory.facts()
+        except (sqlite3.Error, OSError) as problem:
+            logger.exception("facts were not read")
+            return error(f"the facts could not be read: {problem}")
+        if not held:
+            return note("no facts learned yet")
+        return note(
+            *(
+                f"{fact.id}  {fact.text}"
+                + (" (preference)" if fact.kind is FactKind.PREFERENCE else "")
+                for fact in held
+            )
+        )
+
+    async def forget_fact(self, fact: int) -> Reply:
+        """Forget the fact numbered ``fact``; it leaves the next turn's prompt."""
+        memory = self.session.memory
+        if memory is None:
+            return note(NO_MEMORY)
+        try:
+            forgotten = await memory.forget_fact(fact)
+        except (sqlite3.Error, OSError) as problem:
+            logger.exception("a fact was not forgotten")
+            return error(f"fact {fact} could not be forgotten: {problem}")
+        if forgotten is None:
+            return error(f"there is no fact {fact}; /facts lists them")
+        return note(f"forgot fact {fact}: {forgotten.text}")
+
+    async def forget_about(self, words: str) -> Reply:
+        """Forget every fact and remembered turn holding all of ``words``."""
+        memory = self.session.memory
+        if memory is None:
+            return note(NO_MEMORY)
+        try:
+            forgotten = await memory.forget_about(words)
+        except (sqlite3.Error, OSError) as problem:
+            logger.exception("a topic was not forgotten")
+            return error(f"{words!r} could not be forgotten: {problem}")
+        said = (
+            f"forgot {counted(forgotten.facts, 'fact')} and "
+            f"{counted(len(forgotten.turns), 'turn')} holding all of: {words}"
+        )
+        if not forgotten.facts and not forgotten.turns:
+            return note(said)
+        return note(said, "this conversation keeps what was said in it until /reset")
 
     async def close(self) -> None:
         """Stop asking for the daily cap, and the summary, if still under way."""

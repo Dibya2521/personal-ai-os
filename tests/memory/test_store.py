@@ -330,6 +330,22 @@ async def test_nothing_is_learned_from_a_forgotten_turn(store: MemoryStore) -> N
     assert await store.facts(held=False) == []
 
 
+async def test_a_fact_is_not_ended_by_one_already_forgotten(
+    store: MemoryStore,
+) -> None:
+    turn = await a_turn(store)
+    pune = await store.add_fact(turn, "Sister lives in Pune.", FactKind.FACT, MONDAY)
+    mumbai = await store.add_fact(
+        turn, "Sister lives in Mumbai.", FactKind.FACT, MONDAY
+    )
+    assert pune is not None
+    assert mumbai is not None
+    await store.forget_fact(mumbai)
+
+    assert not await store.end_fact(pune, MONDAY, mumbai)
+    assert [f.text for f in await store.facts()] == ["Sister lives in Pune."]
+
+
 async def test_a_changed_fact_is_kept_with_its_end_and_what_changed_it(
     store: MemoryStore,
 ) -> None:

@@ -352,7 +352,10 @@ class MemoryStore:
         return await asyncio.to_thread(self._add_fact, turn, text, kind, at)
 
     async def end_fact(self, fact: int, at: datetime, replaced_by: int) -> bool:
-        """Mark ``fact`` as no longer true from ``at``, changed by ``replaced_by``."""
+        """Mark ``fact`` as no longer true from ``at``, changed by ``replaced_by``.
+
+        False if ``fact`` is not held, or ``replaced_by`` has been forgotten.
+        """
         return await asyncio.to_thread(self._end_fact, fact, at, replaced_by)
 
     async def facts(self, *, held: bool = True) -> list[Fact]:
@@ -400,9 +403,13 @@ class MemoryStore:
         """Return every turn of ``conversation``, oldest first."""
         return await asyncio.to_thread(self._conversation, conversation)
 
-    async def forget_turn(self, turn: int) -> bool:
-        """Forget ``turn`` and its tool calls; False if there was no such turn."""
-        return await asyncio.to_thread(self._forget_turn, turn)
+    async def forget_turn(self, turn: int, *, conversation: int | None = None) -> bool:
+        """Forget ``turn`` and its tool calls; False if there was no such turn.
+
+        With ``conversation``, only if the turn is in it: an id freed by a
+        forget is given to the next turn of any conversation.
+        """
+        return await asyncio.to_thread(self._forget_turn, turn, conversation)
 
     async def forget_conversation(self, conversation: int) -> int:
         """Forget ``conversation`` and every turn in it; return how many turns."""
@@ -641,9 +648,13 @@ class MemoryStore:
             )
             return cursor.rowcount > 0
 
-    def _forget_turn(self, turn: int) -> bool:
+    def _forget_turn(self, turn: int, conversation: int | None) -> bool:
         with self._opened() as connection:
-            cursor = connection.execute("DELETE FROM turns WHERE id = ?", (turn,))
+            cursor = connection.execute(
+                "DELETE FROM turns WHERE id = :turn"
+                " AND (:conversation IS NULL OR conversation = :conversation)",
+                {"turn": turn, "conversation": conversation},
+            )
             return cursor.rowcount > 0
 
     def _forget_conversation(self, conversation: int) -> int:
@@ -670,9 +681,10 @@ class MemoryStore:
     def _end_fact(self, fact: int, at: datetime, replaced_by: int) -> bool:
         with self._opened() as connection:
             cursor = connection.execute(
-                "UPDATE facts SET until = ?, replaced_by = ?"
-                " WHERE id = ? AND until IS NULL",
-                (_stamp(at), replaced_by, fact),
+                "UPDATE facts SET until = :until, replaced_by = :replaced_by"
+                " WHERE id = :fact AND until IS NULL"
+                " AND EXISTS (SELECT 1 FROM facts WHERE id = :replaced_by)",
+                {"until": _stamp(at), "replaced_by": replaced_by, "fact": fact},
             )
             return cursor.rowcount > 0
 

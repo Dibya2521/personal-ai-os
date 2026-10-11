@@ -398,6 +398,18 @@ class RemoteConversation:
         """Forget the last turn."""
         return await self._ask("forget", {})
 
+    async def facts(self) -> Reply:
+        """List the facts learned about the person."""
+        return await self._ask("facts", {})
+
+    async def forget_fact(self, fact: int) -> Reply:
+        """Forget one fact by its number."""
+        return await self._ask("forget_fact", {"fact": fact})
+
+    async def forget_about(self, words: str) -> Reply:
+        """Forget every fact and turn holding all of ``words``."""
+        return await self._ask("forget_about", {"words": words})
+
     async def status(self) -> tuple[int, str]:
         """Return the conversations open, this one included, and the local model."""
         fields = cast("dict[str, object]", await self.peer.request("status", {}))
