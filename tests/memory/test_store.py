@@ -330,6 +330,22 @@ async def test_nothing_is_learned_from_a_forgotten_turn(store: MemoryStore) -> N
     assert await store.facts(held=False) == []
 
 
+async def test_words_find_the_same_turns_and_facts_after_an_optimize(
+    store: MemoryStore,
+) -> None:
+    kept = await a_turn(store, "my cat miso sleeps all day")
+    gone = await a_turn(store, "miso soup for dinner")
+    await store.add_fact(
+        kept, "The person's cat is called Miso.", FactKind.FACT, MONDAY
+    )
+    await store.forget_turn(gone)
+
+    await store.optimize()
+
+    assert [t.id for t in await store.search("miso")] == [kept]
+    assert (await store.forget_about("cat miso")).facts == 1
+
+
 async def test_a_fact_is_not_ended_by_one_already_forgotten(
     store: MemoryStore,
 ) -> None:

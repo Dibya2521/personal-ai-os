@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
@@ -52,6 +53,7 @@ MAX_NEW: Final = 5
 MAX_FACT_CHARS: Final = 200
 MAX_ANSWER_CHARS: Final = 1000
 DUPLICATE: Final = 0.90
+MERGE_FLOOR: Final = 0.80
 INSTRUCTIONS: Final = (
     "You keep a list of lasting facts about the person SYNTHIA talks with. "
     "From the exchange, write each new fact or preference the person states "
@@ -127,6 +129,65 @@ def learning_request(question: str, answer: str, known: Sequence[Fact]) -> ChatR
         reasoning=Reasoning.OFF,
         use_remote=False,
     )
+
+
+SAME_INSTRUCTIONS: Final = (
+    "You decide whether two facts SYNTHIA keeps about the person say the same "
+    "thing, so that keeping both would be a repeat. They are the same only if "
+    "every detail agrees: who, what, where, when, how much, and whether it is "
+    "true now. Wording does not matter."
+)
+
+
+def shown_pair(first: str, second: str) -> str:
+    """Return two facts as the model is shown them to compare."""
+    return f"1. {first}\n2. {second}"
+
+
+SAME_EXAMPLES: Final = (
+    Message.user(
+        shown_pair(
+            "The person has two children.", "The person is a parent of two kids."
+        )
+    ),
+    Message.assistant('{"same": true}'),
+    Message.user(
+        shown_pair(
+            "The person is learning Spanish.", "The person speaks fluent Spanish."
+        )
+    ),
+    Message.assistant('{"same": false}'),
+)
+
+
+class Same(BaseModel):
+    """Whether two facts are one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    same: bool
+
+
+def same_request(first: str, second: str) -> ChatRequest:
+    """Return the request that asks whether two facts say the same thing."""
+    return ChatRequest(
+        (
+            Message.system(SAME_INSTRUCTIONS),
+            *SAME_EXAMPLES,
+            Message.user(shown_pair(first, second)),
+        ),
+        temperature=0.0,
+        reasoning=Reasoning.OFF,
+        use_remote=False,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class Merged:
+    """The outcome of one merge pass over the held facts."""
+
+    asked: int
+    merged: int
 
 
 class FactKeeper:
@@ -226,6 +287,46 @@ class FactKeeper:
     async def _end(self, fact: Fact, at: datetime, replaced_by: int) -> None:
         await self._store.end_fact(fact.id, at, replaced_by)
         self._held.remove(fact.id)
+
+    async def merge_repeats(self, at: datetime) -> Merged:
+        """End the older of each pair of held facts the local model calls one.
+
+        Only pairs at least :data:`MERGE_FLOOR` similar are asked about, most
+        similar first, each fact in one merge at most; a pair is one only if
+        the model says so with the facts in either order.
+
+        Raises:
+            GatewayError: If the local model failed.
+        """
+        held = await self._reconciled()
+        asked, merged, done = 0, 0, set[int]()
+        for one, other in self._held.close_pairs(MERGE_FLOOR):
+            if one in done or other in done:
+                continue
+            first, second = held[one], held[other]
+            asked += 1
+            if not await self._same(first.text, second.text):
+                continue
+            older, newer = sorted(
+                (first, second), key=lambda fact: (fact.since, fact.id)
+            )
+            if await self._store.end_fact(older.id, at, newer.id):
+                self._held.remove(older.id)
+                merged += 1
+            done |= {first.id, second.id}
+        return Merged(asked, merged)
+
+    async def _same(self, first: str, second: str) -> bool:
+        for one, other in ((first, second), (second, first)):
+            try:
+                if not (
+                    await generate(self._model, same_request(one, other), Same)
+                ).same:
+                    return False
+            except StructuredOutputError:
+                logger.warning("no valid answer on whether two facts are one")
+                return False
+        return True
 
 
 class FactLearning:

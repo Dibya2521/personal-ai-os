@@ -15,10 +15,13 @@ from synthia.gateway.types import ChatChunk, ChatRequest, Reasoning, Role
 from synthia.memory.facts import (
     EXAMPLES,
     INSTRUCTIONS,
+    SAME_EXAMPLES,
+    SAME_INSTRUCTIONS,
     TRIES,
     FactKeeper,
     FactLearning,
     Learned,
+    Same,
 )
 from synthia.memory.store import FactKind, MemoryStore, Remembered, Turn
 from tests.agent.scripted import Scripted, says
@@ -311,6 +314,116 @@ async def test_a_fact_forgotten_while_the_model_answers_is_not_repeated_by_its_a
     assert await held(store) == [("my sister lives in mumbai", FactKind.FACT)]
     old = next(f for f in await store.facts(held=False) if f.id == pune)
     assert (old.until, old.replaced_by) == (LATER, mumbai)
+
+
+def test_the_worked_examples_of_one_fact_answer_in_the_form_asked_for() -> None:
+    replies = [m.text for m in SAME_EXAMPLES if m.role is Role.ASSISTANT]
+
+    assert [Same.model_validate_json(r).same for r in replies] == [True, False]
+
+
+async def held_facts(store: MemoryStore, *texts: str) -> list[int]:
+    """Keep ``texts`` as facts a day apart, oldest first, without learning them."""
+    turn = await a_turn(store, "about me")
+    ids: list[int] = []
+    for day, text in enumerate(texts):
+        fact = await store.add_fact(turn, text, FactKind.FACT, MONDAY + timedelta(day))
+        assert fact is not None
+        ids.append(fact)
+    return ids
+
+
+SAME = says('{"same": true}')
+NOT_SAME = says('{"same": false}')
+
+
+async def test_two_facts_the_model_calls_one_in_both_orders_are_merged(
+    store: MemoryStore,
+) -> None:
+    older, newer, _ = await held_facts(
+        store, "my cat is called miso", "my cat miso", "likes green tea"
+    )
+    model = Scripted(SAME, SAME)
+    facts = await keeper(store, model)
+
+    merged = await facts.merge_repeats(LATER)
+
+    assert (merged.asked, merged.merged) == (1, 1)
+    assert sorted(m.messages[-1].text for m in model.requests) == [
+        "1. my cat is called miso\n2. my cat miso",
+        "1. my cat miso\n2. my cat is called miso",
+    ]
+    assert {f.id for f in await store.facts()} == {newer, 3}
+    old = next(f for f in await store.facts(held=False) if f.id == older)
+    assert (old.until, old.replaced_by) == (LATER, newer)
+
+
+async def test_whether_two_facts_are_one_is_asked_on_this_machine_without_chance(
+    store: MemoryStore,
+) -> None:
+    await held_facts(store, "likes green tea", "likes green tea")
+    model = Scripted(SAME, SAME)
+
+    await (await keeper(store, model)).merge_repeats(LATER)
+
+    request = model.requests[0]
+    assert request.messages[0].text == SAME_INSTRUCTIONS
+    assert (request.use_remote, request.temperature) == (False, 0.0)
+    assert request.reasoning is Reasoning.OFF
+
+
+@pytest.mark.parametrize(
+    ("replies", "asked"),
+    [((NOT_SAME,), 1), ((SAME, NOT_SAME), 2)],
+    ids=["no-at-once", "no-the-other-way"],
+)
+async def test_two_facts_are_kept_unless_the_model_says_one_both_ways(
+    store: MemoryStore, replies: tuple[list[ChatChunk], ...], asked: int
+) -> None:
+    await held_facts(store, "likes green tea", "likes green tea")
+    model = Scripted(*replies)
+
+    merged = await (await keeper(store, model)).merge_repeats(LATER)
+
+    assert (merged.asked, merged.merged) == (1, 0)
+    assert len(model.requests) == asked
+    assert len(await store.facts()) == 2
+
+
+async def test_an_answer_that_is_never_valid_keeps_both_facts(
+    store: MemoryStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    await held_facts(store, "likes green tea", "likes green tea")
+    model = Scripted(*[says("maybe")] * (1 + DEFAULT_REPAIRS))
+
+    with caplog.at_level(logging.WARNING, "synthia.memory.facts"):
+        merged = await (await keeper(store, model)).merge_repeats(LATER)
+
+    assert (merged.asked, merged.merged) == (1, 0)
+    assert "no valid answer on whether two facts are one" in caplog.text
+
+
+async def test_each_fact_is_in_one_merge_at_most_per_pass(store: MemoryStore) -> None:
+    await held_facts(store, "likes green tea", "likes green tea", "likes green tea")
+    model = Scripted(SAME, SAME)
+
+    merged = await (await keeper(store, model)).merge_repeats(LATER)
+
+    assert (merged.asked, merged.merged) == (1, 1)
+    assert len(await store.facts()) == 2
+
+
+async def test_a_model_that_fails_stops_the_pass(store: MemoryStore) -> None:
+    await held_facts(store, "likes green tea", "likes green tea")
+
+    def down(_: ChatRequest) -> list[ChatChunk]:
+        message = "the local model is not running"
+        raise GatewayError(message)
+
+    with pytest.raises(GatewayError, match="the local model is not running"):
+        await (await keeper(store, Scripted(down))).merge_repeats(LATER)
+
+    assert len(await store.facts()) == 2
 
 
 async def test_a_number_that_was_not_shown_replaces_nothing(store: MemoryStore) -> None:

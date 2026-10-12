@@ -415,6 +415,20 @@ class MemoryStore:
         """Forget ``conversation`` and every turn in it; return how many turns."""
         return await asyncio.to_thread(self._forget_conversation, conversation)
 
+    async def optimize(self) -> None:
+        """Merge the full-text indexes' segments; refresh the planner's statistics."""
+        await asyncio.to_thread(self._optimize)
+
+    def _optimize(self) -> None:
+        with self._opened() as connection:
+            connection.execute(
+                "INSERT INTO turns_text (turns_text) VALUES ('optimize')"
+            )
+            connection.execute(
+                "INSERT INTO facts_text (facts_text) VALUES ('optimize')"
+            )
+            connection.execute("PRAGMA optimize")
+
     @contextmanager
     def _opened(self) -> Generator[sqlite3.Connection]:
         connection = sqlite3.connect(

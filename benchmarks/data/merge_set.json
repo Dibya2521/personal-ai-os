@@ -1,0 +1,39 @@
+{
+  "about": "Made-up pairs of facts about a person, written before any run of the merge judge and kept apart from its prompt's examples. same: two wordings of one fact, so keeping both would be a repeat. different: two facts that share most words but differ in one detail (who, what, where, when, how much, or whether it is true now), so merging them would lose a true fact. No real person's data.",
+  "same": [
+    ["The person was born in Cuttack.", "Cuttack is where the person was born."],
+    ["The person works night shifts at a hospital.", "The person's hospital job is on night shifts."],
+    ["The person's son Kabir is seven years old.", "Kabir, the person's son, is seven."],
+    ["The person cannot eat gluten.", "The person has to avoid gluten."],
+    ["The person plays the tabla.", "The tabla is an instrument the person plays."],
+    ["The person wants code examples in Python.", "The person prefers Python for code examples."],
+    ["The person's wife is called Meera.", "Meera is the person's wife."],
+    ["The person commutes to work by metro.", "The person takes the metro to work."],
+    ["The person is training for a marathon in January.", "The person is preparing to run a marathon in January."],
+    ["The person dislikes emojis in replies.", "The person does not want emojis in answers."],
+    ["The person's laptop runs Fedora.", "Fedora is the operating system on the person's laptop."],
+    ["The person reads before sleeping every night.", "Every night the person reads before going to sleep."],
+    ["The person has a golden retriever named Bruno.", "Bruno is the person's golden retriever."],
+    ["The person is studying for the CFA exam.", "The person is preparing for the CFA exam."],
+    ["The person's office is in Hitech City, Hyderabad.", "The person works from an office in Hitech City in Hyderabad."],
+    ["The person wakes up at 5 am.", "The person gets up at 5 in the morning."]
+  ],
+  "different": [
+    ["The person was born in Cuttack.", "The person lives in Cuttack."],
+    ["The person works night shifts at a hospital.", "The person used to work night shifts at a hospital."],
+    ["The person's son Kabir is seven years old.", "The person's son Kabir is nine years old."],
+    ["The person cannot eat gluten.", "The person cannot eat dairy."],
+    ["The person plays the tabla.", "The person wants to learn the tabla."],
+    ["The person wants code examples in Python.", "The person wants code examples in Rust."],
+    ["The person's wife is called Meera.", "The person's sister is called Meera."],
+    ["The person commutes to work by metro.", "The person commutes to work by bus."],
+    ["The person is training for a marathon in January.", "The person ran a marathon last January."],
+    ["The person dislikes emojis in replies.", "The person likes emojis in replies."],
+    ["The person's laptop runs Fedora.", "The person's server runs Fedora."],
+    ["The person reads before sleeping every night.", "The person reads on the train every morning."],
+    ["The person has a golden retriever named Bruno.", "The person has a beagle named Bruno."],
+    ["The person is studying for the CFA exam.", "The person has passed the CFA exam."],
+    ["The person's office is in Hitech City, Hyderabad.", "The person's home is in Hitech City, Hyderabad."],
+    ["The person wakes up at 5 am.", "The person wakes up at 7 am."]
+  ]
+}

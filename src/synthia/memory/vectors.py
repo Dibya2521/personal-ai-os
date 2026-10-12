@@ -122,6 +122,19 @@ class VectorSet:
             self._rows[moved] = row
         return True
 
+    def close_pairs(self, at_least: float) -> list[tuple[int, int]]:
+        """Return each pair of held ids at least ``at_least`` similar, closest first.
+
+        Time and memory grow with the square of the vectors held: about 12 MB
+        for 1,000.
+        """
+        held = self._vectors[: len(self._rows)]
+        rows, columns = np.triu_indices(len(held), k=1)
+        cosines = (held @ held.T)[rows, columns]
+        close = np.flatnonzero(cosines >= at_least)
+        close = close[np.argsort(-cosines[close], kind="stable")]
+        return [(int(self._ids[rows[i]]), int(self._ids[columns[i]])) for i in close]
+
     def similarities(
         self,
         query: Vectors,

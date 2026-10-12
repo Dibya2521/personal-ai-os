@@ -25,6 +25,29 @@ def three() -> VectorSet:
     return vectors
 
 
+def test_close_pairs_come_closest_first_and_stop_at_the_line() -> None:
+    vectors = VectorSet(2)
+    vectors.add(1, MONDAY, unit(1, 0))
+    vectors.add(2, MONDAY, unit(0.8, 0.6))
+    vectors.add(3, MONDAY, unit(0.6, 0.8))
+
+    assert vectors.close_pairs(0.7) == [(2, 3), (1, 2)]
+    assert vectors.close_pairs(0.0) == [(2, 3), (1, 2), (1, 3)]
+    assert vectors.close_pairs(0.97) == []
+    vectors.remove(2)
+    assert vectors.close_pairs(0.0) == [(1, 3)]
+    vectors.remove(3)
+    assert vectors.close_pairs(0.0) == []
+
+
+def test_a_pair_exactly_on_the_line_is_close() -> None:
+    vectors = VectorSet(2)
+    vectors.add(1, MONDAY, unit(1, 0))
+    vectors.add(2, MONDAY, unit(0, 1))
+
+    assert vectors.close_pairs(0.0) == [(1, 2)]
+
+
 def test_the_nearest_come_with_their_cosine_similarity(three: VectorSet) -> None:
     found = three.similarities(unit(1, 0, 0)).nearest(2)
 
