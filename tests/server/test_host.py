@@ -8,8 +8,10 @@ import pytest
 
 from synthia.agent.policy import nobody_approves
 from synthia.agent.tools import Toolbox
+from synthia.agent.trace import ConsolidationRan, Trace, read_trace
 from synthia.gateway.assemble import build_gateway
 from synthia.kernel.config import Settings
+from synthia.memory.facts import Consolidated
 from synthia.memory.hybrid import Recall
 from synthia.memory.store import MEMORY_FILE, MemoryStore
 from synthia.models.install import BYTES_PER_GB, Installer
@@ -22,6 +24,7 @@ from synthia.server.host import (
     open_learning,
     open_memory,
     publish_route,
+    traced,
 )
 from tests.agent.scripted import Scripted, says
 from tests.memory.test_facts import Watched, found, until_learned
@@ -204,6 +207,19 @@ async def test_a_finished_turn_is_learned_from_in_the_background(
     assert warnings == []
     assert [f.text for f in await store.facts()] == ["my cat is called miso"]
     assert model.requests[1].use_remote is False
+
+
+def test_a_consolidation_goes_to_the_trace_field_by_field(tmp_path: Path) -> None:
+    trace = Trace(tmp_path / "d.jsonl")
+
+    traced(trace, Consolidated(5, 2, 30.5, scheduled=True, stopped=True, error="no"))
+
+    ((record,), _) = read_trace(trace.path)
+    assert isinstance(record, ConsolidationRan)
+    assert (record.asked, record.merged, record.seconds) == (5, 2, 30.5)
+    assert (record.scheduled, record.stopped) == (True, True)
+    assert record.error is not None
+    assert record.error.text == "no"
 
 
 async def test_facts_that_cannot_be_read_are_warned_about(tmp_path: Path) -> None:

@@ -4,8 +4,9 @@ A conversation in the daemon answers like one in this process (a ``Talk``),
 so the terminal shows it the same way: its streamed answer, tool calls and
 plan marks are rebuilt from the daemon's notifications. A tool call that
 needs a yes is asked here, in the terminal; Ctrl+C cancels the request,
-which tells the daemon to cancel the turn. ``synthia stop`` and ``synthia
-status`` open a conversation only to ask the daemon to stop, or how it is.
+which tells the daemon to cancel the turn. ``synthia stop``, ``synthia
+status`` and ``synthia memory consolidate`` open a conversation only to ask
+the daemon to stop, how it is, or to consolidate the facts it holds.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from synthia.gateway.types import (
 )
 from synthia.kernel.errors import SynthiaError
 from synthia.kernel.jsonrpc import ConnectionClosedError, Peer, RpcError
+from synthia.memory.facts import Consolidated
 from synthia.server.api import IMAGE_REFUSED
 from synthia.server.conversation import Reply
 from synthia.server.discovery import DAEMON_FILE, DaemonInfo, is_running, read_info
@@ -226,6 +228,19 @@ async def daemon_status(home: Path) -> DaemonStatus | None:
     return DaemonStatus(info, sessions - 1, local)
 
 
+async def consolidate_memory(home: Path) -> Consolidated | None:
+    """Have the running daemon consolidate the facts held; None if none runs.
+
+    Raises:
+        RpcError: If the daemon learns no facts.
+    """
+    info = await running_daemon(home)
+    if info is None:
+        return None
+    async with conversation(info, _refuse) as talk:
+        return await talk.consolidate()
+
+
 def chunk_from(params: Params) -> ChatChunk:
     """Rebuild a streamed chunk from the daemon's ``chunk`` notification."""
     progress = params.get("progress")
@@ -276,6 +291,20 @@ def report_from(result: object) -> TurnReport:
         completion_tokens=cast("int | None", fields.get("completion_tokens")),
         seconds=float(cast("float", fields["seconds"])),
         reasoning=None if level is None else Reasoning(str(level)),
+    )
+
+
+def consolidated_from(result: object) -> Consolidated:
+    """Rebuild a consolidation run from the ``consolidate`` result."""
+    fields = cast("dict[str, object]", result)
+    error = fields.get("error")
+    return Consolidated(
+        asked=int(cast("int", fields["asked"])),
+        merged=int(cast("int", fields["merged"])),
+        seconds=float(cast("float", fields["seconds"])),
+        scheduled=bool(fields["scheduled"]),
+        stopped=bool(fields["stopped"]),
+        error=None if error is None else str(error),
     )
 
 
@@ -414,6 +443,14 @@ class RemoteConversation:
         """Return the conversations open, this one included, and the local model."""
         fields = cast("dict[str, object]", await self.peer.request("status", {}))
         return int(cast("int", fields["sessions"])), str(fields["local"])
+
+    async def consolidate(self) -> Consolidated:
+        """Have the daemon consolidate the facts held, and say how it went.
+
+        Raises:
+            RpcError: If the daemon learns no facts.
+        """
+        return consolidated_from(await self.peer.request("consolidate", {}))
 
     async def stop_daemon(self) -> None:
         """Ask the daemon to stop."""

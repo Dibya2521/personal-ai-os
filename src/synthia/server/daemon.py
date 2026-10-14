@@ -6,7 +6,8 @@ its connection waits in the queue until the server accepts it. Stopping
 (asked by a client, Ctrl+C, or the end of the process's session) ends every
 conversation, which cancels the turns still running, then stops the MCP
 servers and the local model, and removes ``daemon.json``. Each start, end
-and restart of the local model's server goes to the daemon's own trace.
+and restart of the local model's server, and each consolidation of the facts
+held, goes to the daemon's own trace.
 """
 
 from __future__ import annotations
@@ -163,23 +164,23 @@ async def run_daemon(
             warnings.append(text)
             logger.warning("%s", text)
 
+        traces = settings.home / TRACES
+        trace = Trace.start(traces)
         memory = await open_memory(settings, warn, open_embedder(settings, warn))
         learning = await open_learning(
-            memory, gateway.model, warn, local=gateway.router.has_local
+            memory, gateway.model, warn, local=gateway.router.has_local, trace=trace
         )
         tools, servers = await start_tools(
             settings, warn, transport, () if memory is None else (memory_tool(memory),)
         )
-        library = PersonaLibrary(settings.home / PERSONAS_DIR)
-        traces = settings.home / TRACES
         local_state = no_local_model
         if local is not None:
-            local.start(Trace.start(traces).service)
+            local.start(trace.service)
             local_state = local.state
         try:
             host = Host(
                 gateway,
-                library,
+                PersonaLibrary(settings.home / PERSONAS_DIR),
                 settings.persona,
                 tools,
                 traces,

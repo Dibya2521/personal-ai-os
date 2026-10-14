@@ -3,7 +3,8 @@ import contextlib
 import json
 import logging
 import sqlite3
-from collections.abc import AsyncGenerator
+import time
+from collections.abc import AsyncGenerator, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -13,11 +14,15 @@ from synthia.gateway.errors import GatewayError
 from synthia.gateway.structured import DEFAULT_REPAIRS
 from synthia.gateway.types import ChatChunk, ChatRequest, Reasoning, Role
 from synthia.memory.facts import (
+    CANCELLED,
+    CONSOLIDATE_EVERY_S,
     EXAMPLES,
+    IDLE_S,
     INSTRUCTIONS,
     SAME_EXAMPLES,
     SAME_INSTRUCTIONS,
     TRIES,
+    Consolidated,
     FactKeeper,
     FactLearning,
     Learned,
@@ -587,12 +592,24 @@ async def until_learned(store: Watched) -> None:
 
 
 @contextlib.asynccontextmanager
-async def learning(
-    store: MemoryStore, model: Scripted, network: Network | None = None
+async def learning(  # noqa: PLR0913 - the learner's schedule, injected
+    store: MemoryStore,
+    model: Scripted,
+    network: Network | None = None,
+    *,
+    report: Callable[[Consolidated], None] | None = None,
+    idle_s: float = IDLE_S,
+    clock: Callable[[], float] = time.monotonic,
 ) -> AsyncGenerator[FactLearning]:
     kept = FactKeeper(store, embedder(network or Network()), model)
     await kept.load()
-    learner = FactLearning(kept, store)
+    learner = FactLearning(
+        kept,
+        store,
+        report=report or (lambda _: None),
+        idle_s=idle_s,
+        clock=clock,
+    )
     task = asyncio.create_task(learner.run())
     try:
         yield learner
@@ -709,3 +726,289 @@ async def test_a_store_that_fails_is_logged_and_the_learner_goes_on(
 
     assert "facts were not learned" in caplog.text
     assert await held(store) == [("my cat is called miso", FactKind.FACT)]
+
+
+class Tidied(Watched):
+    """A store that counts how often its indexes were tidied."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.optimized = 0
+
+    async def optimize(self) -> None:
+        await super().optimize()
+        self.optimized += 1
+
+
+class Clock:
+    """A monotonic clock the test moves by hand, which says each time it is read."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.read = asyncio.Event()
+
+    def __call__(self) -> float:
+        self.read.set()
+        return self.now
+
+    async def read_again(self, times: int) -> None:
+        for _ in range(times):
+            self.read.clear()
+            await asyncio.wait_for(self.read.wait(), timeout=5)
+
+
+class Reports:
+    """Keeps each consolidation reported, and says when one comes."""
+
+    def __init__(self) -> None:
+        self.done: list[Consolidated] = []
+        self.came = asyncio.Event()
+
+    def __call__(self, done: Consolidated) -> None:
+        self.done.append(done)
+        self.came.set()
+
+    async def next(self) -> Consolidated:
+        await asyncio.wait_for(self.came.wait(), timeout=5)
+        self.came.clear()
+        return self.done[-1]
+
+
+def down(_: ChatRequest) -> list[ChatChunk]:
+    message = "the local model is not running"
+    raise GatewayError(message)
+
+
+TWO_PAIRS = ("likes green tea", "likes green tea", "my cat miso", "my cat miso")
+
+
+async def test_a_consolidation_merges_tidies_and_reports_what_it_did(
+    tmp_path: Path,
+) -> None:
+    store = Tidied(tmp_path / "memory.db")
+    await held_facts(store, "likes green tea", "likes green tea")
+    reports = Reports()
+    times = iter([10.0, 12.5])
+    learner = FactLearning(
+        await keeper(store, Scripted(SAME, SAME)),
+        store,
+        report=reports,
+        clock=lambda: next(times),
+    )
+
+    done = await learner.consolidate()
+
+    assert done == Consolidated(
+        asked=1, merged=1, seconds=2.5, scheduled=False, stopped=False
+    )
+    assert reports.done == [done]
+    assert store.optimized == 1
+    assert len(await store.facts()) == 1
+
+
+async def test_a_consolidation_the_model_fails_says_why_and_keeps_its_merges(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = Tidied(tmp_path / "memory.db")
+    await held_facts(store, *TWO_PAIRS)
+    learner = FactLearning(await keeper(store, Scripted(SAME, SAME, down)), store)
+
+    with caplog.at_level(logging.WARNING, "synthia.memory.facts"):
+        done = await learner.consolidate()
+
+    assert (done.asked, done.merged) == (2, 1)
+    assert done.error == "the local model is not running"
+    assert store.optimized == 0
+    assert len(await store.facts()) == 3
+    assert "facts were not consolidated: the local model" in caplog.text
+
+
+class FailsToJudge(Tidied):
+    """A store whose pairs judged apart cannot be read."""
+
+    async def apart(self) -> set[tuple[int, int]]:
+        message = "database is locked"
+        raise sqlite3.OperationalError(message)
+
+
+async def test_a_consolidation_that_fails_otherwise_is_logged_not_raised(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = FailsToJudge(tmp_path / "memory.db")
+    await held_facts(store, "likes green tea", "likes green tea")
+    learner = FactLearning(await keeper(store, Scripted()), store)
+
+    with caplog.at_level(logging.ERROR, "synthia.memory.facts"):
+        done = await learner.consolidate()
+
+    assert (done.asked, done.error) == (0, "database is locked")
+    assert "facts were not consolidated" in caplog.text
+
+
+async def test_a_consolidation_asked_for_runs_to_the_end_with_a_turn_waiting(
+    store: Watched,
+) -> None:
+    await held_facts(store, *TWO_PAIRS)
+    learner = FactLearning(await keeper(store, Scripted(NOT_SAME, NOT_SAME)), store)
+    learner.wake()
+
+    done = await learner.consolidate()
+
+    assert (done.asked, done.stopped, done.scheduled) == (2, False, False)
+
+
+async def test_an_idle_learner_consolidates_then_waits_for_a_turn_and_the_hour(
+    store: Watched,
+) -> None:
+    await held_facts(store, "likes green tea", "likes green tea")
+    model = Scripted(
+        NOT_SAME,
+        found(("my sister lives in pune", "fact")),
+        found(("my cat is called miso", "fact")),
+    )
+    clock, reports = Clock(), Reports()
+
+    async def a_turn_learned(question: str) -> None:
+        await waiting_turn(store, question)
+        learner.wake()
+        await until_learned(store)
+
+    async with learning(
+        store, model, report=reports, idle_s=0.01, clock=clock
+    ) as learner:
+        first = await reports.next()
+        clock.now = CONSOLIDATE_EVERY_S
+        await clock.read_again(3)
+        an_hour_without_a_turn = len(reports.done)
+        await a_turn_learned("my sister lives in pune")
+        second = await reports.next()
+        await a_turn_learned("my cat is called miso")
+        await clock.read_again(3)
+        a_turn_within_the_hour = len(reports.done)
+        clock.now = 2 * CONSOLIDATE_EVERY_S
+        third = await reports.next()
+
+    assert (first.asked, first.scheduled, first.error) == (1, True, None)
+    assert (an_hour_without_a_turn, a_turn_within_the_hour) == (1, 2)
+    assert [(r.asked, r.scheduled, r.error) for r in (second, third)] == [
+        (0, True, None),
+        (0, True, None),
+    ]
+
+
+async def test_a_run_that_failed_is_tried_again_the_next_hour_without_a_turn(
+    store: Watched,
+) -> None:
+    await held_facts(store, "likes green tea", "likes green tea")
+    clock, reports = Clock(), Reports()
+
+    async with learning(
+        store, Scripted(down, NOT_SAME), report=reports, idle_s=0.01, clock=clock
+    ):
+        failed = await reports.next()
+        clock.now = CONSOLIDATE_EVERY_S
+        again = await reports.next()
+
+    assert failed.error == "the local model is not running"
+    assert (again.asked, again.error) == (1, None)
+
+
+async def test_an_idle_consolidation_gives_way_to_a_turn(store: Watched) -> None:
+    await held_facts(store, *TWO_PAIRS)
+    learners: list[FactLearning] = []
+
+    def a_turn_comes(_: ChatRequest) -> list[ChatChunk]:
+        learners[0].wake()
+        return NOT_SAME
+
+    reports = Reports()
+    async with learning(
+        store, Scripted(a_turn_comes), report=reports, idle_s=0.01
+    ) as learner:
+        learners.append(learner)
+        done = await reports.next()
+
+    assert (done.asked, done.stopped, done.scheduled) == (1, True, True)
+    assert len(await store.apart()) == 1
+
+
+class Held(Scripted):
+    """A model whose first answer waits until the test lets it go."""
+
+    def __init__(self, *replies: list[ChatChunk]) -> None:
+        super().__init__(*replies)
+        self.asked = asyncio.Event()
+        self.first = asyncio.Event()
+        self.go = asyncio.Event()
+
+    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
+        self.asked.set()
+        if not self.requests:
+            self.first.set()
+            await self.go.wait()
+        async for chunk in super().stream(request):
+            yield chunk
+
+
+async def test_a_consolidation_waits_for_the_turn_being_learned_from(
+    store: Watched,
+) -> None:
+    await held_facts(store, "likes green tea", "likes green tea")
+    await waiting_turn(store, "my sister lives in pune")
+    model = Held(found(("my sister lives in pune", "fact")), NOT_SAME)
+
+    async with learning(store, model) as learner:
+        await asyncio.wait_for(model.first.wait(), timeout=5)
+        model.asked.clear()
+        consolidating = asyncio.create_task(learner.consolidate())
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(model.asked.wait(), timeout=0.3)
+        model.go.set()
+        done = await asyncio.wait_for(consolidating, timeout=5)
+
+    assert (done.asked, done.error) == (1, None)
+    assert "my sister lives in pune" in model.requests[0].messages[-1].text
+
+
+async def test_a_cancelled_consolidation_is_reported_as_cancelled(
+    store: Watched,
+) -> None:
+    await held_facts(store, "likes green tea", "likes green tea")
+    model = Held(NOT_SAME)
+    reports = Reports()
+    learner = FactLearning(await keeper(store, model), store, report=reports)
+
+    running = asyncio.create_task(learner.consolidate())
+    await asyncio.wait_for(model.first.wait(), timeout=5)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    (done,) = reports.done
+    assert (done.asked, done.merged, done.error) == (1, 0, CANCELLED)
+
+
+async def test_a_report_that_fails_is_logged_and_the_run_still_ends(
+    store: Watched, caplog: pytest.LogCaptureFixture
+) -> None:
+    def broken(_: Consolidated) -> None:
+        message = "the trace broke"
+        raise ValueError(message)
+
+    learner = FactLearning(await keeper(store, Scripted()), store, report=broken)
+
+    with caplog.at_level(logging.ERROR, "synthia.memory.facts"):
+        done = await learner.consolidate()
+
+    assert (done.asked, done.error) == (0, None)
+    assert "a consolidation was not reported" in caplog.text
+
+
+async def test_a_failure_with_no_message_is_named_by_its_kind(store: Watched) -> None:
+    def silent(_: ChatRequest) -> list[ChatChunk]:
+        raise GatewayError("")  # noqa: EM101 - an empty message is the case
+
+    await held_facts(store, "likes green tea", "likes green tea")
+    learner = FactLearning(await keeper(store, Scripted(silent)), store)
+
+    assert (await learner.consolidate()).error == "GatewayError"

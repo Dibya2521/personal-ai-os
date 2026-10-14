@@ -74,6 +74,17 @@ All notable changes are recorded here. The format follows
   facts learned from those turns, and says how many of each. A forgotten
   fact leaves the prompt of every open chat at its next turn; what was said
   in the current chat stays in it until `/reset`.
+- The facts held are consolidated: each pair at cosine 0.80 or more goes to
+  the local model, asked in both orders whether the two are one fact, and
+  the older of a pair that is one is kept as replaced by the newer. On 28
+  pairs that say the same fact and 28 that do not, written before any run,
+  qwen3.5-4b merged 23 of the first and none of the second. A pair it calls
+  two facts is remembered and never asked about again. The daemon does this
+  after 10 minutes without a turn, at most once an hour and only when a turn
+  was remembered since the last run or that run failed, and stops before its
+  next question if a turn comes; `synthia memory consolidate` asks the running daemon to do
+  it now and says how many pairs it asked about and merged. Each run goes to
+  the daemon's trace, and `synthia trace --list` counts them.
 - Long chats keep fitting in the model's context window. Before each turn
   the oldest turns leave, whole, until the request fits with a quarter of the
   window kept free for the answer. With a local model, the turns that left

@@ -20,6 +20,11 @@ Methods, client to daemon:
   to show.
 - ``status`` {} returns how many ``sessions`` the daemon holds and the
   ``local`` model's state: ``ready``, ``starting``, ``stopped`` or ``none``.
+- ``consolidate`` {} merges the facts held that the local model calls one,
+  once no turn is being learned from, and returns ``asked``, ``merged``,
+  ``seconds``, ``scheduled``, ``stopped`` and ``error`` (null, or why the run
+  failed). A daemon that learns no facts (no local model, or no embedding
+  model) answers error ``-32003``.
 - ``stop`` {} stops the daemon.
 
 Request, daemon to client: ``approve`` {``tool``, ``arguments``} returns true to
@@ -58,6 +63,10 @@ if TYPE_CHECKING:
 INVALID_PARAMS: Final = -32602
 ANSWER_FAILED: Final = -32001
 IMAGE_REFUSED: Final = -32002
+NO_LEARNING: Final = -32003
+NOT_LEARNING: Final = (
+    "this daemon learns no facts: it needs a local model and an embedding model"
+)
 APPROVE: Final = "approve"
 
 logger = logging.getLogger(__name__)
@@ -196,6 +205,7 @@ class Served:
         self._sessions = sessions
         self._warnings = host.warnings
         self._local_state = host.local_state
+        self._learning = host.learning
 
     async def close(self) -> None:
         """Stop serving: running turns are cancelled, the conversation closed."""
@@ -220,6 +230,7 @@ class Served:
             "forget_fact": self._forget_fact,
             "forget_about": self._forget_about,
             "status": self._status,
+            "consolidate": self._consolidate,
             "stop": self._stop,
         }
 
@@ -287,6 +298,12 @@ class Served:
     async def _status(self, params: Params) -> object:
         checked(EmptyParams, params)
         return {"sessions": self._sessions(), "local": self._local_state()}
+
+    async def _consolidate(self, params: Params) -> object:
+        checked(EmptyParams, params)
+        if self._learning is None:
+            raise RpcError(NO_LEARNING, NOT_LEARNING)
+        return asdict(await self._learning.consolidate())
 
     async def _stop(self, params: Params) -> object:
         checked(EmptyParams, params)

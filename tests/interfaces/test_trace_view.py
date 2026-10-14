@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from synthia.agent.trace import (
     TRACES,
     Clip,
+    ConsolidationRan,
     ModelAnswered,
     PlanAnswerStarted,
     PlanMade,
@@ -29,7 +30,7 @@ from synthia.agent.trace import (
 from synthia.interfaces import doctor
 from synthia.interfaces.chat import run_chat
 from synthia.interfaces.cli import app
-from synthia.interfaces.trace_view import build_tree
+from synthia.interfaces.trace_view import build_tree, summary
 from synthia.kernel.supervisor import RestartPolicy
 from tests.interfaces.daemons import private_daemon
 from tests.interfaces.test_chat import KEY, console, scripted, settings, thinking_then
@@ -251,6 +252,55 @@ def test_a_service_shows_each_start_end_and_restart() -> None:
         "  service llama-server ended at 15:15:00 | not restarted",
         "  service llama-server stopped at 15:15:00",
     ]
+
+
+def consolidation(**fields: object) -> ConsolidationRan:
+    return ConsolidationRan.model_validate(
+        {
+            "turn": 0,
+            "at": AT,
+            "asked": 3,
+            "merged": 1,
+            "seconds": 41.5,
+            "scheduled": True,
+            "stopped": False,
+        }
+        | fields
+    )
+
+
+def test_a_consolidation_shows_why_it_ran_what_it_did_and_how_it_ended() -> None:
+    records: list[Record] = [
+        consolidation(),
+        consolidation(scheduled=False, stopped=True, asked=1, merged=0),
+        consolidation(error=Clip.of("the local\nmodel is not running")),
+    ]
+
+    assert outline(build_tree("d", records, tz=UTC))[1:] == [
+        (
+            "  facts consolidated at 15:15:00 when idle | "
+            "3 pairs asked about, 1 merged | 41.5 s"
+        ),
+        (
+            "  facts consolidated at 15:15:00 when asked | "
+            "1 pair asked about, 0 merged | 41.5 s | gave way to a turn"
+        ),
+        (
+            "  facts consolidated at 15:15:00 when idle | "
+            "3 pairs asked about, 1 merged | 41.5 s | "
+            "failed: the local model is not running"
+        ),
+    ]
+
+
+def test_the_list_counts_a_daemon_trace_consolidations(tmp_path: Path) -> None:
+    path = tmp_path / "d.jsonl"
+    path.write_text(
+        "".join(r.model_dump_json() + "\n" for r in [consolidation()] * 2),
+        encoding="utf-8",
+    )
+
+    assert summary(path) == "d | turns 0 | tool calls 0 | consolidations 2"
 
 
 @pytest.fixture

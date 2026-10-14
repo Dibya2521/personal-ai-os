@@ -330,6 +330,41 @@ def test_a_session_is_named_by_its_start_time_and_written_only_when_used(
     assert Trace.start(tmp_path, at).path != trace.path
 
 
+def test_a_consolidation_is_recorded_outside_any_turn_with_its_error_cut(
+    tmp_path: Path,
+) -> None:
+    trace = Trace(tmp_path / "d.jsonl", at)
+
+    trace.consolidation(
+        asked=3, merged=1, seconds=41.5, scheduled=True, stopped=False, error=None
+    )
+    trace.consolidation(
+        asked=1,
+        merged=0,
+        seconds=2.0,
+        scheduled=False,
+        stopped=True,
+        error="x" * (MAX_TRACED_CHARS + 5),
+    )
+
+    first, second = dumps(trace.path)
+    assert first == {
+        "turn": 0,
+        "at": "2026-10-02T15:15:00Z",
+        "kind": "consolidation",
+        "asked": 3,
+        "merged": 1,
+        "scheduled": True,
+        "stopped": False,
+        "error": None,
+    }
+    assert (second["asked"], second["stopped"], second["error"]) == (
+        1,
+        True,
+        {"text": "x" * MAX_TRACED_CHARS, "chars": MAX_TRACED_CHARS + 5},
+    )
+
+
 def test_sessions_are_listed_oldest_first(tmp_path: Path) -> None:
     for name in ("20261002T151500Z-bb", "20261001T090000Z-ff", "notes"):
         (tmp_path / f"{name}.jsonl").write_text("")

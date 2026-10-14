@@ -22,13 +22,23 @@ from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings
 from synthia.kernel.jsonrpc import Method, Notice, Params, Peer, RpcError
 from synthia.kernel.supervisor import ServiceEvent, ServiceStarted
+from synthia.memory.hybrid import Recall
+from synthia.memory.store import MEMORY_FILE, MemoryStore
 from synthia.persona.library import PersonaLibrary
-from synthia.server.api import ANSWER_FAILED, IMAGE_REFUSED, INVALID_PARAMS
+from synthia.server.api import (
+    ANSWER_FAILED,
+    IMAGE_REFUSED,
+    INVALID_PARAMS,
+    NO_LEARNING,
+    NOT_LEARNING,
+)
 from synthia.server.daemon import run_daemon, serve
 from synthia.server.discovery import DAEMON_FILE, DaemonInfo, read_info
-from synthia.server.host import Host, publish_route
+from synthia.server.host import Host, open_learning, publish_route
 from tests.agent.scripted import Scripted, calls, says
 from tests.interfaces.test_chat import KEY
+from tests.memory.test_facts import SAME, held_facts
+from tests.memory.test_hybrid import Network, embedder
 from tests.timing import HANG_TIMEOUT_S
 
 
@@ -486,6 +496,49 @@ async def test_the_local_model_starts_with_the_daemon_and_stops_with_it(
         [r.kind for r in read_trace(path)[0]] for path in sessions(tmp_path / TRACES)
     ]
     assert sorted(kinds) == [["service"], ["turn", "model", "finished"]]
+
+
+async def test_the_daemon_consolidates_facts_when_asked_and_only_if_it_learns(
+    tmp_path: Path,
+) -> None:
+    learns, plain = tmp_path / "learns", tmp_path / "plain"
+    store = MemoryStore(learns / MEMORY_FILE)
+    await held_facts(store, "likes green tea", "likes green tea")
+    memory = Recall(store, embedder(Network()))
+    async with httpx.AsyncClient() as http:
+        gateway = build_gateway(
+            Settings(home=learns), http, publish_route, Local(SAME, SAME)
+        )
+        learning = await open_learning(memory, gateway.model, print, local=True)
+        host = Host(
+            gateway,
+            PersonaLibrary(),
+            "synthia",
+            Toolbox(),
+            memory=memory,
+            learning=learning,
+        )
+        stop = asyncio.Event()
+        serving = asyncio.create_task(serve(host, learns, stop=stop))
+        async with client(await written(learns, serving)) as talk:
+            done = cast("dict[str, object]", await talk.call("consolidate"))
+        stop.set()
+        await asyncio.wait_for(serving, HANG_TIMEOUT_S)
+    async with daemon(plain, Local()) as info, client(info) as talk:
+        with pytest.raises(RpcError) as refused:
+            await talk.call("consolidate")
+
+    assert done.pop("seconds") is not None
+    assert done == {
+        "asked": 1,
+        "merged": 1,
+        "scheduled": False,
+        "stopped": False,
+        "error": None,
+    }
+    assert len(await store.facts()) == 1
+    assert refused.value.code == NO_LEARNING
+    assert str(refused.value) == NOT_LEARNING
 
 
 async def test_a_routing_decision_outside_any_turn_goes_nowhere() -> None:

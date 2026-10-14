@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
 import numpy as np
@@ -36,8 +38,7 @@ from synthia.memory.store import FactKind
 from synthia.memory.vectors import VectorSet
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
-    from datetime import datetime
+    from collections.abc import Callable, Mapping, Sequence
 
     from synthia.gateway.protocol import ChatModel
     from synthia.memory.embed import TextEmbedder
@@ -54,6 +55,9 @@ MAX_FACT_CHARS: Final = 200
 MAX_ANSWER_CHARS: Final = 1000
 DUPLICATE: Final = 0.90
 MERGE_FLOOR: Final = 0.80
+IDLE_S: Final = 600.0
+CONSOLIDATE_EVERY_S: Final = 3600.0
+CANCELLED: Final = "cancelled"
 INSTRUCTIONS: Final = (
     "You keep a list of lasting facts about the person SYNTHIA talks with. "
     "From the exchange, write each new fact or preference the person states "
@@ -182,12 +186,41 @@ def same_request(first: str, second: str) -> ChatRequest:
     )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class Merged:
-    """The outcome of one merge pass over the held facts."""
+    """A merge pass so far: pairs asked about, facts merged, whether it stopped."""
+
+    asked: int = 0
+    merged: int = 0
+    stopped: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Consolidated:
+    """One consolidation run: its merge pass, how long it took, and how it ended.
+
+    ``stopped`` is set when a scheduled run gave way to a turn; ``error`` says
+    why a run failed. Merges made before a failure stay made.
+    """
 
     asked: int
     merged: int
+    seconds: float
+    scheduled: bool
+    stopped: bool
+    error: str | None = None
+
+
+def _never() -> bool:
+    return False
+
+
+def _named(error: Exception) -> str:
+    return str(error) or type(error).__name__
+
+
+def _ignore(_: Consolidated) -> None:
+    pass
 
 
 class FactKeeper:
@@ -288,7 +321,13 @@ class FactKeeper:
         await self._store.end_fact(fact.id, at, replaced_by)
         self._held.remove(fact.id)
 
-    async def merge_repeats(self, at: datetime) -> Merged:
+    async def merge_repeats(
+        self,
+        at: datetime,
+        tally: Merged | None = None,
+        *,
+        busy: Callable[[], bool] = _never,
+    ) -> Merged:
         """End the older of each pair of held facts the local model calls one.
 
         Only pairs at least :data:`MERGE_FLOOR` similar are asked about, most
@@ -298,18 +337,26 @@ class FactKeeper:
         takes seconds of the local model, and each repeat is another chance
         of a wrong yes, which would lose a true fact.
 
+        The pass counts into ``tally`` as it goes, so a pass ended by an
+        error still says what it did, and stops before its next question
+        once ``busy`` says so.
+
         Raises:
             GatewayError: If the local model failed.
         """
+        tally = Merged() if tally is None else tally
         held = await self._reconciled()
         apart = await self._store.apart()
-        asked, merged, done = 0, 0, set[int]()
+        done = set[int]()
         for one, other in self._held.close_pairs(MERGE_FLOOR):
             pair = (min(one, other), max(one, other))
             if one in done or other in done or pair in apart:
                 continue
+            if busy():
+                tally.stopped = True
+                break
             first, second = held[one], held[other]
-            asked += 1
+            tally.asked += 1
             same = await self._same(first.text, second.text)
             if same is None:
                 continue
@@ -321,9 +368,9 @@ class FactKeeper:
             )
             if await self._store.end_fact(older.id, at, newer.id):
                 self._held.remove(older.id)
-                merged += 1
+                tally.merged += 1
             done |= {first.id, second.id}
-        return Merged(asked, merged)
+        return tally
 
     async def _same(self, first: str, second: str) -> bool | None:
         """Return whether the model calls the two one; None with no valid answer."""
@@ -347,27 +394,112 @@ class FactLearning:
     a turn cut off part way included, so its first facts may be found twice.
     A turn is dropped only when the model's answer is never valid, or after
     :data:`TRIES` failures of another kind.
+
+    It also consolidates the facts held: when no turn has come for
+    ``idle_s``, at most once every ``every_s``, and only if a turn was
+    remembered since the last run or that run failed. Learning and
+    consolidating take turns under one lock: both ask the local model and
+    change the same facts.
     """
 
-    def __init__(self, keeper: FactKeeper, store: MemoryStore) -> None:
+    def __init__(  # noqa: PLR0913 - the schedule's parts are injected for tests
+        self,
+        keeper: FactKeeper,
+        store: MemoryStore,
+        *,
+        report: Callable[[Consolidated], None] = _ignore,
+        idle_s: float = IDLE_S,
+        every_s: float = CONSOLIDATE_EVERY_S,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._keeper = keeper
         self._store = store
+        self._report = report
+        self._idle_s = idle_s
+        self._every_s = every_s
+        self._clock = clock
+        self._lock = asyncio.Lock()
         self._waiting = asyncio.Event()
         self._waiting.set()
+        self._last: float | None = None
+        self._changed = True
 
     def wake(self) -> None:
         """Say that a turn is waiting to be learned from."""
         self._waiting.set()
 
     async def run(self) -> None:
-        """Learn from each waiting turn, oldest first, until cancelled."""
+        """Learn from each waiting turn, oldest first, and consolidate when idle.
+
+        Runs until cancelled.
+        """
         while True:
-            await self._waiting.wait()
+            try:
+                await asyncio.wait_for(self._waiting.wait(), timeout=self._idle_s)
+            except TimeoutError:
+                if self._due():
+                    await self.consolidate(scheduled=True)
+                continue
             self._waiting.clear()
             try:
-                await self._drain()
+                async with self._lock:
+                    self._changed = True
+                    await self._drain()
             except Exception:
                 logger.exception("facts were not learned; trying at the next turn")
+
+    def _due(self) -> bool:
+        now = self._clock()
+        return self._changed and (
+            self._last is None or now - self._last >= self._every_s
+        )
+
+    async def consolidate(self, *, scheduled: bool = False) -> Consolidated:
+        """Merge the held facts the local model calls one, then tidy the indexes.
+
+        Waits while a turn is learned from. A ``scheduled`` run gives way
+        before its next question once a turn is waiting; the pairs it left
+        are asked at the next run. Never fails: a failure is logged and
+        named in :attr:`Consolidated.error`. A run that is cancelled is
+        reported as such before the cancellation goes on.
+        """
+        async with self._lock:
+            started = self._last = self._clock()
+            tally = Merged()
+            error: str | None = CANCELLED
+            try:
+                await self._keeper.merge_repeats(
+                    datetime.now(UTC),
+                    tally,
+                    busy=self._waiting.is_set if scheduled else _never,
+                )
+                await self._store.optimize()
+                error = None
+            except GatewayError as failed:
+                logger.warning("facts were not consolidated: %s", failed)
+                error = _named(failed)
+            except Exception as failed:
+                logger.exception("facts were not consolidated")
+                error = _named(failed)
+            finally:
+                if error is None:
+                    self._changed = False
+                done = Consolidated(
+                    tally.asked,
+                    tally.merged,
+                    self._clock() - started,
+                    scheduled,
+                    tally.stopped,
+                    error,
+                )
+                self._reported(done)
+        return done
+
+    def _reported(self, done: Consolidated) -> None:
+        try:
+            self._report(done)
+        except Exception:
+            logger.exception("a consolidation was not reported")
 
     async def _drain(self) -> None:
         while waiting := await self._store.to_learn(BATCH):

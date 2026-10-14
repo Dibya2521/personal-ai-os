@@ -5,6 +5,7 @@ import re
 import socket
 from pathlib import Path
 
+import httpx
 import pytest
 from pydantic import SecretStr
 from typer.testing import CliRunner
@@ -12,8 +13,8 @@ from typer.testing import CliRunner
 from synthia import __version__
 from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
 from synthia.gateway.errors import GatewayError
-from synthia.gateway.types import ChatChunk, PromptProgress
-from synthia.interfaces import daemon_client
+from synthia.gateway.types import ChatChunk, ChatRequest, PromptProgress
+from synthia.interfaces import cli, daemon_client, doctor
 from synthia.interfaces.cli import app
 from synthia.interfaces.daemon_client import (
     STOPPED_AT_START,
@@ -27,7 +28,10 @@ from synthia.interfaces.daemon_client import (
     stopped,
 )
 from synthia.kernel.config import Settings
-from synthia.server.api import mark_of
+from synthia.memory.embed import TextEmbedder
+from synthia.memory.store import MEMORY_FILE, MemoryStore
+from synthia.server import daemon as daemon_module
+from synthia.server.api import NOT_LEARNING, mark_of
 from synthia.server.discovery import (
     DAEMON_FILE,
     DaemonInfo,
@@ -36,8 +40,12 @@ from synthia.server.discovery import (
     started_now,
 )
 from synthia.server.session import ImageError, PlanMark
+from tests.agent.scripted import Reply
 from tests.interfaces.daemons import private_daemon
 from tests.interfaces.test_chat import KEY
+from tests.memory.test_facts import SAME, held_facts
+from tests.memory.test_hybrid import Network, embedder
+from tests.server.test_daemon import Local, Service
 from tests.timing import HANG_TIMEOUT_S
 
 
@@ -238,6 +246,100 @@ def test_status_and_stop_from_the_command_line(
     assert (stopping.exit_code, stopping.output, gone) == (0, "daemon stopped\n", True)
     assert runner.invoke(app, ["status"]).output == "no daemon running\n"
     assert runner.invoke(app, ["stop"]).output == "no daemon running\n"
+
+
+class Judging(Service):
+    """The local model's service, with a model that answers ``replies``."""
+
+    def __init__(self, *replies: Reply) -> None:
+        super().__init__()
+        self.replies = replies
+
+    def model(self, client: httpx.AsyncClient) -> Local:
+        del client
+        return Local(*self.replies)
+
+
+@pytest.fixture
+def learns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home whose daemon learns facts, holding two that say the same."""
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+
+    def loaded(*_: object) -> TextEmbedder:
+        return embedder(Network())
+
+    monkeypatch.setattr(daemon_module, "open_embedder", loaded)
+    store = MemoryStore(tmp_path / MEMORY_FILE)
+    asyncio.run(held_facts(store, "likes green tea", "likes green tea"))
+    return tmp_path
+
+
+def test_facts_are_consolidated_from_the_command_line_and_traced(
+    learns: Path,
+) -> None:
+    runner = CliRunner()
+    with private_daemon(keyed(learns), local=Judging(SAME, SAME)):
+        merged = runner.invoke(app, ["memory", "consolidate"])
+        again = runner.invoke(app, ["memory", "consolidate"])
+    listed = runner.invoke(app, ["trace", "--list"])
+
+    assert merged.exit_code == 0
+    assert re.fullmatch(
+        r"1 pair of facts asked about, 1 merged, in \d+\.\d s\n", merged.stdout
+    )
+    assert again.stdout.startswith("0 pairs of facts asked about, 0 merged, in ")
+    assert listed.stdout.rstrip().endswith("| service restarts 0 | consolidations 2")
+
+
+def test_a_consolidation_the_local_model_fails_says_so_and_exits_2(
+    learns: Path,
+) -> None:
+    def down(_: ChatRequest) -> list[ChatChunk]:
+        message = "the local model is not running"
+        raise GatewayError(message)
+
+    with private_daemon(keyed(learns), local=Judging(down)):
+        failed = CliRunner().invoke(app, ["memory", "consolidate"])
+
+    assert failed.exit_code == doctor.Status.FAIL
+    assert failed.stdout.startswith("1 pair of facts asked about, 0 merged, in ")
+    assert "error: " in failed.stderr
+    assert "the local model is not running" in failed.stderr
+
+
+def test_consolidating_needs_a_running_daemon_that_learns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    none_running = runner.invoke(app, ["memory", "consolidate"])
+    with private_daemon(keyed(tmp_path)):
+        not_learning = runner.invoke(app, ["memory", "consolidate"])
+
+    assert (none_running.exit_code, not_learning.exit_code) == (2, 2)
+    assert none_running.stderr == (
+        "error: no daemon running; it holds the local model: "
+        "start it with `synthia serve` or `synthia chat`\n"
+    )
+    assert not_learning.stderr == f"error: {NOT_LEARNING}\n"
+
+
+def test_a_consolidation_stopped_with_ctrl_c_says_what_stays(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def interrupted(_: Path) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "consolidate_memory", interrupted)
+
+    stopped = CliRunner().invoke(app, ["memory", "consolidate"])
+
+    assert stopped.exit_code == doctor.Status.FAIL
+    assert stopped.stdout == "stopped; facts merged so far stay merged\n"
 
 
 async def test_the_real_command_starts_a_daemon_in_the_background(

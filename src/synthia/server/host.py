@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from synthia.gateway.protocol import ChatModel
     from synthia.kernel.bus import Event
     from synthia.kernel.config import Settings
+    from synthia.memory.facts import Consolidated
     from synthia.models.catalogue import Embedder
     from synthia.persona.library import PersonaLibrary
 
@@ -157,12 +158,14 @@ async def open_learning(
     warn: Callable[[str], None],
     *,
     local: bool,
+    trace: Trace | None = None,
 ) -> FactLearning | None:
     """Return the learner of facts about the person, or None when it cannot run.
 
     It needs memory, an embedding model and a ``local`` model: facts are
     written on this machine and compared by meaning. A memory whose facts
-    cannot be read is passed to ``warn``.
+    cannot be read is passed to ``warn``. Each consolidation it runs goes
+    to ``trace``.
     """
     if memory is None or memory.embedder is None or not local:
         return None
@@ -172,7 +175,21 @@ async def open_learning(
     except (sqlite3.Error, OSError, EmbedError) as error:
         warn(f"no facts will be learned: {error}")
         return None
-    return FactLearning(keeper, memory.store)
+    if trace is None:
+        return FactLearning(keeper, memory.store)
+    return FactLearning(keeper, memory.store, report=partial(traced, trace))
+
+
+def traced(trace: Trace, done: Consolidated) -> None:
+    """Record the consolidation ``done`` in ``trace``."""
+    trace.consolidation(
+        asked=done.asked,
+        merged=done.merged,
+        seconds=done.seconds,
+        scheduled=done.scheduled,
+        stopped=done.stopped,
+        error=done.error,
+    )
 
 
 @asynccontextmanager

@@ -23,6 +23,7 @@ from synthia.interfaces import model_commands
 from synthia.interfaces.chat import run_chat
 from synthia.interfaces.daemon_client import (
     DaemonError,
+    consolidate_memory,
     current_daemon,
     daemon_status,
     stop_running,
@@ -31,6 +32,7 @@ from synthia.interfaces.trace_view import build_tree, summary
 from synthia.interfaces.usage_report import budget_report
 from synthia.kernel.config import Settings, load_settings, unknown_variables
 from synthia.kernel.errors import ConfigError, SynthiaError
+from synthia.kernel.jsonrpc import RpcError
 from synthia.kernel.logs import logging_to
 from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.models.server import Launch
@@ -54,6 +56,11 @@ models_app = typer.Typer(
     help="Install and remove the local runtime and models.", no_args_is_help=True
 )
 app.add_typer(models_app, name="models")
+
+memory_app = typer.Typer(
+    help="Look after what SYNTHIA remembers.", no_args_is_help=True
+)
+app.add_typer(memory_app, name="memory")
 
 CHAT_LOG = Path("logs") / "synthia.log"
 
@@ -205,6 +212,41 @@ def status() -> None:
     )
     typer.echo(f"other conversations open: {found.others}")
     typer.echo(f"local model: {found.local}")
+
+
+@memory_app.command("consolidate")
+def memory_consolidate() -> None:
+    """Merge the facts held about the person that the local model calls one.
+
+    The daemon does it, since it holds the local model; it also does it on
+    its own after ten minutes without a turn, at most once an hour. Each pair
+    of close facts is asked about once; the older of a pair that is one fact
+    is kept as replaced by the newer. Exits 2 when it could not run or the
+    local model failed.
+    """
+    try:
+        done = asyncio.run(consolidate_memory(_settings().home))
+    except RpcError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    except KeyboardInterrupt:
+        typer.echo("stopped; facts merged so far stay merged")
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    if done is None:
+        typer.echo(
+            "error: no daemon running; it holds the local model: "
+            "start it with `synthia serve` or `synthia chat`",
+            err=True,
+        )
+        raise typer.Exit(doctor_checks.Status.FAIL)
+    pairs = "pair" if done.asked == 1 else "pairs"
+    typer.echo(
+        f"{done.asked} {pairs} of facts asked about, {done.merged} merged, "
+        f"in {done.seconds:.1f} s"
+    )
+    if done.error is not None:
+        typer.echo(f"error: {done.error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL)
 
 
 @app.command()

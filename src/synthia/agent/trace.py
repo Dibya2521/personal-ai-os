@@ -3,8 +3,8 @@
 A chat writes one file per session under ``<home>/traces``, named by the time
 it started, so ``synthia trace`` can show afterwards which tools ran, with what,
 what came back, and where each model step was sent. The daemon writes one
-too, for the services it supervises: when each started, ended and was
-restarted. Texts are cut to
+too, for the services it supervises (when each started, ended and was
+restarted) and for each consolidation of the facts it holds. Texts are cut to
 :data:`MAX_TRACED_CHARS` with their full length kept: a trace shows what
 happened, it is not a copy of every file a tool read. The key never appears,
 because no step carries it.
@@ -179,6 +179,24 @@ class ServiceChanged(_Record):
     restart_in_s: float | None = None
 
 
+class ConsolidationRan(_Record):
+    """The held facts were consolidated; never in a turn.
+
+    ``asked`` pairs of close facts went to the local model and ``merged``
+    were one fact. ``scheduled`` runs come when the daemon is idle, the
+    others when asked; ``stopped`` is set when a scheduled run gave way to
+    a turn.
+    """
+
+    kind: Literal["consolidation"] = "consolidation"
+    asked: int
+    merged: int
+    seconds: float
+    scheduled: bool
+    stopped: bool
+    error: Clip | None = None
+
+
 type Record = Annotated[
     TurnBegan
     | ModelAnswered
@@ -189,7 +207,8 @@ type Record = Annotated[
     | PlanAnswerStarted
     | TurnEnded
     | TurnFailed
-    | ServiceChanged,
+    | ServiceChanged
+    | ConsolidationRan,
     Field(discriminator="kind"),
 ]
 _RECORD: Final[TypeAdapter[Record]] = TypeAdapter(Record)
@@ -366,6 +385,30 @@ class Trace:
     def service(self, event: ServiceEvent) -> None:
         """Record a change in a supervised service."""
         self._write(service_record(event, at=self._now()))
+
+    def consolidation(  # noqa: PLR0913 - one argument per recorded field
+        self,
+        *,
+        asked: int,
+        merged: int,
+        seconds: float,
+        scheduled: bool,
+        stopped: bool,
+        error: str | None,
+    ) -> None:
+        """Record a consolidation run of the held facts."""
+        self._write(
+            ConsolidationRan(
+                turn=0,
+                at=self._now(),
+                asked=asked,
+                merged=merged,
+                seconds=seconds,
+                scheduled=scheduled,
+                stopped=stopped,
+                error=None if error is None else Clip.of(error),
+            )
+        )
 
     def _write(self, record: Record) -> None:
         if self._broken:
