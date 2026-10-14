@@ -24,10 +24,10 @@ import numpy as np
 import psutil
 
 from synthia.kernel.config import default_home
-from synthia.memory.bm25 import Bm25Index
-from synthia.memory.embed import TextEmbedder
 from synthia.models.catalogue import EMBEDDERS
 from synthia.models.install import BYTES_PER_GB, Installer
+from synthia.retrieval.bm25 import Bm25Index
+from synthia.retrieval.embed import TextEmbedder
 
 RECALL_SET: Final = Path(__file__).parent / "data" / "recall_set.json"
 DEPTHS: Final = (1, 5)

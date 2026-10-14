@@ -6,13 +6,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from synthia.memory.embed import Feeds, TextEmbedder
-from synthia.memory.hybrid import CANDIDATES, Recall, Recalled, fused
-from synthia.memory.store import MemoryStore, Turn, WordScores
-from synthia.memory.wordpiece import WordPiece
-from tests.memory.test_embed import installed
-from tests.memory.test_wordpiece import SPECIALS
+from synthia.memory.hybrid import CANDIDATES, Recall, Recalled
+from synthia.memory.store import MemoryStore, Turn
+from synthia.retrieval.embed import Feeds, TextEmbedder
+from synthia.retrieval.wordpiece import WordPiece
 from tests.models.fakes import EMBEDDER
+from tests.retrieval.test_embed import installed
+from tests.retrieval.test_wordpiece import SPECIALS
 
 MONDAY = datetime(2026, 9, 28, 9, 0, tzinfo=UTC)
 DAY = timedelta(days=1)
@@ -104,17 +104,6 @@ async def recall_over(store: MemoryStore, network: Network, **options: float) ->
 
 def asked(found: list[Recalled]) -> list[str]:
     return [r.turn.question for r in found]
-
-
-def test_fused_adds_the_scaled_word_score_to_the_similarity() -> None:
-    words = WordScores({2: 3.0, 3: 1.0}, turns=10)
-
-    scores = fused({1: 0.5, 2: 0.1}, words, 0.25)
-
-    # The scale for 10 turns is ln(21) * 2.2 = 6.697949362991531.
-    assert scores == pytest.approx(
-        {1: 0.5, 2: 0.21197457002944922, 3: 0.037324856676483074}, rel=1e-12
-    )
 
 
 async def test_meaning_finds_a_turn_that_shares_no_word_with_the_question(

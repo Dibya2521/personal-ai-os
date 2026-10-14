@@ -32,10 +32,10 @@ from fact_extraction import FACTS_SET, TIMEOUT, Item, installed, out, ready
 
 from synthia.gateway.structured import StructuredOutputError, generate
 from synthia.kernel.config import default_home
-from synthia.memory.embed import TextEmbedder
 from synthia.memory.facts import Same, same_request
 from synthia.models.catalogue import DEFAULT_EMBEDDER
 from synthia.models.install import BYTES_PER_GB, Installer
+from synthia.retrieval.embed import TextEmbedder
 
 if TYPE_CHECKING:
     from synthia.gateway.protocol import ChatModel

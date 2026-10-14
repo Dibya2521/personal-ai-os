@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from synthia.memory.bm25 import Bm25Index, Hit, terms
-from synthia.memory.porter import stem
-from synthia.memory.store import FTS_TOKENIZER
+from synthia.retrieval.bm25 import Bm25Index, Hit, terms
+from synthia.retrieval.fts import FTS_TOKENIZER
+from synthia.retrieval.porter import stem
 
 REPO = Path(__file__).parents[2]
 LETTERS = "aeiouybcdfghjklmnpqrstvwxz"  # pragma: allowlist secret

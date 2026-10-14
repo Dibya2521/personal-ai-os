@@ -6,14 +6,8 @@ turn found by either gets one score::
 
     cosine similarity + 0.1 * bm25 / (ln(2N + 1) * (k1 + 1))
 
-The divisor is a ceiling on one query word's BM25 score among N turns: the
-highest idf a word can get, ln((N + 0.5) / 0.5), times the most a repeated
-word can add, k1 + 1. It is fixed for the store rather than stretched per
-query, so a question whose only shared words are "my" and "what" keeps the
-small word score it deserves. Fusing by rank instead (reciprocal rank
-fusion, k 60) gives that weak list's first turn as much weight as the
-meaning's first turn; on 40 questions asked in other words than the answer
-it cut how often the right turn came first from 0.500 to 0.125.
+over N turns, the fused score of :mod:`synthia.retrieval.fusion`, which says
+why the divisor is fixed and why ranks are not fused instead.
 
 The weight 0.1 was measured with ``benchmarks/hybrid_recall.py``: from 0.05
 to 0.15 the fused ranking was at least as good as meaning alone at 1, 3 and
@@ -40,16 +34,15 @@ from typing import TYPE_CHECKING, Final
 
 import numpy as np
 
-from synthia.memory.bm25 import K1
-from synthia.memory.store import match_expression
-from synthia.memory.vectors import VectorSet
+from synthia.retrieval.fts import match_expression
+from synthia.retrieval.fusion import fused
+from synthia.retrieval.vectors import VectorSet
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
     from datetime import datetime
 
-    from synthia.memory.embed import TextEmbedder
-    from synthia.memory.store import Asked, MemoryStore, Remembered, WordScores
+    from synthia.memory.store import Asked, MemoryStore, Remembered
+    from synthia.retrieval.embed import TextEmbedder
 
 WORD_WEIGHT: Final = 0.1
 # Turns taken from each side before fusing. A turn outside the meaning's
@@ -57,23 +50,6 @@ WORD_WEIGHT: Final = 0.1
 # exact.
 CANDIDATES: Final = 50
 EMBED_BATCH: Final = 64
-
-
-def word_scale(turns: int) -> float:
-    """Return a ceiling on one query word's BM25 score among ``turns`` turns."""
-    return math.log(2 * turns + 1) * (K1 + 1)
-
-
-def fused(
-    similarities: Mapping[int, float], words: WordScores, word_weight: float
-) -> dict[int, float]:
-    """Return each turn's similarity plus its scaled word score."""
-    scale = word_scale(words.turns)
-    return {
-        turn: similarities.get(turn, 0.0)
-        + word_weight * words.scores.get(turn, 0.0) / scale
-        for turn in similarities.keys() | words.scores.keys()
-    }
 
 
 @dataclass(frozen=True, slots=True)

@@ -29,11 +29,11 @@ from pathlib import Path
 from typing import Final
 
 from synthia.kernel.config import default_home
-from synthia.memory.embed import TextEmbedder
 from synthia.memory.hybrid import Recall
 from synthia.memory.store import MEMORY_FILE, MemoryStore, Turn
 from synthia.models.catalogue import DEFAULT_EMBEDDER
 from synthia.models.install import BYTES_PER_GB, Installer
+from synthia.retrieval.embed import TextEmbedder
 
 RECALL_SET: Final = Path(__file__).parent / "data" / "recall_set.json"
 DEPTHS: Final = (1, 3, 5)

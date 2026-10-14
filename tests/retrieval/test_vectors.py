@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 import numpy as np
 import pytest
 
-from synthia.memory.vectors import VectorError, VectorSet
+from synthia.retrieval.vectors import VectorError, VectorSet
 
 MONDAY = datetime(2026, 9, 28, 9, 0, tzinfo=UTC)
 DAY = timedelta(days=1)

@@ -28,8 +28,8 @@ from synthia.interfaces.daemon_client import (
     stopped,
 )
 from synthia.kernel.config import Settings
-from synthia.memory.embed import TextEmbedder
 from synthia.memory.store import MEMORY_FILE, MemoryStore
+from synthia.retrieval.embed import TextEmbedder
 from synthia.server import daemon as daemon_module
 from synthia.server.api import NOT_LEARNING, mark_of
 from synthia.server.discovery import (

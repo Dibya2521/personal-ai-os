@@ -35,15 +35,15 @@ from synthia.gateway.errors import GatewayError
 from synthia.gateway.structured import StructuredOutputError, generate
 from synthia.gateway.types import ChatRequest, Message, Reasoning
 from synthia.memory.store import FactKind
-from synthia.memory.vectors import VectorSet
+from synthia.retrieval.vectors import VectorSet
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from synthia.gateway.protocol import ChatModel
-    from synthia.memory.embed import TextEmbedder
     from synthia.memory.store import Fact, MemoryStore, Remembered
-    from synthia.memory.vectors import Vectors
+    from synthia.retrieval.embed import TextEmbedder
+    from synthia.retrieval.vectors import Vectors
 
 logger = logging.getLogger(__name__)
 

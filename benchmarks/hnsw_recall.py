@@ -23,7 +23,7 @@ from typing import Final
 import numpy as np
 import psutil
 
-from synthia.memory.hnsw import EF_CONSTRUCTION, Hnsw, M
+from synthia.retrieval.hnsw import EF_CONSTRUCTION, Hnsw, M
 
 DIM: Final = 384
 QUERIES: Final = 200

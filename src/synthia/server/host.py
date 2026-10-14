@@ -25,7 +25,6 @@ import httpx
 from synthia.agent.trace import Trace
 from synthia.kernel.errors import ConfigError
 from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
-from synthia.memory.embed import EmbedError, TextEmbedder
 from synthia.memory.facts import FactKeeper, FactLearning
 from synthia.memory.hybrid import Recall
 from synthia.memory.remembering import Remembering
@@ -33,6 +32,7 @@ from synthia.memory.store import MEMORY_FILE, MemoryStore
 from synthia.memory.summary import summarize
 from synthia.models.catalogue import DEFAULT_EMBEDDER, EMBEDDERS
 from synthia.models.install import BYTES_PER_GB, Installer
+from synthia.retrieval.embed import EmbedError, TextEmbedder
 from synthia.server.conversation import Conversation
 from synthia.server.session import ChatSession, LastRoute
 from synthia.tools import local_tools, outside_tools

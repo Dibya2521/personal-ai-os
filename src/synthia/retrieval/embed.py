@@ -24,8 +24,8 @@ import numpy as np
 import onnxruntime as ort
 
 from synthia.kernel.errors import SynthiaError
-from synthia.memory.wordpiece import WordPiece
 from synthia.models.catalogue import Pooling
+from synthia.retrieval.wordpiece import WordPiece
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence

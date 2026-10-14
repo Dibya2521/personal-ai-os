@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from synthia.agent.trace import MAX_TRACED_CHARS
-from synthia.memory.bm25 import Bm25Index
 from synthia.memory.store import (
     Asked,
     Fact,
@@ -17,8 +16,8 @@ from synthia.memory.store import (
     StoredVector,
     ToolUse,
     Turn,
-    match_expression,
 )
+from synthia.retrieval.bm25 import Bm25Index
 
 MONDAY = datetime(2026, 9, 28, 9, 0, tzinfo=UTC)
 
@@ -106,13 +105,6 @@ async def test_what_a_person_types_is_never_search_syntax(
     await store.add_turn(chat, said("ok then", "fine", MONDAY))
 
     await store.search(query)
-
-
-def test_each_word_is_quoted_and_any_may_match() -> None:
-    assert match_expression('tell me "about" Asha!') == (
-        '"tell" OR "me" OR "about" OR "Asha"'
-    )
-    assert match_expression("?!") == ""
 
 
 async def test_with_no_words_the_newest_turns_in_the_range_come_back(
@@ -224,7 +216,7 @@ async def test_word_scores_are_bm25_over_the_whole_turn_best_first(
 
     found = await store.word_scores("Asha Pune", limit=10)
 
-    assert found.turns == len(texts)
+    assert found.indexed == len(texts)
     assert list(found.scores) == ids[:3]
     assert found.scores == pytest.approx(words.scores("Asha Pune"), rel=1e-12)
 
@@ -241,7 +233,7 @@ async def test_word_scores_keep_to_the_dates_and_the_limit(store: MemoryStore) -
 
     assert list(best.scores) == [first]
     assert list(early.scores) == [first]
-    assert (none.scores, none.turns) == ({}, 2)
+    assert (none.scores, none.indexed) == ({}, 2)
 
 
 async def test_turns_come_back_in_the_order_asked_without_the_forgotten(

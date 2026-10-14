@@ -1,14 +1,14 @@
-"""Remembered turns as vectors of their meaning, searched exactly.
+"""Texts as vectors of their meaning, searched exactly.
 
 Every vector is compared with the query in one matrix product. On a laptop
 CPU that took about a millisecond at 10,000 vectors of 384 numbers and
 about seven at 50,000, while embedding the query itself takes 3 to 12, so
-until a store holds tens of thousands of turns an exact search costs less
+until a store holds tens of thousands of texts an exact search costs less
 than the question it answers, and it is exactly right. The HNSW index in
-:mod:`synthia.memory.hnsw` is the way past that size.
+:mod:`synthia.retrieval.hnsw` is the way past that size.
 
-Each vector keeps the time of its turn, so a search can be limited to a
-range of days as the word search is.
+Each vector keeps a time (a remembered turn's), so a search can be limited
+to a range of days as the word search is.
 """
 
 from __future__ import annotations
@@ -42,13 +42,13 @@ def _microseconds(at: datetime) -> int:
 
 @dataclass(frozen=True, slots=True)
 class Similarities:
-    """The cosine similarity of a query to each vector in a range, by turn id."""
+    """The cosine similarity of a query to each vector in a range, by id."""
 
     ids: NDArray[np.int64]
     cosines: Vectors
 
     def nearest(self, count: int) -> dict[int, float]:
-        """Return the ``count`` most similar turns and their similarity."""
+        """Return the ids of the ``count`` most similar vectors and their similarity."""
         if count >= len(self.ids):
             chosen = np.arange(len(self.ids))
         else:
@@ -56,7 +56,7 @@ class Similarities:
         return self._of(chosen)
 
     def of(self, ids: Collection[int]) -> dict[int, float]:
-        """Return the similarity of each turn in ``ids`` that is in the range."""
+        """Return the similarity of each id in ``ids`` that is in the range."""
         wanted = np.fromiter(ids, np.int64, len(ids))
         return self._of(np.flatnonzero(np.isin(self.ids, wanted)))
 
@@ -67,7 +67,7 @@ class Similarities:
 
 
 class VectorSet:
-    """Unit vectors known by turn id, each with the time of its turn."""
+    """Unit vectors known by id, each with a time."""
 
     def __init__(self, dimensions: int) -> None:
         """Start empty, for vectors of ``dimensions`` numbers."""
@@ -90,7 +90,7 @@ class VectorSet:
         return iter(self._rows)
 
     def add(self, id_: int, at: datetime, vector: Vectors) -> None:
-        """Hold ``vector`` for the turn ``id_`` from ``at``, replacing any before.
+        """Hold ``vector`` for ``id_`` from ``at``, replacing any before.
 
         Raises:
             VectorError: If ``vector`` does not have :attr:`dimensions` numbers.
@@ -142,7 +142,7 @@ class VectorSet:
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> Similarities:
-        """Return how similar ``query`` is to every turn from ``since`` up to ``until``.
+        """Return each vector's similarity to ``query``, from ``since`` up to ``until``.
 
         Both are unit vectors, so their dot product is their cosine similarity.
         """

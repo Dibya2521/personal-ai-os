@@ -1,6 +1,6 @@
 """SYNTHIA's own BM25 index: the ranking SQLite's FTS5 gives, written out.
 
-Text becomes terms the way the memory store's ``porter unicode61`` index makes
+Text becomes terms the way the stores' ``porter unicode61`` FTS5 indexes make
 them: lower case, accents removed, split on anything that is not a letter or
 a digit, then Porter-stemmed. For text in the Latin script the terms are the
 same; other scripts may split differently.
@@ -28,7 +28,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Final
 
-from synthia.memory.porter import stem
+from synthia.retrieval.porter import stem
 
 K1: Final = 1.2
 B: Final = 0.75

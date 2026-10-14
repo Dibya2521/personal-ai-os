@@ -118,7 +118,7 @@ the vector about the answer.
 The vector search is exact: every vector is compared with the query in one
 matrix product. On a laptop CPU it took 1.9 ms at 10,000 turns and 6.1 ms at
 50,000, while the embedding model took 4.8 ms a text. SYNTHIA also has its
-own HNSW index (`synthia.memory.hnsw`), built and measured against exact
+own HNSW index (`synthia.retrieval.hnsw`), built and measured against exact
 search for the store sizes where exact search stops being cheap; the numbers
 are below.
 

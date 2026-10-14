@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from synthia.memory.hnsw import Hnsw, HnswError
+from synthia.retrieval.hnsw import Hnsw, HnswError
 
 DIM = 64
 

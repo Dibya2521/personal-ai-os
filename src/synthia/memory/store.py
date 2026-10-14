@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -28,16 +27,16 @@ from typing import TYPE_CHECKING, Final
 
 from synthia.agent.trace import MAX_TRACED_CHARS
 from synthia.kernel.text import mended
+from synthia.retrieval.fts import FTS_TOKENIZER, match_all_expression, match_expression
+from synthia.retrieval.fusion import WordScores
 
 if TYPE_CHECKING:
     from collections.abc import Generator, Iterable, Sequence
 
 MEMORY_FILE: Final = Path("memory.db")
 BUSY_TIMEOUT_S: Final = 5.0
-_WORD: Final = re.compile(r"\w+")
 _EARLIEST: Final = "0000"
 _LATEST: Final = "9999"
-FTS_TOKENIZER: Final = "porter unicode61"
 
 _SCHEMA: Final = (
     """
@@ -203,17 +202,6 @@ class StoredVector:
     vector: bytes
 
 
-@dataclass(frozen=True, slots=True)
-class WordScores:
-    """The turns holding a query's words, each with its BM25 score (higher is better).
-
-    ``turns`` is how many turns the index holds, which BM25's scores depend on.
-    """
-
-    scores: dict[int, float]
-    turns: int
-
-
 class FactKind(StrEnum):
     """What a learned fact is about: how things are, or what the person likes."""
 
@@ -260,19 +248,6 @@ def _stamp(at: datetime) -> str:
 
 def _clip(text: str) -> str:
     return mended(text[:MAX_TRACED_CHARS])
-
-
-def match_expression(query: str) -> str:
-    """Return ``query`` as an FTS5 expression matching any of its words.
-
-    Each word is quoted, so nothing a person types is read as FTS5 syntax.
-    """
-    return " OR ".join(f'"{word}"' for word in _WORD.findall(query))
-
-
-def match_all_expression(query: str) -> str:
-    """Return ``query`` as an FTS5 expression matching only text with all its words."""
-    return " AND ".join(f'"{word}"' for word in _WORD.findall(query))
 
 
 class MemoryStore:

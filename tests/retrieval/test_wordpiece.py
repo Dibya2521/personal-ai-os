@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from tokenizers import Tokenizer
 
-from synthia.memory.wordpiece import (
+from synthia.retrieval.wordpiece import (
     END,
     MAX_WORD_CHARS,
     START,

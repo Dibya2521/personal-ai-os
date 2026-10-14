@@ -52,14 +52,17 @@ refined when its phase begins, and this file changes with it.
 Dependencies point down only. The kernel imports nothing else from the project.
 
 The packages built so far, top to bottom, are `interfaces`, `server`,
-`memory`, `mcp`, `tools`, `agent`, `models`, `gateway`, `persona` and
-`kernel`, with `synthia.__main__` (`python -m synthia`) above them all.
+`memory`, `retrieval`, `mcp`, `tools`, `agent`, `models`, `gateway`, `persona`
+and `kernel`, with `synthia.__main__` (`python -m synthia`) above them all.
 `server` is the daemon: it holds every conversation (`ChatSession`) apart
 from any terminal, and the command line is one of its clients
 ([`daemon.md`](daemon.md)). `memory` sits right below `server`, the package
 that holds it ([`memory.md`](memory.md)): it builds `search_memory` from the
-agent's `FunctionTool`, asks the local model through the gateway, and finds
-its embedding model in the `models` catalogue.
+agent's `FunctionTool` and asks the local model through the gateway.
+`retrieval` holds what any store needs to find text again: the embedding
+model runner (which finds its model in the `models` catalogue), its tokenizer,
+exact vector search, the HNSW index, BM25, the FTS5 query rules and the score
+that fuses words with meaning.
 `mcp` sits above `tools`
 because it runs each MCP server with the tools package's process tree.
 `tools` sits above `agent` because

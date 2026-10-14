@@ -44,11 +44,11 @@ import numpy as np
 
 from synthia.interfaces.cli import local_service
 from synthia.kernel.config import default_home, load_settings
-from synthia.memory.embed import TextEmbedder
 from synthia.memory.facts import FactKeeper
 from synthia.memory.store import MEMORY_FILE, FactKind, MemoryStore, Turn
 from synthia.models.catalogue import DEFAULT_EMBEDDER
 from synthia.models.install import BYTES_PER_GB, Installer
+from synthia.retrieval.embed import TextEmbedder
 
 if TYPE_CHECKING:
     from synthia.gateway.protocol import ChatModel

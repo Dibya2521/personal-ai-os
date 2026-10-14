@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from synthia.memory.embed import Feeds
 from synthia.memory.facts import FactKeeper, FactLearning
 from synthia.memory.hybrid import Recall
 from synthia.memory.remembering import (
@@ -23,6 +22,7 @@ from synthia.memory.store import (
     Remembered,
     Turn,
 )
+from synthia.retrieval.embed import Feeds
 from tests.agent.scripted import Scripted
 from tests.memory.test_hybrid import Network, asked, embedder
 from tests.models.fakes import EMBEDDER

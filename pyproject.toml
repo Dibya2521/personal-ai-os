@@ -118,6 +118,7 @@ layers = [
   "interfaces",
   "server",
   "memory",
+  "retrieval",
   "mcp",
   "tools",
   "agent",

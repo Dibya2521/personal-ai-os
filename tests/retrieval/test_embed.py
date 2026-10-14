@@ -7,12 +7,12 @@ import pytest
 from tokenizers import Tokenizer
 
 from synthia.kernel.config import default_home
-from synthia.memory.embed import SEGMENT_IDS, EmbedError, Feeds, TextEmbedder
-from synthia.memory.wordpiece import WordPiece
 from synthia.models.catalogue import Embedder, Pooling, find
 from synthia.models.install import BYTES_PER_GB, Installer
-from tests.memory.test_wordpiece import SPECIALS, bert_spec, made_up_text
+from synthia.retrieval.embed import SEGMENT_IDS, EmbedError, Feeds, TextEmbedder
+from synthia.retrieval.wordpiece import WordPiece
 from tests.models.fakes import EMBEDDER
+from tests.retrieval.test_wordpiece import SPECIALS, bert_spec, made_up_text
 
 WORDS = ("my", "cat", "is", "called", "miso", "budget", "meeting", "friday", "?")
 VOCABULARY = {t: i for i, t in enumerate((*SPECIALS, *WORDS))}
