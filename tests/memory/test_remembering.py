@@ -24,8 +24,9 @@ from synthia.memory.store import (
 )
 from synthia.retrieval.embed import Feeds
 from tests.agent.scripted import Scripted
-from tests.memory.test_hybrid import Network, asked, embedder
+from tests.memory.test_hybrid import asked
 from tests.models.fakes import EMBEDDER
+from tests.retrieval.toy import Network, embedder
 
 AT = datetime(2026, 10, 3, 12, 0, tzinfo=UTC)
 

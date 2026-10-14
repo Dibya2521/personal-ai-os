@@ -38,7 +38,7 @@ from synthia.server.host import Host, open_learning, publish_route
 from tests.agent.scripted import Scripted, calls, says
 from tests.interfaces.test_chat import KEY
 from tests.memory.test_facts import SAME, held_facts
-from tests.memory.test_hybrid import Network, embedder
+from tests.retrieval.toy import Network, embedder
 from tests.timing import HANG_TIMEOUT_S
 
 

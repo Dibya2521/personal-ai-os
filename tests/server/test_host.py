@@ -28,9 +28,10 @@ from synthia.server.host import (
 )
 from tests.agent.scripted import Scripted, says
 from tests.memory.test_facts import Watched, found, until_learned
-from tests.memory.test_hybrid import Network, embedder, remember
+from tests.memory.test_hybrid import remember
 from tests.memory.test_remembering import FailsAfterStart
 from tests.models.fakes import EMBEDDER, NETWORK, VOCABULARY
+from tests.retrieval.toy import Network, embedder
 from tests.server.test_daemon import Local
 
 

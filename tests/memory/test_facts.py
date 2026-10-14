@@ -30,9 +30,9 @@ from synthia.memory.facts import (
 )
 from synthia.memory.store import FactKind, MemoryStore, Remembered, Turn
 from tests.agent.scripted import Scripted, says
-from tests.memory.test_hybrid import Network, embedder
 from tests.memory.test_remembering import FailsAfterStart
 from tests.models.fakes import EMBEDDER
+from tests.retrieval.toy import Network, embedder
 
 MONDAY = datetime(2026, 9, 28, 9, 0, tzinfo=UTC)
 LATER = MONDAY + timedelta(days=2)

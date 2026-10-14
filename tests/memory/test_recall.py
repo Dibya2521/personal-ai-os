@@ -15,7 +15,8 @@ from synthia.persona.library import PersonaLibrary
 from synthia.server.session import ChatSession
 from synthia.tools.basic import clock_tool
 from tests.agent.scripted import Scripted, calls, says
-from tests.memory.test_hybrid import Network, embedder, remember
+from tests.memory.test_hybrid import remember
+from tests.retrieval.toy import Network, embedder
 
 IST = timezone(timedelta(hours=5, minutes=30))
 

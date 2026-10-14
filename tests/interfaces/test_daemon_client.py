@@ -44,7 +44,7 @@ from tests.agent.scripted import Reply
 from tests.interfaces.daemons import private_daemon
 from tests.interfaces.test_chat import KEY
 from tests.memory.test_facts import SAME, held_facts
-from tests.memory.test_hybrid import Network, embedder
+from tests.retrieval.toy import Network, embedder
 from tests.server.test_daemon import Local, Service
 from tests.timing import HANG_TIMEOUT_S
 

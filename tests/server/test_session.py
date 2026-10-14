@@ -30,7 +30,8 @@ from synthia.server.session import (
     TurnReport,
     load_image,
 )
-from tests.memory.test_hybrid import MONDAY, Network, embedder, remember
+from tests.memory.test_hybrid import MONDAY, remember
+from tests.retrieval.toy import Network, embedder
 
 INFO = ModelInfo("fake", 1000, vision=True, tools=False)
 
