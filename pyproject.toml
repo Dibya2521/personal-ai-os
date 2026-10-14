@@ -117,7 +117,7 @@ layers = [
   "__main__",
   "interfaces",
   "server",
-  "memory",
+  "knowledge | memory",
   "retrieval",
   "mcp",
   "tools",
