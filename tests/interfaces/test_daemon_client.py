@@ -361,6 +361,7 @@ async def test_the_real_command_starts_a_daemon_in_the_background(
     finally:
         if process.poll() is None:
             process.kill()
+            process.wait(HANG_TIMEOUT_S)
 
     assert info.version == __version__
     assert not (tmp_path / DAEMON_FILE).exists()
