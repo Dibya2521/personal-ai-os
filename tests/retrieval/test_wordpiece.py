@@ -116,6 +116,31 @@ def test_ids_are_the_ones_the_tokenizers_library_makes(tokenizer_file: Path) -> 
     assert [ours.ids(t, 64) for t in texts] == [theirs.encode(t).ids for t in texts]
 
 
+def test_count_is_the_number_of_pieces_the_tokenizers_library_makes_uncut(
+    tokenizer_file: Path,
+) -> None:
+    ours = WordPiece.from_file(tokenizer_file)
+    theirs = Tokenizer.from_file(str(tokenizer_file))
+    theirs.no_truncation()
+    rng = random.Random(3)
+    texts = [made_up_text(rng) * 4 for _ in range(1000)]
+
+    assert [ours.count(t) for t in texts] == [
+        len(theirs.encode(t).ids) - 2 for t in texts
+    ]
+    assert max(ours.count(t) for t in texts) > 64
+
+
+def test_count_matches_ids_inside_the_start_and_end_tokens() -> None:
+    tokens = WordPiece(
+        {t: i for i, t in enumerate((*SPECIALS, "un", "##aff", "##able", "x"))}
+    )
+
+    assert tokens.count("Unaffable x\nx") == 5
+    assert tokens.count("unaffable x x") == len(tokens.ids("unaffable x x", 64)) - 2
+    assert tokens.count(" \n\t") == 0
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [

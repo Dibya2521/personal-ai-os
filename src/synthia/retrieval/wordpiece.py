@@ -169,6 +169,10 @@ class WordPiece:
                 return [self._unknown]
         return found
 
+    def count(self, text: str) -> int:
+        """Return how many pieces ``text`` splits into, uncut, without start and end."""
+        return sum(len(self.pieces(word)) for word in words(normalized(text)))
+
     def ids(self, text: str, max_tokens: int) -> list[int]:
         """Return the ids of ``text`` inside the start and end tokens, cut to fit."""
         inner: list[int] = []
