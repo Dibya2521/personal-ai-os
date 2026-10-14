@@ -409,6 +409,88 @@ async def test_a_forgotten_fact_is_gone_and_gets_no_new_vector(
     assert await store.put_fact_vectors("mini", [(fact, b"\x01")]) == []
 
 
+async def tea_and_coffee(store: MemoryStore, turn: int) -> tuple[Fact, Fact]:
+    await store.add_fact(turn, "Likes green tea.", FactKind.PREFERENCE, MONDAY)
+    await store.add_fact(turn, "Likes coffee.", FactKind.PREFERENCE, MONDAY)
+    coffee, tea = await store.facts()
+    return tea, coffee
+
+
+async def test_a_pair_kept_apart_is_remembered_once_lower_id_first(
+    store: MemoryStore,
+) -> None:
+    tea, coffee = await tea_and_coffee(store, await a_turn(store))
+
+    assert await store.keep_apart(coffee, tea)
+    assert not await store.keep_apart(tea, coffee)
+
+    assert await store.apart() == {(tea.id, coffee.id)}
+
+
+async def test_a_pair_is_not_kept_apart_once_either_fact_is_forgotten(
+    store: MemoryStore,
+) -> None:
+    tea, coffee = await tea_and_coffee(store, await a_turn(store))
+    await store.forget_fact(coffee.id)
+
+    assert not await store.keep_apart(tea, coffee)
+    assert not await store.keep_apart(tea, tea)
+    assert await store.apart() == set()
+
+
+async def test_a_pair_is_not_kept_apart_when_an_id_went_to_a_new_fact_meanwhile(
+    store: MemoryStore,
+) -> None:
+    turn = await a_turn(store)
+    tea, coffee = await tea_and_coffee(store, turn)
+    await store.forget_fact(coffee.id)
+    again = await store.add_fact(turn, "Drinks green tea.", FactKind.FACT, MONDAY)
+
+    assert again == coffee.id
+    assert not await store.keep_apart(tea, coffee)
+    assert await store.apart() == set()
+
+
+async def test_a_pair_is_not_kept_apart_when_both_ids_went_to_new_facts(
+    store: MemoryStore,
+) -> None:
+    turn = await a_turn(store)
+    tea, coffee = await tea_and_coffee(store, turn)
+    await store.forget_fact(coffee.id)
+    await store.forget_fact(tea.id)
+    first = await store.add_fact(turn, "Drinks green tea.", FactKind.FACT, MONDAY)
+    second = await store.add_fact(turn, coffee.text, coffee.kind, MONDAY)
+
+    assert (first, second) == (tea.id, coffee.id)
+    assert not await store.keep_apart(tea, coffee)
+
+
+async def test_an_id_given_again_does_not_inherit_a_judgement(
+    store: MemoryStore,
+) -> None:
+    turn = await a_turn(store)
+    tea, coffee = await tea_and_coffee(store, turn)
+    await store.keep_apart(tea, coffee)
+    await store.forget_fact(coffee.id)
+
+    again = await store.add_fact(turn, "Drinks green tea.", FactKind.FACT, MONDAY)
+
+    assert again == coffee.id
+    assert await store.apart() == set()
+
+
+async def test_a_forgotten_turn_takes_the_judgements_of_its_facts(
+    store: MemoryStore,
+) -> None:
+    gone = await a_turn(store, "gone")
+    tea, coffee = await tea_and_coffee(store, gone)
+    await store.keep_apart(tea, coffee)
+
+    await store.forget_turn(gone)
+
+    assert await store.apart() == set()
+
+
 async def test_vectors_of_changed_facts_are_not_loaded(store: MemoryStore) -> None:
     turn = await a_turn(store)
     old = await store.add_fact(turn, "Old.", FactKind.FACT, MONDAY)

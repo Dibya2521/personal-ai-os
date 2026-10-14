@@ -413,6 +413,75 @@ async def test_each_fact_is_in_one_merge_at_most_per_pass(store: MemoryStore) ->
     assert len(await store.facts()) == 2
 
 
+async def test_a_pair_called_two_facts_is_not_asked_about_again(
+    store: MemoryStore,
+) -> None:
+    tea, also_tea = await held_facts(store, "likes green tea", "likes green tea")
+    model = Scripted(SAME, NOT_SAME)
+    facts = await keeper(store, model)
+
+    first = await facts.merge_repeats(LATER)
+    second = await facts.merge_repeats(LATER)
+
+    assert (first.asked, second.asked) == (1, 0)
+    assert len(model.requests) == 2
+    assert await store.apart() == {(tea, also_tea)}
+
+
+async def test_a_pair_with_no_valid_answer_is_asked_about_again(
+    store: MemoryStore,
+) -> None:
+    await held_facts(store, "likes green tea", "likes green tea")
+    model = Scripted(*[says("maybe")] * (1 + DEFAULT_REPAIRS), NOT_SAME)
+    facts = await keeper(store, model)
+
+    first = await facts.merge_repeats(LATER)
+    second = await facts.merge_repeats(LATER)
+
+    assert (first.asked, second.asked) == (1, 1)
+    assert len(await store.apart()) == 1
+
+
+async def test_a_fact_forgotten_while_its_pair_is_judged_is_not_kept_apart(
+    store: MemoryStore,
+) -> None:
+    tea, also_tea = await held_facts(store, "likes green tea", "likes green tea")
+    model = ForgetsWhileAnswering(store, NOT_SAME)
+    model.fact = also_tea
+
+    merged = await (await keeper(store, model)).merge_repeats(LATER)
+
+    assert (merged.asked, merged.merged) == (1, 0)
+    assert [f.id for f in await store.facts()] == [tea]
+    assert await store.apart() == set()
+
+
+class ReplacedWhileAnswering(ForgetsWhileAnswering):
+    """A model during whose answer ``fact`` is forgotten and its id given again."""
+
+    async def stream(self, request: ChatRequest) -> AsyncGenerator[ChatChunk]:
+        if self.fact is not None:
+            await self.store.forget_fact(self.fact)
+            turn = await a_turn(self.store, "about me")
+            await self.store.add_fact(turn, "likes coffee", FactKind.PREFERENCE, LATER)
+            self.fact = None
+        async for chunk in Scripted.stream(self, request):
+            yield chunk
+
+
+async def test_a_judgement_is_not_kept_for_a_fact_that_took_a_judged_id(
+    store: MemoryStore,
+) -> None:
+    _, also_tea = await held_facts(store, "likes green tea", "likes green tea")
+    model = ReplacedWhileAnswering(store, NOT_SAME)
+    model.fact = also_tea
+
+    await (await keeper(store, model)).merge_repeats(LATER)
+
+    assert also_tea in {f.id for f in await store.facts()}
+    assert await store.apart() == set()
+
+
 async def test_a_model_that_fails_stops_the_pass(store: MemoryStore) -> None:
     await held_facts(store, "likes green tea", "likes green tea")
 

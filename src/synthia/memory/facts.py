@@ -293,19 +293,28 @@ class FactKeeper:
 
         Only pairs at least :data:`MERGE_FLOOR` similar are asked about, most
         similar first, each fact in one merge at most; a pair is one only if
-        the model says so with the facts in either order.
+        the model says so with the facts in either order. A pair it called
+        two facts is remembered and never asked about again: each question
+        takes seconds of the local model, and each repeat is another chance
+        of a wrong yes, which would lose a true fact.
 
         Raises:
             GatewayError: If the local model failed.
         """
         held = await self._reconciled()
+        apart = await self._store.apart()
         asked, merged, done = 0, 0, set[int]()
         for one, other in self._held.close_pairs(MERGE_FLOOR):
-            if one in done or other in done:
+            pair = (min(one, other), max(one, other))
+            if one in done or other in done or pair in apart:
                 continue
             first, second = held[one], held[other]
             asked += 1
-            if not await self._same(first.text, second.text):
+            same = await self._same(first.text, second.text)
+            if same is None:
+                continue
+            if not same:
+                await self._store.keep_apart(first, second)
                 continue
             older, newer = sorted(
                 (first, second), key=lambda fact: (fact.since, fact.id)
@@ -316,7 +325,8 @@ class FactKeeper:
             done |= {first.id, second.id}
         return Merged(asked, merged)
 
-    async def _same(self, first: str, second: str) -> bool:
+    async def _same(self, first: str, second: str) -> bool | None:
+        """Return whether the model calls the two one; None with no valid answer."""
         for one, other in ((first, second), (second, first)):
             try:
                 if not (
@@ -325,7 +335,7 @@ class FactKeeper:
                     return False
             except StructuredOutputError:
                 logger.warning("no valid answer on whether two facts are one")
-                return False
+                return None
         return True
 
 

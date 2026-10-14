@@ -138,6 +138,14 @@ CREATE TABLE IF NOT EXISTS facts_pending (
     attempts INTEGER NOT NULL DEFAULT 0
 )
 """,
+    """
+CREATE TABLE IF NOT EXISTS facts_apart (
+    one INTEGER NOT NULL REFERENCES facts(id) ON DELETE CASCADE,
+    other INTEGER NOT NULL REFERENCES facts(id) ON DELETE CASCADE,
+    PRIMARY KEY (one, other),
+    CHECK (one < other)
+)
+""",
 )
 _COLUMNS: Final = "t.id, t.conversation, t.at, t.question, t.answer"
 
@@ -398,6 +406,20 @@ class MemoryStore:
     async def fact_vectors(self, model: str) -> list[FactVector]:
         """Return the vectors from ``model`` of the facts still held true."""
         return await asyncio.to_thread(self._fact_vectors, model)
+
+    async def keep_apart(self, one: Fact, other: Fact) -> bool:
+        """Remember that ``one`` and ``other`` were judged two different facts.
+
+        False if the pair was remembered already, or either is no longer
+        held as judged: forgotten, or its id given to a new fact while the
+        judgement was made. Forgetting either later takes the judgement with
+        it, so an id given again never inherits one.
+        """
+        return await asyncio.to_thread(self._keep_apart, one, other)
+
+    async def apart(self) -> set[tuple[int, int]]:
+        """Return each pair of facts judged different, the lower id first."""
+        return await asyncio.to_thread(self._apart)
 
     async def conversation(self, conversation: int) -> list[Remembered]:
         """Return every turn of ``conversation``, oldest first."""
@@ -778,3 +800,25 @@ class MemoryStore:
                 (model,),
             ).fetchall()
         return [FactVector(fact, vector) for fact, vector in rows]
+
+    def _keep_apart(self, one: Fact, other: Fact) -> bool:
+        low, high = sorted((one, other), key=lambda fact: fact.id)
+        with self._opened() as connection:
+            cursor = connection.execute(
+                "INSERT OR IGNORE INTO facts_apart (one, other)"
+                " SELECT :low, :high WHERE (SELECT count(*) FROM facts WHERE"
+                " (id = :low AND text = :low_text)"
+                " OR (id = :high AND text = :high_text)) = 2",
+                {
+                    "low": low.id,
+                    "high": high.id,
+                    "low_text": low.text,
+                    "high_text": high.text,
+                },
+            )
+            return cursor.rowcount > 0
+
+    def _apart(self) -> set[tuple[int, int]]:
+        with self._opened() as connection:
+            rows = connection.execute("SELECT one, other FROM facts_apart").fetchall()
+        return {(one, other) for one, other in rows}
