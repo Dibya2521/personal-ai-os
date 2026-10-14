@@ -10,11 +10,12 @@ voice come later. Why it is built this way is in
 
 | Command | What it does |
 | --- | --- |
-| `synthia chat` | Uses the running daemon, or starts one in the background and waits up to 90 s for it, then holds a conversation there. |
+| `synthia chat` | Uses the running daemon, or starts one in the background and waits up to 90 s for it, then holds a conversation there. `--resume` takes up the last remembered conversation. |
 | `synthia serve` | Runs the daemon in the foreground (what `chat` starts in the background). Ctrl+C stops it. |
 | `synthia status` | Says whether the daemon runs: version, since when, process id, port, other conversations open, and the local model's state. |
 | `synthia stop` | Stops it: running answers are cancelled, the local model and the MCP servers stop, `daemon.json` is removed. Waits up to 30 s. |
-| `synthia trace` | Shows a conversation's trace, or the daemon's own (local model starts, ends and restarts). |
+| `synthia trace` | Shows a conversation's trace, or the daemon's own (local model starts, ends and restarts, and consolidations of the facts it holds). |
+| `synthia memory consolidate` | Asks the running daemon to merge the facts it holds that the local model calls one, and prints how many pairs it asked about and merged. Exits 2 when no daemon runs, when it learns no facts, or when the run failed. |
 
 The local model's state is `ready` (answering), `starting` (loading, or
 waiting to be restarted), `stopped` (stopped, or given up after too many
@@ -27,8 +28,8 @@ All under `SYNTHIA_HOME`.
 | File | Contents |
 | --- | --- |
 | `daemon.json` | `port`, `pid`, `version`, `started`, `token`. Written after the port listens, readable only by its owner, removed on stop. |
-| `traces/*.jsonl` | One per conversation, created at its first turn, and one for the daemon, created when the local model first starts. |
-| `memory.db` | Every finished turn of every conversation, kept unless the conversation is private (SQLite). |
+| `traces/*.jsonl` | One per conversation, created at its first turn, and one for the daemon, created at its first record. |
+| `memory.db` | Every finished turn of every conversation unless it is private, and the facts learned about the person (SQLite; [`memory.md`](memory.md)). |
 | `logs/synthia.log` | The daemon's log, shared with the CLI. |
 | `logs/llama-server.log` | The local model's server output. |
 
@@ -64,10 +65,15 @@ Messages are JSON-RPC 2.0, one per WebSocket text frame.
 | `remote` | `on`: true, false, or null to ask | a reply |
 | `private` | `on`: true (stop remembering this conversation), false, or null to ask | a reply |
 | `forget` | `{}` | a reply; the last turn leaves the conversation and memory |
+| `facts` | `{}` | a reply listing the facts held about the person, by number |
+| `forget_fact` | `fact`: a number as `facts` lists it | a reply |
+| `forget_about` | `words`: every fact and turn holding all of them is forgotten | a reply saying how many |
+| `resume` | `{}`, before the conversation's first turn | a reply; the last remembered conversation's turns come back and its persona answers |
 | `persona` | `key`: a persona, or empty to list them | a reply |
 | `adjust` | `values`: trait name to a level from 0 to 1 | a reply |
 | `budget`, `model`, `tools`, `reset` | `{}` | a reply |
 | `status` | `{}` | `sessions`, `local` (the local model's state) |
+| `consolidate` | `{}` | after the run: `asked`, `merged`, `seconds`, `scheduled`, `stopped`, `error` (null, or why it failed) |
 | `stop` | `{}` | `{}`, then the daemon stops |
 
 A reply is `{"notes": [...], "errors": [...]}`: lines to show.
@@ -96,6 +102,7 @@ To stop a turn, the client sends `notifications/cancelled` with the turn's
 | `-32602` | The params do not fit; the message names the field. |
 | `-32001` | The answer failed; the message says why. |
 | `-32002` | An image could not be sent; the message names the file. |
+| `-32003` | `consolidate` on a daemon that learns no facts: it needs a local model and an embedding model. |
 
 ## An exchange
 
@@ -118,3 +125,11 @@ would fall inside that minute; the daemon keeps serving the remote model
 either way. Each start, end and restart is a record in the
 daemon's trace, so `synthia trace` shows when the model went away, why, and
 when it came back.
+
+## Work beside the conversations
+
+Besides serving, the daemon embeds the turns remembered without a vector
+when it starts, learns facts from each remembered turn one at a time, and
+consolidates the facts it holds after 10 minutes without a turn, at most
+once an hour. All of it runs on this machine in the background, and no turn
+waits for it; [`memory.md`](memory.md) describes it.
