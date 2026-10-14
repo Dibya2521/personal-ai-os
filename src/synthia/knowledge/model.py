@@ -135,6 +135,24 @@ class Link:
     anchor: str | None = None
 
 
+def module_name(path: PurePosixPath) -> str | None:
+    """Return the dotted name Python would import ``path`` by, or None.
+
+    "src/synthia/memory/store.py" is ``synthia.memory.store``: a leading
+    ``src`` folder is dropped when more parts follow, and ``__init__`` names
+    its package. A file that is not ``.py``, or whose stem is not an
+    identifier, has no module name; nor does an ``__init__.py`` at the root.
+    """
+    if path.suffix != ".py" or not path.stem.isidentifier():
+        return None
+    parts = path.with_suffix("").parts
+    if len(parts) > 1 and parts[0] == "src":
+        parts = parts[1:]
+    if parts[-1:] == ("__init__",):
+        parts = parts[:-1]
+    return ".".join(parts) or None
+
+
 @dataclass(frozen=True, slots=True)
 class Draft:
     """A chunk as the chunker made it, before the store gives it an id."""

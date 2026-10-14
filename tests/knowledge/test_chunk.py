@@ -1,6 +1,4 @@
-import shutil
-import subprocess
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 
 import pytest
 from hypothesis import given
@@ -19,20 +17,10 @@ from synthia.knowledge.markdown import read_markdown
 from synthia.knowledge.model import Chunk, ChunkId, DocumentId, Draft, Link, LinkKind
 from synthia.knowledge.text import Block, FoundLink, Outline, Text
 from synthia.retrieval.wordpiece import WordPiece, normalized, words
+from tests.knowledge.checks import ROOT, WORDS, assert_whole, tracked
 from tests.models.fakes import EMBEDDER
 
-ROOT = Path(__file__).parents[2]
 SPECIALS = ("[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]")
-
-
-class Words:
-    """Counts whitespace-separated words: simple enough to check by eye."""
-
-    def count(self, text: str) -> int:
-        return len(text.split())
-
-
-WORDS = Words()
 
 
 def outline(
@@ -262,25 +250,10 @@ def test_chunking_refuses_sizes_with_no_room(
         Chunking(max_tokens, window_lines=window_lines)
 
 
-def tracked_markdown() -> list[PurePosixPath]:
-    git = shutil.which("git")
-    if git is None or not (ROOT / ".git").exists():
-        pytest.skip("the repository's Markdown is listed by git")
-    listed = subprocess.run(  # noqa: S603 - a resolved git with fixed arguments
-        [git, "ls-files", "*.md"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    return [PurePosixPath(line) for line in listed.stdout.splitlines()]
-
-
 @pytest.fixture(scope="module")
 def corpus() -> list[tuple[Text, Outline]]:
     documents: list[tuple[Text, Outline]] = []
-    for path in tracked_markdown():
+    for path in tracked("*.md"):
         text = Text.of_bytes((ROOT / path).read_bytes())
         documents.append((text, read_markdown(text, path)))
     return documents
@@ -297,30 +270,6 @@ def wordpiece(corpus: list[tuple[Text, Outline]]) -> WordPiece:
             if len(word) <= 6:
                 pieces.add(word)
     return WordPiece({t: i for i, t in enumerate((*SPECIALS, *sorted(pieces)))})
-
-
-def assert_whole(
-    text: Text, shape: Outline, drafted: Drafted, counter: TokenCounter, budget: int
-) -> None:
-    """Check the chunker's promises for a one-page text."""
-    covered: list[int] = []
-    for ordinal, draft in enumerate(drafted.drafts):
-        assert draft.ordinal == ordinal
-        assert draft.page is None
-        assert draft.body == text.span(None, draft.start_line, draft.end_line)
-        lines = draft.body.split("\n")
-        assert lines[0].strip()
-        assert lines[-1].strip()
-        cost = counter.count(draft.header) + sum(counter.count(line) for line in lines)
-        assert (cost > budget) is draft.cut
-        assert not draft.cut or draft.start_line == draft.end_line
-        covered.extend(range(draft.start_line, draft.end_line + 1))
-    assert covered == sorted(set(covered))
-    lines = text.lines()
-    assert {n for n in covered if lines[n - 1].strip()} == {
-        n for n, line in enumerate(lines, start=1) if line.strip()
-    }
-    assert sum(len(d.links) for d in drafted.drafts) == len(shape.links)
 
 
 @pytest.mark.parametrize("max_tokens", [42, 502], ids=["budget 40", "budget 500"])

@@ -553,6 +553,19 @@ async def test_a_module_is_named_as_python_would_import_it(
     assert await titles_linked(store) == reaches
 
 
+async def test_a_document_never_links_to_itself(
+    store: KnowledgeStore, vault: SourceId
+) -> None:
+    await store.replace_document(
+        reading(vault, "pkg/__init__.py", draft(0, "x", imports("pkg")))
+    )
+    await store.replace_document(
+        reading(vault, "a.py", draft(0, "x", imports("a"), imports("pkg")))
+    )
+
+    assert await titles_linked(store) == ["__init__"]
+
+
 async def test_an_exact_module_wins_over_a_dotted_suffix(
     store: KnowledgeStore, vault: SourceId
 ) -> None:

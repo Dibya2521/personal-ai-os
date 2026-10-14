@@ -8,6 +8,7 @@ every chunking then works on it unchanged.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 SNIFF_BYTES: Final = 8192
 """How far a NUL byte marks a file as binary, the sniff ``tools/files.py`` uses."""
 BYTE_ORDER_MARK: Final = "\N{ZERO WIDTH NO-BREAK SPACE}"
+NEWLINE: Final = re.compile(r"\r\n|[\r\n]")
 
 
 class UnreadableError(ValueError):
@@ -32,8 +34,10 @@ class UnreadableError(ValueError):
 class Text:
     r"""A decoded file: one tuple of lines per page (one page unless a PDF).
 
-    Lines are split at ``\n`` only, with a trailing ``\r`` dropped, so line
-    numbers are an editor's. A UTF-8 byte order mark is not part of line 1.
+    Lines end at ``\r\n``, ``\r`` or ``\n``, as Python and editors count
+    them, so a citation's line numbers are the editor's and a parser's. Other
+    separators (a form feed, U+2028) stay inside a line. A UTF-8 byte order
+    mark is not part of line 1.
     """
 
     pages: tuple[tuple[str, ...], ...]
@@ -55,8 +59,7 @@ class Text:
         except UnicodeDecodeError as error:
             message = f"not UTF-8: {error.reason} at byte {error.start}"
             raise UnreadableError(message) from error
-        lines = decoded.removeprefix(BYTE_ORDER_MARK).split("\n")
-        return cls((tuple(line.removesuffix("\r") for line in lines),))
+        return cls((tuple(NEWLINE.split(decoded.removeprefix(BYTE_ORDER_MARK))),))
 
     def lines(self, page: int | None = None) -> tuple[str, ...]:
         """Return the lines of ``page`` (1-based), or of the only page when None.
@@ -126,6 +129,22 @@ class Outline:
     note: str = ""
 
 
+def read_lines(text: Text, path: PurePosixPath) -> Outline:
+    """Return each page of ``text`` holding a line as one block, under the file name.
+
+    The reader for text no reader knows the structure of. The chunker cuts it
+    as it cuts any block: paragraphs packed while they fit, a paragraph that
+    does not split into lines.
+    """
+    pages = (None,) if len(text.pages) == 1 else range(1, len(text.pages) + 1)
+    written = [page for page in pages if text.lines(page)]
+    blocks = tuple(
+        Block(page, 1, len(text.lines(page)), (), unit)
+        for unit, page in enumerate(written)
+    )
+    return Outline(path.name, blocks)
+
+
 type Reader = Callable[[Text, PurePosixPath], Outline]
 """Reads a decoded file, and its path for the title."""
 type Decoder = Callable[[bytes], Text]
@@ -140,13 +159,30 @@ class Format:
     read: Reader
 
 
+PYTHON_SUFFIXES: Final = (".py", ".pyi")
+PLAIN_SUFFIXES: Final = (
+    *(".txt", ".rst", ".csv"),
+    *(".toml", ".yaml", ".yml", ".json", ".ini", ".cfg"),
+    *(".sql", ".sh", ".ps1"),
+    *(".ts", ".tsx", ".js", ".mjs", ".css", ".html"),
+)
+"""Text read by lines alone: no reader knows their structure yet."""
+
+
 @cache
 def _formats() -> Mapping[str, Format]:
     # The readers import this module, so the table is built on first use.
-    from synthia.knowledge.markdown import read_markdown  # noqa: PLC0415
+    from synthia.knowledge.code import read_python  # noqa: PLC0415
+    from synthia.knowledge.markdown import NOTE_SUFFIXES, read_markdown  # noqa: PLC0415
 
     markdown = Format(DocumentKind.MARKDOWN, Text.of_bytes, read_markdown)
-    return {".md": markdown, ".markdown": markdown}
+    python = Format(DocumentKind.PYTHON, Text.of_bytes, read_python)
+    plain = Format(DocumentKind.TEXT, Text.of_bytes, read_lines)
+    return {
+        **dict.fromkeys(NOTE_SUFFIXES, markdown),
+        **dict.fromkeys(PYTHON_SUFFIXES, python),
+        **dict.fromkeys(PLAIN_SUFFIXES, plain),
+    }
 
 
 def format_of(path: PurePosixPath) -> Format | None:

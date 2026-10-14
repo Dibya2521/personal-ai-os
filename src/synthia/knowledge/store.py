@@ -39,6 +39,7 @@ from synthia.knowledge.model import (
     Source,
     SourceId,
     SourceKind,
+    module_name,
 )
 from synthia.retrieval.fts import FTS_TOKENIZER, match_expression
 from synthia.retrieval.fusion import WordScores
@@ -133,8 +134,9 @@ CREATE TABLE IF NOT EXISTS links (
 )
 """,
     # A note beats another file of its stem (as in Obsidian), an exact module a
-    # dotted suffix (substr: "_" is a LIKE wildcard). Subqueries, not a window:
-    # SQLite does not push a WHERE on chunk through a window function.
+    # dotted suffix (substr: "_" is a LIKE wildcard); a document never links to
+    # itself. Subqueries, not a window: SQLite does not push a WHERE on chunk
+    # through a window function.
     """
 CREATE VIEW IF NOT EXISTS resolved_links AS
 SELECT l.chunk, l.position, l.kind, l.anchor, d.id AS document, d.title
@@ -161,6 +163,7 @@ JOIN documents d ON d.id = CASE
         ORDER BY length(t.path), t.path
         LIMIT 1))
 END
+WHERE d.id != here.id
 """,
 )
 _CHUNK_COLUMNS: Final = (
@@ -235,17 +238,6 @@ class LinkTarget:
 
 def _stem_key(path: PurePosixPath) -> str:
     return path.stem.casefold()
-
-
-def _module_key(path: PurePosixPath) -> str | None:
-    if path.suffix != ".py" or not path.stem.isidentifier():
-        return None
-    parts = path.with_suffix("").parts
-    if len(parts) > 1 and parts[0] == "src":
-        parts = parts[1:]
-    if parts[-1:] == ("__init__",):
-        parts = parts[:-1]
-    return ".".join(parts) or None
 
 
 def _ids(ids: Iterable[int]) -> str:
@@ -554,7 +546,7 @@ class KnowledgeStore:
                 reading.title,
                 reading.note,
                 _stem_key(reading.path),
-                _module_key(reading.path),
+                module_name(reading.path),
             ),
         ).fetchone()
         return DocumentId(document)
