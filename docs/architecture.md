@@ -51,11 +51,15 @@ refined when its phase begins, and this file changes with it.
 
 Dependencies point down only. The kernel imports nothing else from the project.
 
-The packages built so far, top to bottom, are `interfaces`, `server`, `mcp`,
-`tools`, `agent`, `models`, `gateway`, `persona` and `kernel`, with
-`synthia.__main__` (`python -m synthia`) above them all. `server` is the
-daemon: it holds every conversation (`ChatSession`) apart from any terminal,
-and the command line is one of its clients ([`daemon.md`](daemon.md)).
+The packages built so far, top to bottom, are `interfaces`, `server`,
+`memory`, `mcp`, `tools`, `agent`, `models`, `gateway`, `persona` and
+`kernel`, with `synthia.__main__` (`python -m synthia`) above them all.
+`server` is the daemon: it holds every conversation (`ChatSession`) apart
+from any terminal, and the command line is one of its clients
+([`daemon.md`](daemon.md)). `memory` sits right below `server`, the package
+that holds it ([`memory.md`](memory.md)): it builds `search_memory` from the
+agent's `FunctionTool`, asks the local model through the gateway, and finds
+its embedding model in the `models` catalogue.
 `mcp` sits above `tools`
 because it runs each MCP server with the tools package's process tree.
 `tools` sits above `agent` because
@@ -67,7 +71,10 @@ import that points up fails, including one made only for type checking, and so
 does a new package that has not been given a place in the list.
 
 The cognition layer is built: [`gateway.md`](gateway.md) describes how a request
-is routed, guarded, metered and answered, locally or remotely.
+is routed, guarded, metered and answered, locally or remotely. So is the
+memory layer's first part, [`memory.md`](memory.md): the context window, the
+episodic store, word and meaning search, and facts about the person; the
+knowledge graph comes later.
 
 ## Concurrency
 

@@ -117,8 +117,8 @@ All notable changes are recorded here. The format follows
   other chat is open in it. The chat looks and behaves as before: tool calls
   that need a yes are still asked in the terminal, and the daemon's start-up
   warnings (an MCP server that did not start) are shown when the chat opens.
-  The conversation itself lives in the daemon, so it is lost if the daemon
-  stops.
+  The conversation itself lives in the daemon, so it ends if the daemon
+  stops; its remembered turns stay, and `synthia chat --resume` takes it up.
 
 ### Fixed
 

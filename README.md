@@ -24,12 +24,14 @@ peripherals, and a kernel schedules, supervises and guards all of it.
 
 ## Status
 
-**Phase 3 of 13: daemon.** SYNTHIA can think and act: `synthia chat` talks
+**Phase 4 of 13: memory.** SYNTHIA can think and act: `synthia chat` talks
 through a model gateway that answers from a local model, and from a free
 remote model, under a daily budget, only when asked, and it uses tools, each
-call that changes something or leaves the machine asked for first. It is now
+call that changes something or leaves the machine asked for first. It is
 always there: one daemon holds the models and the tools, and the chat is its
-client. The rest is built
+client. It now remembers: every chat is kept on the machine, found again by
+its words or its meaning, and what the person says about themselves is
+learned and carried into the next chat. The rest is built
 phase by phase, and released when a capability works end to end.
 [`docs/architecture.md`](docs/architecture.md) describes the whole design and
 the order it is built in.
@@ -70,7 +72,9 @@ chat's commands.
 
 The first chat starts SYNTHIA's daemon in the background, and it keeps the
 model loaded for the next one. `uv run synthia status` shows it, and
-`uv run synthia stop` stops it.
+`uv run synthia stop` stops it. Every chat is remembered on the machine
+(`/private on` stops that), and `uv run synthia chat --resume` takes up the
+last one.
 
 ## Configuration
 
@@ -186,6 +190,36 @@ in [`docs/gateway.md`](docs/gateway.md).
   it is, and a client that has gone away is a no.
 - **Supervised.** When the local model's server dies it is started again, and
   the daemon's trace records when it went away, why, and when it came back.
+
+**Memory.** How SYNTHIA remembers is described in
+[`docs/memory.md`](docs/memory.md), with every number and the command that
+measures it, and why in [decision record 0012](docs/adr/0012-memory.md).
+
+- **Every turn, kept.** Each finished turn of every chat, with its tool
+  calls, goes into one SQLite file on the machine. `/private on` stops it,
+  `/forget` takes back the last turn, and `synthia chat --resume` takes up the
+  last conversation.
+- **Found by words and meaning.** A `search_memory` tool finds earlier turns
+  by a full-text index and, with an embedding model, by the meaning of the
+  question, in one score: on a 60-question set the right turn came first for
+  95 % of questions naming a rare word and 50 % of questions in other words,
+  against 70 % and 2.5 % for words alone. Up to three close turns from other
+  chats are put in front of each question as reminders.
+- **Facts about the person.** The local model writes down lasting facts from
+  each turn in the background, ends a fact when a newer one changes it, and
+  merges repeats when the daemon is idle, asking itself in both orders before
+  it merges. The facts held go into each chat's system message, so with
+  `/remote on` they go to the remote model with the rest of the request, but
+  the remote model never writes them. `/facts` lists them, and
+  `/forget fact` and `/forget about` forget them, by exact words.
+- **A budgeted window.** Requests are counted in tokens at a rate learned
+  from what the model reports; the oldest turns leave, whole, with a quarter
+  of the window kept free, and the local model folds them into a running
+  summary.
+- **Own index, measured.** SYNTHIA's own HNSW index finds 0.9995 of the true
+  ten nearest neighbours among 50,000 vectors, weighing 40 candidates a query.
+  Exact search over 50,000 took 6.1 ms, about what embedding a text costs,
+  and is always right, so memory searches exactly.
 
 **Repository.** Every commit passes ruff with every rule enabled, pyright in
 strict mode, an import check that keeps each package from importing the ones
