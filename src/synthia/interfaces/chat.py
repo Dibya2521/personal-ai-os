@@ -400,6 +400,10 @@ class ChatApp[T: Talk]:
             case _:
                 return await conversation.forget_about(command.words)
 
+    async def resume(self) -> None:
+        """Take up the newest remembered conversation and say how it went."""
+        self._say(await self.conversation.resume())
+
     def _say(self, reply: Reply) -> None:
         for line in reply.notes:
             self._note(line)
@@ -474,18 +478,20 @@ def converse[T: Talk](runner: asyncio.Runner, app: ChatApp[T], read: ReadLine) -
             app.stopped()
 
 
-def run_chat(
+def run_chat(  # noqa: PLR0913 - one parameter per `synthia chat` option
     daemon: DaemonInfo,
     console: Console,
     read: ReadLine = input,
     *,
     persona: str | None = None,
     use_remote: bool = False,
+    resume: bool = False,
 ) -> None:
     """Hold a chat in the terminal, held by ``daemon``, until the user leaves.
 
-    ``persona`` switches to that persona first; ``use_remote`` lets turns go to
-    the remote model from the start, as ``/remote on`` does.
+    ``resume`` takes up the newest remembered conversation first, as its
+    persona; ``persona`` then switches to that persona; ``use_remote`` lets
+    turns go to the remote model from the start, as ``/remote on`` does.
 
     Raises:
         PersonaError: If ``persona`` does not exist.
@@ -499,6 +505,8 @@ def run_chat(
             for line in talk.warnings:
                 console.print(line, style="red", markup=False, highlight=False)
             app = ChatApp(talk, console)
+            if resume:
+                runner.run(app.resume())
             if persona is not None:
                 switched = runner.run(talk.persona(persona))
                 if switched.errors:

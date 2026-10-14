@@ -578,3 +578,28 @@ async def test_a_store_made_before_the_learning_queue_gains_it_empty(
     reopened = MemoryStore(path)
 
     assert await reopened.to_learn(10) == []
+
+
+async def test_the_last_conversation_holds_the_newest_turn_with_its_persona(
+    store: MemoryStore,
+) -> None:
+    nothing = await store.last_conversation()
+    older = await store.begin_conversation("SYNTHIA", MONDAY)
+    newer = await store.begin_conversation("SYNTHIA", MONDAY + timedelta(hours=1))
+    later = MONDAY + timedelta(hours=2)
+    await store.add_turn(newer, said("q", "a", MONDAY + timedelta(hours=1)))
+    await store.add_turn(older, Turn("q", "a", later, "SYNTHIA Neon", "local", "m"))
+
+    assert nothing is None
+    assert await store.last_conversation() == (older, "SYNTHIA Neon")
+
+
+async def test_turns_asked_at_the_same_time_make_the_newer_id_the_last(
+    store: MemoryStore,
+) -> None:
+    first = await store.begin_conversation("SYNTHIA", MONDAY)
+    second = await store.begin_conversation("SYNTHIA", MONDAY)
+    await store.add_turn(second, said("q", "a", MONDAY))
+    await store.add_turn(first, said("q", "a", MONDAY))
+
+    assert await store.last_conversation() == (first, "SYNTHIA")

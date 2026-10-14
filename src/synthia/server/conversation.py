@@ -36,6 +36,9 @@ NO_REMOTE: Final = (
     "no remote model is configured: set SYNTHIA_OPENROUTER_API_KEY in .env"
 )
 NO_MEMORY: Final = "nothing is remembered in this conversation"
+ALREADY_TALKING: Final = (
+    "this conversation has turns already; resume from a new chat: synthia chat --resume"
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +137,10 @@ class Talk(Protocol):
         """Forget every fact and turn holding all of ``words``."""
         ...
 
+    async def resume(self) -> Reply:
+        """Take up the newest remembered conversation, before any turn."""
+        ...
+
 
 class Conversation:
     """One conversation and the commands about it."""
@@ -142,6 +149,7 @@ class Conversation:
         self.session = session
         self.gateway = gateway
         self.learning: asyncio.Task[int | None] | None = None
+        self._resuming = False
 
     @property
     def persona_name(self) -> str:
@@ -315,6 +323,42 @@ class Conversation:
         if not forgotten.facts and not forgotten.turns:
             return note(said)
         return note(said, "this conversation keeps what was said in it until /reset")
+
+    async def resume(self) -> Reply:
+        """Take up the newest remembered conversation, before any turn of this one.
+
+        Its turns come back into the history and its last persona answers;
+        what is said from here on is remembered as part of it.
+        """
+        memory = self.session.memory
+        if memory is None:
+            return note(NO_MEMORY)
+        if self.session.history or self._resuming:
+            return error(ALREADY_TALKING)
+        self._resuming = True
+        try:
+            earlier = await memory.resume()
+        except (sqlite3.Error, OSError) as problem:
+            logger.exception("an earlier conversation was not read")
+            return error(f"the earlier conversation could not be read: {problem}")
+        finally:
+            self._resuming = False
+        if earlier is None:
+            return note("no earlier conversation to resume")
+        kept = self.session.resume(earlier.turns, earlier.persona)
+        when = earlier.turns[-1].at.astimezone().strftime("%Y-%m-%d %H:%M")
+        resumed = (
+            f"resumed the conversation of {when}: "
+            f"{counted(kept, 'turn')}, as {self.session.persona.name}"
+        )
+        left = len(earlier.turns) - kept
+        if not left:
+            return note(resumed)
+        return note(
+            resumed,
+            f"{counted(left, 'older turn')} did not fit the context window; "
+            "search_memory can still find them",
+        )
 
     async def close(self) -> None:
         """Stop asking for the daily cap, and the summary, if still under way."""

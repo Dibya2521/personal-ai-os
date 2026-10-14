@@ -622,7 +622,7 @@ def test_chat_finds_the_daemon_then_chats_with_it(
     info = DaemonInfo(
         port=45678, pid=1, version=__version__, started=started_now(), token=new_token()
     )
-    given: list[tuple[object, str | None, bool]] = []
+    given: list[tuple[object, str | None, bool, bool]] = []
 
     async def current(_: Path) -> DaemonInfo:
         return info
@@ -632,8 +632,9 @@ def test_chat_finds_the_daemon_then_chats_with_it(
         *_: object,
         persona: str | None = None,
         use_remote: bool = False,
+        resume: bool = False,
     ) -> None:
-        given.append((daemon, persona, use_remote))
+        given.append((daemon, persona, use_remote, resume))
 
     monkeypatch.setattr(cli, "current_daemon", current)
     monkeypatch.setattr(cli, "run_chat", chat)
@@ -643,9 +644,14 @@ def test_chat_finds_the_daemon_then_chats_with_it(
 
     plain = CliRunner().invoke(app, ["chat"])
     chosen = CliRunner().invoke(app, ["chat", "--remote", "--persona", "neon"])
+    resumed = CliRunner().invoke(app, ["chat", "--resume"])
 
-    assert (plain.exit_code, chosen.exit_code) == (0, 0)
-    assert given == [(info, None, False), (info, "neon", True)]
+    assert (plain.exit_code, chosen.exit_code, resumed.exit_code) == (0, 0, 0)
+    assert given == [
+        (info, None, False, False),
+        (info, "neon", True, False),
+        (info, None, False, True),
+    ]
 
 
 def test_the_command_logs_to_a_file_not_over_the_prompt(

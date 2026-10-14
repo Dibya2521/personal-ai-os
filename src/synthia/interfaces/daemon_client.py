@@ -439,6 +439,12 @@ class RemoteConversation:
         """Forget every fact and turn holding all of ``words``."""
         return await self._ask("forget_about", {"words": words})
 
+    async def resume(self) -> Reply:
+        """Take up the newest remembered conversation, before any turn."""
+        reply = await self._ask("resume", {})
+        await self.hello()
+        return reply
+
     async def status(self) -> tuple[int, str]:
         """Return the conversations open, this one included, and the local model."""
         fields = cast("dict[str, object]", await self.peer.request("status", {}))

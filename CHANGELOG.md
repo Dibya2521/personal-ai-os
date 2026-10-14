@@ -85,6 +85,14 @@ All notable changes are recorded here. The format follows
   next question if a turn comes; `synthia memory consolidate` asks the running daemon to do
   it now and says how many pairs it asked about and merged. Each run goes to
   the daemon's trace, and `synthia trace --list` counts them.
+- `synthia chat --resume` takes up the last conversation: the one holding
+  the newest remembered turn, as the persona of that turn, found by its
+  name (`--persona` still wins). Its turns come back as what the person
+  asked and what SYNTHIA answered, without their tool calls, and new turns
+  are remembered as part of it; the chat says the date and time of its last
+  turn and how many turns came back. Only the newest turns that fit the
+  context window come back; the chat says how many older ones did not, and
+  `search_memory` can still find them.
 - Long chats keep fitting in the model's context window. Before each turn
   the oldest turns leave, whole, until the request fits with a quarter of the
   window kept free for the answer. With a local model, the turns that left

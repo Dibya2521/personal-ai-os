@@ -425,13 +425,28 @@ class MemoryStore:
         """Return every turn of ``conversation``, oldest first."""
         return await asyncio.to_thread(self._conversation, conversation)
 
-    async def forget_turn(self, turn: int, *, conversation: int | None = None) -> bool:
+    async def last_conversation(self) -> tuple[int, str] | None:
+        """Return the conversation of the newest turn, and that turn's persona.
+
+        None when no turn is remembered.
+        """
+        return await asyncio.to_thread(self._last_conversation)
+
+    async def forget_turn(
+        self,
+        turn: int,
+        *,
+        conversation: int | None = None,
+        at: datetime | None = None,
+    ) -> bool:
         """Forget ``turn`` and its tool calls; False if there was no such turn.
 
-        With ``conversation``, only if the turn is in it: an id freed by a
-        forget is given to the next turn of any conversation.
+        With ``conversation``, only if the turn is in it, and with ``at``,
+        only if it was asked then: an id freed by a forget is given to the
+        next turn, which can be in any conversation, this one included when
+        two chats hold it.
         """
-        return await asyncio.to_thread(self._forget_turn, turn, conversation)
+        return await asyncio.to_thread(self._forget_turn, turn, conversation, at)
 
     async def forget_conversation(self, conversation: int) -> int:
         """Forget ``conversation`` and every turn in it; return how many turns."""
@@ -632,6 +647,14 @@ class MemoryStore:
             ).fetchall()
             return self._remembered(connection, rows)
 
+    def _last_conversation(self) -> tuple[int, str] | None:
+        with self._opened() as connection:
+            row = connection.execute(
+                "SELECT conversation, persona FROM turns"
+                " ORDER BY at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        return None if row is None else (row[0], row[1])
+
     @staticmethod
     def _remembered(
         connection: sqlite3.Connection,
@@ -684,12 +707,19 @@ class MemoryStore:
             )
             return cursor.rowcount > 0
 
-    def _forget_turn(self, turn: int, conversation: int | None) -> bool:
+    def _forget_turn(
+        self, turn: int, conversation: int | None, at: datetime | None
+    ) -> bool:
         with self._opened() as connection:
             cursor = connection.execute(
                 "DELETE FROM turns WHERE id = :turn"
-                " AND (:conversation IS NULL OR conversation = :conversation)",
-                {"turn": turn, "conversation": conversation},
+                " AND (:conversation IS NULL OR conversation = :conversation)"
+                " AND (:at IS NULL OR at = :at)",
+                {
+                    "turn": turn,
+                    "conversation": conversation,
+                    "at": None if at is None else _stamp(at),
+                },
             )
             return cursor.rowcount > 0
 

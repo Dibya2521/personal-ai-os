@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -19,7 +19,7 @@ from synthia.gateway.types import (
 from synthia.kernel.bus import Event
 from synthia.memory.hybrid import Recall
 from synthia.memory.remembering import PINNED_HEADER, REMINDER_HEADER, Remembering
-from synthia.memory.store import FactKind, MemoryStore
+from synthia.memory.store import FactKind, MemoryStore, Remembered
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
 from synthia.server.session import (
@@ -320,3 +320,58 @@ def test_images_that_cannot_be_sent_are_refused_before_any_request(
         load_image(tmp_path / "absent.png")
     with pytest.raises(ImageError, match="the limit is 20 MB"):
         load_image(huge)
+
+
+RESUMED = (
+    Remembered(
+        1, 7, datetime(2026, 10, 3, 9, 0, tzinfo=UTC), "my cat is Miso", "Noted."
+    ),
+    Remembered(2, 7, datetime(2026, 10, 3, 9, 1, tzinfo=UTC), "and my dog?", "Rex."),
+)
+
+
+def test_a_resumed_session_holds_each_turn_whole_as_its_last_persona(
+    library: PersonaLibrary,
+) -> None:
+    chat = session(library, Echo())
+
+    chat.resume(RESUMED, library.get("neon").name)
+
+    assert [(m.role, m.text) for m in chat.history] == [
+        (Role.USER, "my cat is Miso"),
+        (Role.ASSISTANT, "Noted."),
+        (Role.USER, "and my dog?"),
+        (Role.ASSISTANT, "Rex."),
+    ]
+    assert chat.persona.name == library.get("neon").name
+    assert chat.drop_last()
+    assert [m.text for m in chat.history] == ["my cat is Miso", "Noted."]
+
+
+def test_a_resumed_session_whose_persona_is_gone_keeps_its_own(
+    library: PersonaLibrary,
+) -> None:
+    chat = session(library, Echo())
+
+    chat.resume(RESUMED, "a persona removed since")
+
+    assert chat.persona.name == library.get("synthia").name
+
+
+def test_a_resumed_session_keeps_only_the_newest_turns_that_fit(
+    library: PersonaLibrary,
+) -> None:
+    chat = session(library, Echo())
+    long = "x" * int(chat.window.limit * chat.window.chars_per_token)
+    turns = [
+        Remembered(n, 7, datetime(2026, 10, 3, 9, n, tzinfo=UTC), f"q{n}", long)
+        for n in range(3)
+    ] + [Remembered(3, 7, datetime(2026, 10, 3, 9, 3, tzinfo=UTC), "q3", "short")]
+
+    kept = chat.resume(turns, "SYNTHIA")
+
+    assert kept == 1
+    assert [m.text for m in chat.history] == ["q3", "short"]
+    assert chat.summary == ""
+    assert chat.drop_last()
+    assert chat.history == []

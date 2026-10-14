@@ -24,11 +24,11 @@ from synthia.memory.store import Asked
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
-    from datetime import tzinfo
+    from datetime import datetime, tzinfo
 
     from synthia.memory.facts import FactLearning
     from synthia.memory.hybrid import Recall
-    from synthia.memory.store import Fact, Forgotten, Turn
+    from synthia.memory.store import Fact, Forgotten, Remembered, Turn
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,15 @@ PINNED_HEADER: Final = (
     "What SYNTHIA has learned about the person in earlier conversations, "
     "newest first; the person may have changed since:"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class Resumed:
+    """An earlier conversation taken up again: its turns, its last persona's name."""
+
+    conversation: int
+    persona: str
+    turns: tuple[Remembered, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,11 +90,18 @@ class Remembering:
         self._store = recall.store
         self._learning = learning
         self._conversation: int | None = None
-        self._last: int | None = None
+        # The newest turn and when it was asked: its id alone can be given to
+        # another chat's turn once forgotten there.
+        self._last: tuple[int, datetime] | None = None
         self._pinned: _Pinned | None = None
 
     async def remember(self, turn: Turn) -> None:
-        """Keep ``turn`` and its meaning, unless the conversation is private."""
+        """Keep ``turn`` and its meaning, unless the conversation is private.
+
+        A turn not kept leaves nothing for :meth:`forget_last` to forget,
+        since the conversation's last turn is now that one.
+        """
+        self._last = None
         if self.private:
             return
         try:
@@ -93,21 +109,22 @@ class Remembering:
                 self._conversation = await self._store.begin_conversation(
                     turn.persona, turn.at
                 )
-            self._last = await self._store.add_turn(
+            kept = await self._store.add_turn(
                 self._conversation, turn, to_learn=self._learning is not None
             )
         except (sqlite3.Error, OSError):
             logger.exception("a turn was not remembered")
             return
+        self._last = (kept, turn.at)
         if self._learning is not None:
             self._learning.wake()
         try:
-            await self._recall.keep(Asked(self._last, turn.at, turn.question))
+            await self._recall.keep(Asked(kept, turn.at, turn.question))
         except Exception:
             logger.exception("a turn's meaning was not kept")
 
     async def forget_last(self) -> bool:
-        """Forget the last remembered turn; False if there is none to forget.
+        """Forget the last turn, if it was remembered; False if there is none.
 
         Raises:
             sqlite3.Error: If the store could not be changed.
@@ -115,11 +132,12 @@ class Remembering:
         """
         if self._last is None:
             return False
+        turn, at = self._last
         forgotten = await self._store.forget_turn(
-            self._last, conversation=self._conversation
+            turn, conversation=self._conversation, at=at
         )
         if forgotten:
-            self._recall.forget(self._last)
+            self._recall.forget(turn)
         self._last = None
         return forgotten
 
@@ -203,6 +221,28 @@ class Remembering:
         local = zone()
         entries = "\n".join(shown(turn, local) for turn in others[:REMINDED])
         return f"{REMINDER_HEADER}\n{entries}\n\n"
+
+    async def resume(self) -> Resumed | None:
+        """Take up the conversation of the newest remembered turn; None if none is.
+
+        Turns from here on are remembered in it, and the last forgettable
+        turn is its newest.
+
+        Raises:
+            sqlite3.Error: If the store could not be read.
+            OSError: If its file could not be opened.
+        """
+        last = await self._store.last_conversation()
+        if last is None:
+            return None
+        conversation, persona = last
+        turns = await self._store.conversation(conversation)
+        if not turns:
+            return None
+        self._conversation = conversation
+        self._last = (turns[-1].id, turns[-1].at)
+        self._pinned = None
+        return Resumed(conversation, persona, tuple(turns))
 
     def begin_again(self) -> None:
         """Remember the turns from here on as a new conversation."""

@@ -15,7 +15,14 @@ from synthia.memory.remembering import (
     REMINDER_HEADER,
     Remembering,
 )
-from synthia.memory.store import Fact, FactKind, Forgotten, MemoryStore, Turn
+from synthia.memory.store import (
+    Fact,
+    FactKind,
+    Forgotten,
+    MemoryStore,
+    Remembered,
+    Turn,
+)
 from tests.agent.scripted import Scripted
 from tests.memory.test_hybrid import Network, asked, embedder
 from tests.models.fakes import EMBEDDER
@@ -425,3 +432,70 @@ async def test_forget_never_takes_a_turn_of_another_conversation(
     assert not await here.forget_last()
     assert [t.id for t in await store.search("")] == [1]
     assert asked(await recall.find("pet", limit=1)) == ["my sister lives in pune"]
+
+
+async def test_a_resumed_conversation_goes_on_and_its_newest_turn_can_be_forgotten(
+    store: MemoryStore,
+) -> None:
+    earlier = Remembering(Recall(store))
+    await earlier.remember(turn("first"))
+    await earlier.remember(turn("second"))
+    memory = Remembering(Recall(store))
+
+    resumed = await memory.resume()
+    assert resumed is not None
+    forgot = await memory.forget_last()
+    await memory.remember(turn("third"))
+
+    assert ([t.question for t in resumed.turns], resumed.persona) == (
+        ["first", "second"],
+        "SYNTHIA",
+    )
+    assert forgot
+    found = {t.question: t.conversation for t in await store.search("")}
+    assert found == {"first": resumed.conversation, "third": resumed.conversation}
+
+
+async def test_with_nothing_to_resume_the_turns_begin_a_new_conversation(
+    store: MemoryStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def emptied(conversation: int) -> list[Remembered]:
+        del conversation
+        return []
+
+    memory = Remembering(Recall(store))
+    nothing = await memory.resume()
+    await Remembering(Recall(store)).remember(turn("forgotten meanwhile"))
+    monkeypatch.setattr(store, "conversation", emptied)
+    emptied_meanwhile = await memory.resume()
+    await memory.remember(turn("new"))
+
+    assert (nothing, emptied_meanwhile) == (None, None)
+    found = {t.question: t.conversation for t in await store.search("")}
+    assert found["new"] != found["forgotten meanwhile"]
+
+
+async def test_forget_never_takes_another_chats_turn_that_got_the_same_id(
+    store: MemoryStore,
+) -> None:
+    await Remembering(Recall(store)).remember(turn("first"))
+    mine, theirs = Remembering(Recall(store)), Remembering(Recall(store))
+    await mine.resume()
+    await theirs.resume()
+    await theirs.forget_last()
+    await theirs.remember(Turn("theirs", "ok", AT + timedelta(1), "SYNTHIA", "l", "q"))
+
+    assert not await mine.forget_last()
+    assert [t.question for t in await store.search("")] == ["theirs"]
+
+
+async def test_forget_after_a_private_turn_keeps_the_turn_before_it(
+    store: MemoryStore,
+) -> None:
+    memory = Remembering(Recall(store))
+    await memory.remember(turn("kept"))
+    memory.private = True
+    await memory.remember(turn("private"))
+
+    assert not await memory.forget_last()
+    assert [t.question for t in await store.search("")] == ["kept"]

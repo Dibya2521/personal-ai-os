@@ -144,6 +144,12 @@ def chat(
             help="Let turns go to the remote model from the start, as /remote on does."
         ),
     ] = False,
+    resume: Annotated[
+        bool,
+        typer.Option(
+            help="Take up the newest remembered conversation, as its last persona."
+        ),
+    ] = False,
 ) -> None:
     """Talk to SYNTHIA in the terminal, through the daemon.
 
@@ -157,7 +163,9 @@ def chat(
         _require_a_model(settings)
         with logging_to(settings, settings.home / CHAT_LOG):
             daemon = asyncio.run(current_daemon(settings.home))
-            run_chat(daemon, Console(), persona=persona, use_remote=remote)
+            run_chat(
+                daemon, Console(), persona=persona, use_remote=remote, resume=resume
+            )
     except (ConfigError, PersonaError, DaemonError) as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None

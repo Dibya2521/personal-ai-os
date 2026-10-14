@@ -16,8 +16,9 @@ Methods, client to daemon:
 - ``think`` {``level``}, ``remote`` {``on``}, ``private`` {``on``}, ``persona``
   {``key``}, ``adjust`` {``values``}, ``budget``, ``model``, ``tools``,
   ``reset``, ``forget``, ``facts``, ``forget_fact`` {``fact``: its number},
-  ``forget_about`` {``words``} return a reply: ``notes`` and ``errors``, lines
-  to show.
+  ``forget_about`` {``words``}, ``resume`` return a reply: ``notes`` and
+  ``errors``, lines to show. ``resume`` takes up the newest remembered
+  conversation, before the first turn.
 - ``status`` {} returns how many ``sessions`` the daemon holds and the
   ``local`` model's state: ``ready``, ``starting``, ``stopped`` or ``none``.
 - ``consolidate`` {} merges the facts held that the local model calls one,
@@ -229,6 +230,7 @@ class Served:
             "facts": self._facts,
             "forget_fact": self._forget_fact,
             "forget_about": self._forget_about,
+            "resume": self._resume,
             "status": self._status,
             "consolidate": self._consolidate,
             "stop": self._stop,
@@ -270,6 +272,10 @@ class Served:
     async def _forget_about(self, params: Params) -> object:
         words = checked(WordsParams, params).words
         return reply_of(await self.conversation.forget_about(words))
+
+    async def _resume(self, params: Params) -> object:
+        checked(EmptyParams, params)
+        return reply_of(await self.conversation.resume())
 
     async def _persona(self, params: Params) -> object:
         key = checked(PersonaParams, params).key

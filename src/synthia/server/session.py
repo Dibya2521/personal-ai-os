@@ -43,7 +43,7 @@ from synthia.memory.store import ToolUse, Turn
 from synthia.memory.window import ContextWindow, message_chars, tools_chars
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, Callable, Iterable
     from pathlib import Path
 
     from synthia.agent.plan import PlanEvent
@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from synthia.gateway.protocol import ChatModel
     from synthia.kernel.bus import Event
     from synthia.memory.remembering import Remembering
+    from synthia.memory.store import Remembered
     from synthia.memory.summary import Summarizer
     from synthia.persona.library import PersonaLibrary
     from synthia.persona.model import Persona
@@ -247,6 +248,31 @@ class ChatSession:
         if self._summarizing is not None:
             self._summarizing.cancel()
             await asyncio.wait([self._summarizing])
+
+    def resume(self, turns: Iterable[Remembered], persona: str) -> int:
+        """Continue after ``turns`` of an earlier conversation; return how many fit.
+
+        Each turn comes back as the question and the answer; its tool calls
+        do not, since they are kept cut short. Only the newest turns that fit
+        the window stay, and the older ones are not summarised: all of them
+        at once could be more than the model reads. The persona named
+        ``persona`` answers, if one still has that name.
+        """
+        for turn in turns:
+            self._starts.append(len(self.history))
+            self.history += [
+                Message.user(turn.question),
+                Message.assistant(turn.answer),
+            ]
+        key = next(
+            (k for k in self._library.names() if self._library.get(k).name == persona),
+            None,
+        )
+        if key is not None:
+            self.switch(key)
+        self.make_room("")
+        self._leaving.clear()
+        return len(self._starts)
 
     def drop_last(self) -> bool:
         """Take the last finished turn out of the history; False if there is none."""

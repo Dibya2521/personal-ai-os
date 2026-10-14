@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections.abc import AsyncGenerator, Sequence
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -16,6 +17,7 @@ from synthia.gateway.types import (
     ToolCallDelta,
     Usage,
 )
+from synthia.memory.store import Remembered
 from synthia.persona.library import PersonaLibrary
 from synthia.server.session import ChatSession
 from synthia.tools.basic import clock_tool
@@ -161,3 +163,22 @@ async def test_the_rate_is_learned_from_the_first_answer_of_a_turn() -> None:
     await say(session, "hello")
 
     assert session.window.chars_per_token != 3.0
+
+
+async def test_turns_resumed_beyond_the_window_are_never_summarised() -> None:
+    summaries = Summaries()
+    session = chat(Model(window=6000), summarizer=summaries)
+    at = datetime(2026, 10, 3, 9, 0, tzinfo=UTC)
+    turns = [
+        Remembered(n, 7, at + timedelta(minutes=n), f"old {n} {PADDING * 4}", "ok")
+        for n in range(4)
+    ]
+
+    kept = session.resume(turns, "SYNTHIA")
+    await say(session, "short")
+
+    assert kept < len(turns)
+    left = [m.text for _, messages in summaries.given for m in messages]
+    assert not any(
+        text.startswith(f"old {n} ") for n in range(4 - kept) for text in left
+    )

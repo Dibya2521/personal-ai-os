@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,12 +10,14 @@ import httpx
 import pytest
 
 from synthia.gateway.assemble import build_gateway
+from synthia.gateway.types import Message
 from synthia.interfaces.chat import run_chat
 from synthia.memory.hybrid import Recall
 from synthia.memory.remembering import PINNED_HEADER, Remembering
 from synthia.memory.store import MEMORY_FILE, FactKind, MemoryStore, Turn
+from synthia.memory.window import ContextWindow
 from synthia.persona.library import PersonaLibrary
-from synthia.server.conversation import Conversation
+from synthia.server.conversation import ALREADY_TALKING, NO_MEMORY, Conversation
 from synthia.server.session import ChatSession, LastRoute
 from tests.interfaces.daemons import private_daemon
 from tests.interfaces.test_chat import console, scripted, settings, thinking_then
@@ -129,6 +132,7 @@ async def test_a_memory_that_fails_turns_each_fact_command_into_an_error(
     store = MemoryStore(tmp_path / MEMORY_FILE)
     monkeypatch.setattr(store, "facts", locked)
     monkeypatch.setattr(store, "forget_about", locked)
+    monkeypatch.setattr(store, "last_conversation", locked)
     routes = LastRoute()
     async with httpx.AsyncClient() as client:
         gateway = build_gateway(settings(tmp_path), client, routes)
@@ -141,13 +145,143 @@ async def test_a_memory_that_fails_turns_each_fact_command_into_an_error(
             await conversation.facts(),
             await conversation.forget_fact(1),
             await conversation.forget_about("miso"),
+            await conversation.resume(),
         ]
 
     assert [(r.notes, r.errors) for r in replies] == [
         ((), ("the facts could not be read: database is locked",)),
         ((), ("fact 1 could not be forgotten: database is locked",)),
         ((), ("'miso' could not be forgotten: database is locked",)),
+        ((), ("the earlier conversation could not be read: database is locked",)),
     ]
+
+
+def said_before(body: dict[str, object]) -> list[tuple[str, str]]:
+    """Return the role and text of each message after the system message."""
+    messages = cast("list[dict[str, object]]", body["messages"])
+    return [(str(m["role"]), str(m["content"])) for m in messages[1:]]
+
+
+def test_a_resumed_chat_takes_up_the_last_conversation_as_its_last_persona(
+    tmp_path: Path,
+) -> None:
+    bodies: list[dict[str, object]] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(404)
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, content=thinking_then("Noted."))
+
+    first, _ = console()
+    screen, out = console()
+    with private_daemon(settings(tmp_path), httpx.MockTransport(reply)) as daemon:
+        run_chat(
+            daemon,
+            first,
+            scripted("my cat is called Miso", "/persona neon", "keep it short"),
+            use_remote=True,
+        )
+        run_chat(
+            daemon,
+            screen,
+            scripted("what is my cat called", "/forget", "and my dog?"),
+            use_remote=True,
+            resume=True,
+        )
+
+    text = out.getvalue()
+    neon = PersonaLibrary().get("neon").name
+    assert re.search(
+        rf"resumed the conversation of \d{{4}}-\d\d-\d\d \d\d:\d\d: 2 turns, as {neon}",
+        text,
+    )
+    assert f"{neon} is listening." in text
+    earlier = [
+        ("user", "my cat is called Miso"),
+        ("assistant", "Noted."),
+        ("user", "keep it short"),
+        ("assistant", "Noted."),
+    ]
+    assert said_before(bodies[2]) == [*earlier, ("user", "what is my cat called")]
+    assert said_before(bodies[3]) == [*earlier, ("user", "and my dog?")]
+    store = MemoryStore(tmp_path / MEMORY_FILE)
+    last = asyncio.run(store.last_conversation())
+    assert last is not None
+    turns = asyncio.run(store.conversation(last[0]))
+    assert [t.question for t in turns] == [
+        "my cat is called Miso",
+        "keep it short",
+        "and my dog?",
+    ]
+
+
+async def test_resume_needs_memory_and_a_conversation_not_yet_begun(
+    tmp_path: Path,
+) -> None:
+    routes = LastRoute()
+    async with httpx.AsyncClient() as client:
+        gateway = build_gateway(settings(tmp_path), client, routes)
+        bare = ChatSession(gateway.model, PersonaLibrary(), "synthia", routes)
+        memory = Remembering(Recall(MemoryStore(tmp_path / MEMORY_FILE)))
+        talking = ChatSession(
+            gateway.model, PersonaLibrary(), "synthia", routes, memory=memory
+        )
+        talking.history.append(Message.user("hello"))
+        replies = [
+            await Conversation(bare, gateway).resume(),
+            await Conversation(talking, gateway).resume(),
+        ]
+
+    assert [(r.notes, r.errors) for r in replies] == [
+        ((NO_MEMORY,), ()),
+        ((), (ALREADY_TALKING,)),
+    ]
+
+
+async def test_one_resume_at_a_time_and_older_turns_that_do_not_fit_are_named(
+    tmp_path: Path,
+) -> None:
+    store = MemoryStore(tmp_path / MEMORY_FILE)
+    chat = await store.begin_conversation("SYNTHIA", AT)
+    for minute, answer in enumerate(("x" * 400_000, "x" * 400_000, "short")):
+        at = AT + timedelta(minutes=minute)
+        await store.add_turn(chat, Turn("q", answer, at, "SYNTHIA", "local", "m"))
+    routes = LastRoute()
+    async with httpx.AsyncClient() as client:
+        gateway = build_gateway(settings(tmp_path), client, routes)
+        session = ChatSession(
+            gateway.model,
+            PersonaLibrary(),
+            "synthia",
+            routes,
+            memory=Remembering(Recall(store)),
+        )
+        session.window = ContextWindow(4096)
+        conversation = Conversation(session, gateway)
+        replies = await asyncio.gather(conversation.resume(), conversation.resume())
+
+    resumed, refused = sorted(replies, key=lambda r: bool(r.errors))
+    assert resumed.notes[1:] == (
+        (
+            "2 older turns did not fit the context window; "
+            "search_memory can still find them"
+        ),
+    )
+    assert resumed.notes[0].endswith(": 1 turn, as SYNTHIA")
+    assert refused.errors == (ALREADY_TALKING,)
+    assert len(session.history) == 2
+
+
+def test_a_chat_with_nothing_remembered_says_so_and_starts_afresh(
+    tmp_path: Path,
+) -> None:
+    screen, out = console()
+
+    with private_daemon(settings(tmp_path)) as daemon:
+        run_chat(daemon, screen, scripted(), resume=True)
+
+    assert "no earlier conversation to resume" in out.getvalue()
 
 
 def test_finished_turns_are_remembered_and_forget_takes_one_back(
