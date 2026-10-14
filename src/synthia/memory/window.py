@@ -23,9 +23,10 @@ if TYPE_CHECKING:
 
     from synthia.gateway.types import Message, ToolSpec
 
-# English runs near four characters a token for Qwen-style tokenizers; three
-# overcounts on purpose until the model has reported a real figure.
-START_CHARS_PER_TOKEN: Final = 3.0
+# The requests of a six-turn chat on the local model, tool definitions and
+# template markers included, measured 2.67 to 2.91 characters a token
+# (benchmarks/token_ratio.py); 2.5 overcounts until the model reports.
+START_CHARS_PER_TOKEN: Final = 2.5
 MIN_CHARS_PER_TOKEN: Final = 2.0
 MAX_CHARS_PER_TOKEN: Final = 6.0
 LEARNING_WEIGHT: Final = 0.3

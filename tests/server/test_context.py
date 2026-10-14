@@ -104,6 +104,8 @@ async def test_turns_that_leave_are_summarised_and_the_summary_is_kept_in_view()
     model = Model(window=6000)
     summaries = Summaries()
     session = chat(model, summarizer=summaries)
+    # The model reports no usage, so this rate holds for every turn below.
+    session.window.chars_per_token = 3.0
 
     for n in range(12):
         await say(session, f"question {n} {PADDING}")
@@ -162,7 +164,7 @@ async def test_the_rate_is_learned_from_the_first_answer_of_a_turn() -> None:
 
     await say(session, "hello")
 
-    assert session.window.chars_per_token != 3.0
+    assert session.window.chars_per_token != 2.5
 
 
 async def test_turns_resumed_beyond_the_window_are_never_summarised() -> None:

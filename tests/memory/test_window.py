@@ -69,7 +69,16 @@ def test_the_rate_moves_towards_what_the_model_reports() -> None:
 
     window.learn(4000, 1000)
 
-    assert window.chars_per_token == pytest.approx(0.7 * 3.0 + 0.3 * 4.0)
+    assert window.chars_per_token == pytest.approx(0.7 * 2.5 + 0.3 * 4.0)
+
+
+def test_before_any_report_a_request_is_not_counted_below_what_it_takes() -> None:
+    window = ContextWindow(32_768)
+    # The fewest characters a token any turn of a real chat measured.
+    measured = 2.669
+    text = "x" * 26_690
+
+    assert window.tokens([Message.user(text)]) >= len(text) / measured
 
 
 def test_the_rate_stays_within_its_bounds() -> None:
@@ -93,7 +102,7 @@ def test_a_report_with_nothing_to_learn_leaves_the_rate(
 
     window.learn(chars, tokens)
 
-    assert window.chars_per_token == 3.0
+    assert window.chars_per_token == 2.5
 
 
 def test_a_transcript_names_who_spoke_and_cuts_long_lines() -> None:
