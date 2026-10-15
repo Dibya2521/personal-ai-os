@@ -194,6 +194,26 @@ async def test_a_fact_that_changes_a_shown_one_replaces_it(store: MemoryStore) -
     assert [v.fact for v in await store.fact_vectors(EMBEDDER.id)] == [mumbai]
 
 
+async def test_facts_tied_past_the_shown_number_show_the_oldest_first(
+    store: MemoryStore,
+) -> None:
+    # None shares a meaning with "cat", so all seven tie at cosine 0, and no
+    # two are close enough to be one fact said again.
+    texts = ["sister", "pune", "host", "sister pune", "sister host", "pune host"]
+    texts.append("sister pune host")
+    batches = [texts[:4], texts[4:]]
+    model = Scripted(*(found(*((t, "fact") for t in b)) for b in batches), found())
+    facts = await keeper(store, model)
+    for batch in batches:
+        turn = await a_turn(store, "facts")
+        assert len(await facts.learn(turn, MONDAY, "facts", "Noted.")) == len(batch)
+
+    await facts.learn(await a_turn(store, "cat"), LATER, "cat", "Noted.")
+
+    shown = "".join(f"{n}. {text}\n" for n, text in enumerate(texts[:5], 1))
+    assert f"Known facts:\n{shown}\n" in model.requests[2].messages[-1].text
+
+
 async def test_a_fact_said_again_is_not_kept_twice(store: MemoryStore) -> None:
     turn = await a_turn(store, "my cat is called miso")
     model = Scripted(

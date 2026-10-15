@@ -1,3 +1,4 @@
+import itertools
 import math
 from datetime import UTC, datetime, timedelta
 
@@ -58,6 +59,44 @@ def test_asking_for_more_than_are_held_returns_them_all(three: VectorSet) -> Non
     found = three.similarities(unit(0, 0, 1)).nearest(10)
 
     assert found == pytest.approx({1: 0.0, 2: 0.0, 3: 0.0})
+
+
+def test_nearest_keeps_every_vector_tied_at_the_cut_in_any_held_order() -> None:
+    # Against (1, 0) each cosine is the vector's first number, exactly: no sum
+    # order or fused multiply can tell two equal vectors apart.
+    rows = {1: unit(1, 0), 2: unit(1, 0), 6: unit(0, 1)}
+    rows |= dict.fromkeys((3, 4, 5), unit(0.6, 0.8))
+    chosen: set[frozenset[int]] = set()
+    for order in itertools.permutations(rows):
+        vectors = VectorSet(2)
+        for id_ in order:
+            vectors.add(id_, MONDAY, rows[id_])
+        chosen.add(frozenset(vectors.similarities(unit(1, 0)).nearest(3)))
+
+    assert chosen == {frozenset({1, 2, 3, 4, 5})}
+
+
+def test_nearest_keeps_a_tie_after_removals_reorder_the_rows() -> None:
+    vectors = VectorSet(2)
+    for id_ in range(1, 101):
+        vectors.add(id_, MONDAY, unit(1, 1))
+    for id_ in range(1, 11):
+        vectors.remove(id_)
+
+    found = vectors.similarities(unit(1, 0)).nearest(50)
+
+    assert sorted(found) == list(range(11, 101))
+
+
+def test_nearest_of_none_is_empty_and_below_none_is_refused(
+    three: VectorSet,
+) -> None:
+    near = three.similarities(unit(1, 0, 0))
+
+    assert near.nearest(0) == {}
+    assert VectorSet(3).similarities(unit(1, 0, 0)).nearest(0) == {}
+    with pytest.raises(ValueError, match=r"^count=-1 is below 0$"):
+        near.nearest(-1)
 
 
 def test_only_turns_inside_the_dates_are_compared(three: VectorSet) -> None:

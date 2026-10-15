@@ -302,7 +302,8 @@ class FactKeeper:
     async def _closest(self, question: str, held: Mapping[int, Fact]) -> list[Fact]:
         (vector,) = await self._embedder.embed([question])
         near = self._held.similarities(vector).nearest(SHOWN)
-        return [held[fact] for fact in sorted(near, key=lambda fact: -near[fact])]
+        closest = sorted(near, key=lambda fact: (-near[fact], fact))[:SHOWN]
+        return [held[fact] for fact in closest]
 
     def _repeated(self, vector: Vectors, *, besides: Fact | None) -> int | None:
         """Return a held fact ``vector`` says again, other than ``besides``."""

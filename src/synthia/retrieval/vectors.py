@@ -48,12 +48,24 @@ class Similarities:
     cosines: Vectors
 
     def nearest(self, count: int) -> dict[int, float]:
-        """Return the ids of the ``count`` most similar vectors and their similarity."""
+        """Return the ids of the ``count`` most similar vectors and their similarity.
+
+        Every vector as similar as the ``count``-th is returned too, so a tie
+        at the cut can return more than ``count``, and which vectors return
+        never depends on the order they are held in. ``count`` 0 returns none.
+
+        Raises:
+            ValueError: If ``count`` is below 0.
+        """
+        if count < 0:
+            message = f"count={count} is below 0"
+            raise ValueError(message)
+        if count == 0:
+            return {}
         if count >= len(self.ids):
-            chosen = np.arange(len(self.ids))
-        else:
-            chosen = np.argpartition(-self.cosines, count)[:count]
-        return self._of(chosen)
+            return self._of(np.arange(len(self.ids)))
+        cut = np.partition(self.cosines, -count)[-count]
+        return self._of(np.flatnonzero(self.cosines >= cut))
 
     def of(self, ids: Collection[int]) -> dict[int, float]:
         """Return the similarity of each id in ``ids`` that is in the range."""
