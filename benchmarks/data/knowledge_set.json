@@ -1,0 +1,775 @@
+{
+  "commit": "ffd814e",
+  "questions": [
+    {
+      "id": "named-01",
+      "category": "named",
+      "question": "LLAMA_API_KEY",
+      "gold": [
+        {
+          "path": "docs/gateway.md",
+          "start": 284,
+          "end": 289
+        },
+        {
+          "path": "src/synthia/models/server.py",
+          "start": 35,
+          "end": 35
+        }
+      ]
+    },
+    {
+      "id": "named-02",
+      "category": "named",
+      "question": "What does SYNTHIA_DISK_BUDGET_GB limit, and what is its default?",
+      "gold": [
+        {
+          "path": "src/synthia/models/install.py",
+          "start": 133,
+          "end": 141
+        },
+        {
+          "path": "src/synthia/kernel/config.py",
+          "start": 31,
+          "end": 31
+        }
+      ]
+    },
+    {
+      "id": "named-03",
+      "category": "named",
+      "question": "Why is MAX_RESULT_BITS set to 4096 in the calculator?",
+      "gold": [
+        {
+          "path": "src/synthia/tools/basic.py",
+          "start": 16,
+          "end": 18
+        }
+      ]
+    },
+    {
+      "id": "named-04",
+      "category": "named",
+      "question": "Which file names does SECRET_NAMES keep out of the knowledge index?",
+      "gold": [
+        {
+          "path": "src/synthia/knowledge/index.py",
+          "start": 70,
+          "end": 75
+        }
+      ]
+    },
+    {
+      "id": "named-05",
+      "category": "named",
+      "question": "What does the daemon's JSON-RPC error -32003 mean?",
+      "gold": [
+        {
+          "path": "docs/daemon.md",
+          "start": 105,
+          "end": 105
+        },
+        {
+          "path": "src/synthia/server/api.py",
+          "start": 67,
+          "end": 70
+        }
+      ]
+    },
+    {
+      "id": "named-06",
+      "category": "named",
+      "question": "What is qwen35.context_length and what context does SYNTHIA give the model?",
+      "gold": [
+        {
+          "path": "src/synthia/models/gguf.py",
+          "start": 3,
+          "end": 7
+        },
+        {
+          "path": "docs/gateway.md",
+          "start": 310,
+          "end": 315
+        }
+      ]
+    },
+    {
+      "id": "named-07",
+      "category": "named",
+      "question": "kestrel-07 admin password",
+      "gold": [
+        {
+          "path": "benchmarks/data/recall_set.json",
+          "start": 168,
+          "end": 168
+        }
+      ]
+    },
+    {
+      "id": "named-08",
+      "category": "named",
+      "question": "Why is llama.cpp pinned to the build b11130?",
+      "gold": [
+        {
+          "path": "docs/adr/0006-local-runtime-and-model.md",
+          "start": 29,
+          "end": 32
+        },
+        {
+          "path": "src/synthia/models/catalogue.py",
+          "start": 17,
+          "end": 17
+        }
+      ]
+    },
+    {
+      "id": "named-09",
+      "category": "named",
+      "question": "What does Overflow.DROP_OLDEST do when a subscriber's queue is full?",
+      "gold": [
+        {
+          "path": "src/synthia/kernel/bus.py",
+          "start": 63,
+          "end": 67
+        },
+        {
+          "path": "src/synthia/kernel/bus.py",
+          "start": 107,
+          "end": 116
+        }
+      ]
+    },
+    {
+      "id": "named-10",
+      "category": "named",
+      "question": "What is the .git/info/public-guard file for?",
+      "gold": [
+        {
+          "path": "scripts/public_guard.py",
+          "start": 1,
+          "end": 7
+        },
+        {
+          "path": "docs/adr/0003-configuration-and-secrets.md",
+          "start": 18,
+          "end": 19
+        }
+      ]
+    },
+    {
+      "id": "named-11",
+      "category": "named",
+      "question": "EF_CONSTRUCTION value in the HNSW index",
+      "gold": [
+        {
+          "path": "src/synthia/retrieval/hnsw.py",
+          "start": 45,
+          "end": 47
+        }
+      ]
+    },
+    {
+      "id": "named-12",
+      "category": "named",
+      "question": "What does the facts_apart table hold?",
+      "gold": [
+        {
+          "path": "docs/memory.md",
+          "start": 41,
+          "end": 41
+        },
+        {
+          "path": "docs/adr/0012-memory.md",
+          "start": 140,
+          "end": 142
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-01",
+      "category": "paraphrase",
+      "question": "Can a website I happen to visit quietly drive my assistant behind my back?",
+      "gold": [
+        {
+          "path": "docs/daemon.md",
+          "start": 46,
+          "end": 48
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-02",
+      "category": "paraphrase",
+      "question": "hard drive space used per thousand chats",
+      "gold": [
+        {
+          "path": "docs/memory.md",
+          "start": 259,
+          "end": 266
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-03",
+      "category": "paraphrase",
+      "question": "Might another login on this PC hijack my assistant?",
+      "gold": [
+        {
+          "path": "docs/adr/0011-daemon.md",
+          "start": 80,
+          "end": 82
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-04",
+      "category": "paraphrase",
+      "question": "If I go incognito, does the helper still pick up details about my life?",
+      "gold": [
+        {
+          "path": "docs/memory.md",
+          "start": 149,
+          "end": 149
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-05",
+      "category": "paraphrase",
+      "question": "When a talk drags on, which earlier exchanges get discarded first?",
+      "gold": [
+        {
+          "path": "docs/memory.md",
+          "start": 61,
+          "end": 65
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-06",
+      "category": "paraphrase",
+      "question": "How do two programs avoid grabbing the final permitted call of the day at once?",
+      "gold": [
+        {
+          "path": "docs/gateway.md",
+          "start": 229,
+          "end": 232
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-07",
+      "category": "paraphrase",
+      "question": "Is there a ceiling on how much text the snippet executor may spit out?",
+      "gold": [
+        {
+          "path": "docs/agency.md",
+          "start": 126,
+          "end": 126
+        },
+        {
+          "path": "src/synthia/tools/python.py",
+          "start": 28,
+          "end": 28
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-08",
+      "category": "paraphrase",
+      "question": "Why can't one stuck helper freeze the entire reply?",
+      "gold": [
+        {
+          "path": "docs/agency.md",
+          "start": 56,
+          "end": 56
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-09",
+      "category": "paraphrase",
+      "question": "What becomes of an outdated detail about me after I correct it?",
+      "gold": [
+        {
+          "path": "docs/memory.md",
+          "start": 140,
+          "end": 142
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-10",
+      "category": "paraphrase",
+      "question": "How quickly does the on-device brain begin replying on a laptop lacking discrete graphics?",
+      "gold": [
+        {
+          "path": "docs/adr/0006-local-runtime-and-model.md",
+          "start": 92,
+          "end": 95
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-11",
+      "category": "paraphrase",
+      "question": "Can I swap my assistant's character on the fly, and tune one quality like humour?",
+      "gold": [
+        {
+          "path": "docs/adr/0007-personas-as-data.md",
+          "start": 56,
+          "end": 58
+        }
+      ]
+    },
+    {
+      "id": "paraphrase-12",
+      "category": "paraphrase",
+      "question": "Why won't it silently hand a chat over to the cloud when the home brain can't cope with a photo?",
+      "gold": [
+        {
+          "path": "docs/gateway.md",
+          "start": 58,
+          "end": 61
+        }
+      ]
+    },
+    {
+      "id": "code-01",
+      "category": "code",
+      "question": "How does the sliding-window rate limiter work out how long a request must wait?",
+      "gold": [
+        {
+          "path": "src/synthia/gateway/ratelimit.py",
+          "start": 53,
+          "end": 62
+        },
+        {
+          "path": "src/synthia/gateway/ratelimit.py",
+          "start": 68,
+          "end": 71
+        }
+      ]
+    },
+    {
+      "id": "code-02",
+      "category": "code",
+      "question": "full jitter retry wait computation",
+      "gold": [
+        {
+          "path": "src/synthia/gateway/retry.py",
+          "start": 110,
+          "end": 119
+        }
+      ]
+    },
+    {
+      "id": "code-03",
+      "category": "code",
+      "question": "How does the permission policy choose between allow, ask and deny for a tool call?",
+      "gold": [
+        {
+          "path": "src/synthia/agent/policy.py",
+          "start": 49,
+          "end": 55
+        }
+      ]
+    },
+    {
+      "id": "code-04",
+      "category": "code",
+      "question": "Where is a tool's output wrapped as untrusted data, with its closing tag defused?",
+      "gold": [
+        {
+          "path": "src/synthia/agent/quoting.py",
+          "start": 43,
+          "end": 46
+        }
+      ]
+    },
+    {
+      "id": "code-05",
+      "category": "code",
+      "question": "How does the log redactor keep masking until no secret can be rebuilt?",
+      "gold": [
+        {
+          "path": "src/synthia/kernel/logs.py",
+          "start": 72,
+          "end": 81
+        }
+      ]
+    },
+    {
+      "id": "code-06",
+      "category": "code",
+      "question": "How is the characters-per-token rate updated from the prompt size the model reports?",
+      "gold": [
+        {
+          "path": "src/synthia/memory/window.py",
+          "start": 101,
+          "end": 107
+        }
+      ]
+    },
+    {
+      "id": "code-07",
+      "category": "code",
+      "question": "How does the calculator refuse a power whose result would be too large before computing it?",
+      "gold": [
+        {
+          "path": "src/synthia/tools/basic.py",
+          "start": 107,
+          "end": 115
+        }
+      ]
+    },
+    {
+      "id": "code-08",
+      "category": "code",
+      "question": "Where is a requested file path checked against the allowed folders?",
+      "gold": [
+        {
+          "path": "src/synthia/tools/files.py",
+          "start": 49,
+          "end": 60
+        }
+      ]
+    },
+    {
+      "id": "code-09",
+      "category": "code",
+      "question": "How is a finished model download checked against its SHA-256 before it gets its final name?",
+      "gold": [
+        {
+          "path": "src/synthia/models/download.py",
+          "start": 75,
+          "end": 84
+        }
+      ]
+    },
+    {
+      "id": "code-10",
+      "category": "code",
+      "question": "How does the supervisor count recent restarts and decide to give up on a service?",
+      "gold": [
+        {
+          "path": "src/synthia/kernel/supervisor.py",
+          "start": 275,
+          "end": 290
+        }
+      ]
+    },
+    {
+      "id": "code-11",
+      "category": "code",
+      "question": "How does consolidation ask the local model whether two facts are the same?",
+      "gold": [
+        {
+          "path": "src/synthia/memory/facts.py",
+          "start": 376,
+          "end": 387
+        }
+      ]
+    },
+    {
+      "id": "code-12",
+      "category": "code",
+      "question": "How does the HNSW index pick which neighbours a new vector is linked to?",
+      "gold": [
+        {
+          "path": "src/synthia/retrieval/hnsw.py",
+          "start": 305,
+          "end": 313
+        }
+      ]
+    },
+    {
+      "id": "code-13",
+      "category": "code",
+      "question": "How does the router pick a reason to answer locally when a request asked for the remote model?",
+      "gold": [
+        {
+          "path": "src/synthia/gateway/router.py",
+          "start": 319,
+          "end": 334
+        }
+      ]
+    },
+    {
+      "id": "multi-01",
+      "category": "multi",
+      "question": "The docs say a remote request is claimed from the daily budget before it is sent; where is that claim made in code?",
+      "gold": [
+        {
+          "path": "docs/gateway.md",
+          "start": 224,
+          "end": 228
+        },
+        {
+          "path": "src/synthia/gateway/budget.py",
+          "start": 168,
+          "end": 181
+        }
+      ]
+    },
+    {
+      "id": "multi-02",
+      "category": "multi",
+      "question": "Where is the remote limit of 20 requests a minute documented, and where is it set?",
+      "gold": [
+        {
+          "path": "docs/gateway.md",
+          "start": 26,
+          "end": 28
+        },
+        {
+          "path": "src/synthia/gateway/providers.py",
+          "start": 51,
+          "end": 52
+        }
+      ]
+    },
+    {
+      "id": "multi-03",
+      "category": "multi",
+      "question": "Agent loop limit of 8 model steps: where is it explained and where is the constant?",
+      "gold": [
+        {
+          "path": "docs/agency.md",
+          "start": 55,
+          "end": 55
+        },
+        {
+          "path": "src/synthia/agent/loop.py",
+          "start": 36,
+          "end": 37
+        }
+      ]
+    },
+    {
+      "id": "multi-04",
+      "category": "multi",
+      "question": "Reminders need a score of at least 0.55: where is that described and where is it defined?",
+      "gold": [
+        {
+          "path": "docs/memory.md",
+          "start": 56,
+          "end": 60
+        },
+        {
+          "path": "src/synthia/memory/remembering.py",
+          "start": 35,
+          "end": 38
+        }
+      ]
+    },
+    {
+      "id": "multi-05",
+      "category": "multi",
+      "question": "A new fact at least 0.90 similar to a held one is not kept: where is that documented and where is it checked?",
+      "gold": [
+        {
+          "path": "docs/memory.md",
+          "start": 143,
+          "end": 144
+        },
+        {
+          "path": "src/synthia/memory/facts.py",
+          "start": 308,
+          "end": 319
+        }
+      ]
+    },
+    {
+      "id": "multi-06",
+      "category": "multi",
+      "question": "What are the thinking time allowances for low, medium and high, in the docs and in the code?",
+      "gold": [
+        {
+          "path": "docs/gateway.md",
+          "start": 130,
+          "end": 132
+        },
+        {
+          "path": "src/synthia/gateway/reasoning.py",
+          "start": 44,
+          "end": 44
+        }
+      ]
+    },
+    {
+      "id": "multi-07",
+      "category": "multi",
+      "question": "How long does the daemon wait before restarting a crashed local model server, and where is that backoff implemented?",
+      "gold": [
+        {
+          "path": "docs/daemon.md",
+          "start": 121,
+          "end": 124
+        },
+        {
+          "path": "src/synthia/kernel/supervisor.py",
+          "start": 73,
+          "end": 84
+        }
+      ]
+    },
+    {
+      "id": "multi-08",
+      "category": "multi",
+      "question": "Which import layers are enforced between packages, and where is the contract declared?",
+      "gold": [
+        {
+          "path": "docs/architecture.md",
+          "start": 72,
+          "end": 74
+        },
+        {
+          "path": "pyproject.toml",
+          "start": 116,
+          "end": 130
+        }
+      ]
+    },
+    {
+      "id": "multi-09",
+      "category": "multi",
+      "question": "What branch coverage must the test suite reach, per the contributing guide and the configuration?",
+      "gold": [
+        {
+          "path": "CONTRIBUTING.md",
+          "start": 38,
+          "end": 41
+        },
+        {
+          "path": "pyproject.toml",
+          "start": 147,
+          "end": 148
+        }
+      ]
+    },
+    {
+      "id": "multi-10",
+      "category": "multi",
+      "question": "How does a client decide that daemon.json still describes a live daemon?",
+      "gold": [
+        {
+          "path": "docs/daemon.md",
+          "start": 36,
+          "end": 39
+        },
+        {
+          "path": "src/synthia/server/discovery.py",
+          "start": 107,
+          "end": 113
+        }
+      ]
+    },
+    {
+      "id": "multi-11",
+      "category": "multi",
+      "question": "Why is the llama.cpp server started in its own process group, and where in the code?",
+      "gold": [
+        {
+          "path": "docs/gateway.md",
+          "start": 306,
+          "end": 309
+        },
+        {
+          "path": "src/synthia/models/server.py",
+          "start": 240,
+          "end": 243
+        }
+      ]
+    },
+    {
+      "id": "multi-12",
+      "category": "multi",
+      "question": "What is the formula that fuses word and meaning scores in memory search, and where is it computed?",
+      "gold": [
+        {
+          "path": "docs/memory.md",
+          "start": 100,
+          "end": 104
+        },
+        {
+          "path": "src/synthia/retrieval/fusion.py",
+          "start": 47,
+          "end": 56
+        }
+      ]
+    },
+    {
+      "id": "none-01",
+      "category": "none",
+      "question": "Where is the Dockerfile for running SYNTHIA in a container?",
+      "gold": []
+    },
+    {
+      "id": "none-02",
+      "category": "none",
+      "question": "How is memory.db encrypted at rest?",
+      "gold": []
+    },
+    {
+      "id": "none-03",
+      "category": "none",
+      "question": "How do I connect SYNTHIA to a Telegram bot?",
+      "gold": []
+    },
+    {
+      "id": "none-04",
+      "category": "none",
+      "question": "Which Kubernetes or Helm manifests deploy the daemon?",
+      "gold": []
+    },
+    {
+      "id": "none-05",
+      "category": "none",
+      "question": "What LoRA rank and learning rate are used to fine-tune the local model?",
+      "gold": []
+    },
+    {
+      "id": "none-06",
+      "category": "none",
+      "question": "Does SYNTHIA post a Slack notification when the daily remote budget runs out?",
+      "gold": []
+    },
+    {
+      "id": "none-07",
+      "category": "none",
+      "question": "How do I import my ChatGPT conversation history into memory?",
+      "gold": []
+    },
+    {
+      "id": "none-08",
+      "category": "none",
+      "question": "How does SYNTHIA read and summarise my Gmail inbox?",
+      "gold": []
+    },
+    {
+      "id": "none-09",
+      "category": "none",
+      "question": "Which port serves the daemon's Prometheus metrics?",
+      "gold": []
+    },
+    {
+      "id": "none-10",
+      "category": "none",
+      "question": "How do I pair a Bluetooth headset for voice chat?",
+      "gold": []
+    },
+    {
+      "id": "none-11",
+      "category": "none",
+      "question": "GraphQL schema of the daemon API",
+      "gold": []
+    },
+    {
+      "id": "none-12",
+      "category": "none",
+      "question": "Can several family members share one install with separate user profiles?",
+      "gold": []
+    }
+  ]
+}

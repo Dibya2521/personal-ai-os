@@ -102,7 +102,7 @@ include = ["src", "tests", "scripts", "benchmarks"]
 pythonVersion = "3.12"
 typeCheckingMode = "strict"
 # Repository tools beside the package, imported by their tests.
-extraPaths = ["scripts"]
+extraPaths = ["scripts", "benchmarks"]
 venvPath = "."
 venv = ".venv"
 
@@ -132,7 +132,7 @@ exhaustive = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-pythonpath = ["scripts"]
+pythonpath = ["scripts", "benchmarks"]
 addopts = "-ra --strict-markers --strict-config"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
