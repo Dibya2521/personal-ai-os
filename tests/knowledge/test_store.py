@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -672,9 +673,8 @@ async def test_another_store_on_the_same_file_sees_what_was_written(
 async def test_a_file_from_a_newer_synthia_is_refused(tmp_path: Path) -> None:
     path = tmp_path / KNOWLEDGE_FILE
     KnowledgeStore(path)
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
-    connection.close()
 
     with pytest.raises(sqlite3.DatabaseError, match="newer than 1"):
         KnowledgeStore(path)

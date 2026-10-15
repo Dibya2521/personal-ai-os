@@ -37,6 +37,15 @@ repos:
   # therefore exactly the ones CI uses.
   - repo: local
     hooks:
+      # `with sqlite3.connect(...)` commits but never closes. Python 3.13 warns
+      # when the collector finds the open connection, and the tests turn that
+      # warning into a failure of whichever test happens to run next.
+      - id: sqlite-closed
+        name: sqlite connections are closed
+        language: pygrep
+        entry: 'with sqlite3\.connect\('
+        types: [python]
+
       - id: public-guard
         name: public guard
         entry: uv run python scripts/public_guard.py

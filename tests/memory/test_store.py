@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -563,9 +564,8 @@ async def test_a_store_made_before_the_learning_queue_gains_it_empty(
     await older.add_turn(
         await older.begin_conversation("SYNTHIA", MONDAY), said("q", "a", MONDAY)
     )
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         connection.execute("DROP TABLE facts_pending")
-    connection.close()
 
     reopened = MemoryStore(path)
 

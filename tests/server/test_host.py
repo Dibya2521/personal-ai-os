@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import httpx
@@ -227,9 +228,8 @@ async def test_facts_that_cannot_be_read_are_warned_about(tmp_path: Path) -> Non
     store = MemoryStore(tmp_path / MEMORY_FILE)
     memory = Recall(store, embedder(Network()))
     warnings: list[str] = []
-    with sqlite3.connect(tmp_path / MEMORY_FILE) as connection:
+    with closing(sqlite3.connect(tmp_path / MEMORY_FILE)) as connection:
         connection.execute("DROP TABLE fact_vectors")
-    connection.close()
 
     assert await open_learning(memory, Scripted(), warnings.append, local=True) is None
     (warning,) = warnings

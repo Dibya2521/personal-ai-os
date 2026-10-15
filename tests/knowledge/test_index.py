@@ -4,6 +4,7 @@ import sqlite3
 import sys
 import threading
 from collections.abc import Sequence
+from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
@@ -101,7 +102,7 @@ async def added(
 
 def indexed(db: Path) -> dict[str, tuple[str, tuple[str, ...]]]:
     """Each document by path: its note and its chunks' bodies in order."""
-    with sqlite3.connect(db) as connection:
+    with closing(sqlite3.connect(db)) as connection:
         rows = connection.execute(
             "SELECT d.path, d.note, c.body FROM documents d"
             " LEFT JOIN chunks c ON c.document = d.id ORDER BY d.path, c.ordinal"
@@ -114,7 +115,7 @@ def indexed(db: Path) -> dict[str, tuple[str, tuple[str, ...]]]:
 
 
 def chunk_ids(db: Path) -> list[int]:
-    with sqlite3.connect(db) as connection:
+    with closing(sqlite3.connect(db)) as connection:
         return [i for (i,) in connection.execute("SELECT id FROM chunks ORDER BY id")]
 
 
