@@ -17,6 +17,8 @@ anywhere converges on the next pass:
   documents, and only a file absent from a folder that was listed goes.
 - Embedding runs last, from the chunks the store says have no vector, so
   chunks written before a crash are embedded by the next pass.
+- A cancelled pass stops after the store write in progress and its report
+  to ``on_removed`` or ``on_embedded``, never between the two.
 """
 
 from __future__ import annotations
@@ -41,7 +43,7 @@ from synthia.knowledge.store import Reading
 from synthia.knowledge.text import UnreadableError, format_of
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable, Sequence
+    from collections.abc import Awaitable, Callable, Coroutine, Iterable, Sequence
 
     import numpy as np
     from numpy.typing import NDArray
@@ -334,6 +336,47 @@ async def _in_reader[R](work: Callable[[], R]) -> R:
     return await asyncio.get_running_loop().run_in_executor(_READER, work)
 
 
+def _log_failure(step: asyncio.Task[object]) -> None:
+    error = None if step.cancelled() else step.exception()
+    if error is not None:
+        logger.error("a write whose caller was cancelled failed", exc_info=error)
+
+
+class Unsplit:
+    """Runs a store write and the report of what it changed as one step.
+
+    A store write runs in a thread, which goes on after the task awaiting it
+    is cancelled: the write commits, but the code after its ``await`` never
+    runs, so whatever follows the store (vectors held in memory) misses the
+    change. Here the write and its report run in a task the cancellation
+    does not reach. The cancelled caller waits for that task, then sees the
+    cancellation; cancelled again while waiting, it stops waiting and the
+    task runs on to its end. A failure no caller is left to see is logged.
+    """
+
+    def __init__(self) -> None:
+        """Run no step yet."""
+        self._running: set[asyncio.Task[object]] = set()
+
+    async def run[R](self, step: Coroutine[object, object, R]) -> R:
+        """Run ``step`` to its end, even if the caller is cancelled meanwhile.
+
+        Raises:
+            asyncio.CancelledError: If the caller was cancelled; ``step`` has
+                finished, or runs on if the wait for it was cancelled too.
+        """
+        task = asyncio.create_task(step)
+        # The event loop keeps only a weak reference to a task.
+        self._running.add(task)
+        task.add_done_callback(self._running.discard)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            task.add_done_callback(_log_failure)
+            await asyncio.wait([task])
+            raise
+
+
 @dataclass(slots=True)
 class _Pass:
     """One pass's hooks and counts."""
@@ -412,6 +455,7 @@ class Indexer:
         self._embedder = embedder
         self._formats = formats
         self._one_pass = asyncio.Lock()
+        self._steps = Unsplit()
 
     async def run(
         self,
@@ -425,9 +469,11 @@ class Indexer:
 
         A second call waits for the first to finish. ``on_removed`` gets the
         ids of chunks removed, ``on_embedded`` each chunk embedded with its
-        vector, so vectors held elsewhere follow; ids handed over just before
-        a crash are lost, so such an owner loads its vectors from the store
-        when it starts.
+        vector, so vectors held elsewhere follow. Each store write and its
+        hand-over run as one :class:`Unsplit` step, so a cancelled pass still
+        hands over what its last write changed. A crash still loses ids
+        written but not yet handed over, so such an owner loads its vectors
+        from the store when it starts.
         """
         async with self._one_pass:
             started = time.perf_counter()
@@ -461,8 +507,11 @@ class Indexer:
             await self._file(run, source.id, file, stamps.get(file.path))
         gone = _vanished(stamps, walked)
         if gone:
-            run.on_removed(await self._store.remove_documents(gone))
+            await self._steps.run(self._removed(run, gone))
             run.removed += len(gone)
+
+    async def _removed(self, run: _Pass, gone: Sequence[DocumentId]) -> None:
+        run.on_removed(await self._store.remove_documents(gone))
 
     async def _file(
         self, run: _Pass, source: SourceId, file: _File, stamp: Stamp | None
@@ -482,10 +531,13 @@ class Indexer:
                 await self._store.touch(document, file.mtime_ns, file.size)
                 run.unchanged += 1
             case _:
-                replaced = await self._store.replace_document(outcome.reading)
-                if replaced.removed:
-                    run.on_removed(replaced.removed)
+                await self._steps.run(self._replaced(run, outcome.reading))
                 run.written(outcome.content, new=stamp is None)
+
+    async def _replaced(self, run: _Pass, reading: Reading) -> None:
+        replaced = await self._store.replace_document(reading)
+        if replaced.removed:
+            run.on_removed(replaced.removed)
 
     def _outcome(self, source: SourceId, file: _File, stamp: Stamp | None) -> _Outcome:
         if file.size > MAX_FILE_BYTES:
@@ -560,11 +612,20 @@ class Indexer:
                 (chunk, vector)
                 for (chunk, _), vector in zip(waiting, vectors, strict=True)
             ]
-            kept = set(
-                await self._store.put_vectors(
-                    model, [(chunk, vector.tobytes()) for chunk, vector in pairs]
-                )
+            run.embedded += await self._steps.run(self._kept(run, model, pairs))
+
+    async def _kept(
+        self,
+        run: _Pass,
+        model: str,
+        pairs: Sequence[tuple[ChunkId, NDArray[np.float32]]],
+    ) -> int:
+        """Keep ``pairs``' vectors, hand over those kept, and return how many."""
+        kept = set(
+            await self._store.put_vectors(
+                model, [(chunk, vector.tobytes()) for chunk, vector in pairs]
             )
-            held = [(chunk, vector) for chunk, vector in pairs if chunk in kept]
-            run.on_embedded(held)
-            run.embedded += len(held)
+        )
+        held = [(chunk, vector) for chunk, vector in pairs if chunk in kept]
+        run.on_embedded(held)
+        return len(held)

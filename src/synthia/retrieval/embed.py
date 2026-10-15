@@ -119,6 +119,14 @@ class TextEmbedder:
             out[batch] = self._pooled([ids[i] for i in batch])
         return out
 
+    def count(self, text: str) -> int:
+        """Return how many tokens ``text`` splits into, uncut, without start and end.
+
+        The count a chunk's budget is spent in, so the embedder is also the
+        chunker's token counter.
+        """
+        return self._tokens.count(text)
+
     async def embed(self, texts: Sequence[str]) -> NDArray[np.float32]:
         """Return one unit vector per text, computed off the event loop."""
         return await asyncio.to_thread(self.vectors, texts)

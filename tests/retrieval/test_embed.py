@@ -115,6 +115,14 @@ async def test_embedding_off_the_event_loop_gives_the_same_vectors() -> None:
     )
 
 
+def test_count_is_the_tokens_uncut_without_start_and_end() -> None:
+    counted = embedder(Network()).count
+
+    # EMBEDDER reads at most 8 tokens; the count runs past that.
+    assert [counted(t) for t in ("my cat is called miso?", "my cat " * 10)] == [6, 20]
+    assert [counted(t) for t in ("my dog", "")] == [2, 0]
+
+
 def test_a_network_of_the_wrong_width_is_refused() -> None:
     spec = replace(EMBEDDER, dimensions=5)
     with pytest.raises(EmbedError, match="gives 4 numbers, not 5"):

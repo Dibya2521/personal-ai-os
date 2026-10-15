@@ -3,7 +3,7 @@ import os
 import sqlite3
 import sys
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import closing
 from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
@@ -13,12 +13,13 @@ import pytest
 from numpy.typing import NDArray
 
 from synthia.knowledge.chunk import Chunking
-from synthia.knowledge.index import MAX_FILE_BYTES, Indexer, IndexReport
+from synthia.knowledge.index import MAX_FILE_BYTES, Indexer, IndexReport, Unsplit
 from synthia.knowledge.model import ChunkId, Source, SourceKind
 from synthia.knowledge.store import KnowledgeStore, Reading, Replaced
 from synthia.knowledge.text import Format, Outline, Text, format_of
 from tests.knowledge.checks import WORDS
 from tests.retrieval.toy import Network, embedder
+from tests.timing import HANG_TIMEOUT_S
 
 CHUNKING = Chunking(40)
 HELD_BACK = "held back: looks like it holds a secret"
@@ -638,3 +639,84 @@ async def test_files_are_read_on_one_thread_off_the_event_loop(
     assert of(report) == IndexReport(added=3, chunks=3)
     assert spy.threads == ["synthia-reader_0"] * 3
     assert threading.current_thread().name == "MainThread"
+
+
+@dataclass
+class Step:
+    """A step that waits for the test, then records what it saw."""
+
+    started: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+    finished: asyncio.Event = field(default_factory=asyncio.Event)
+    error: Exception | None = None
+    caller_done: list[bool] = field(default_factory=list[bool])
+
+    async def __call__(self, caller: Callable[[], asyncio.Task[int]]) -> int:
+        self.started.set()
+        await self.release.wait()
+        self.caller_done.append(caller().done())
+        self.finished.set()
+        if self.error is not None:
+            raise self.error
+        return 1
+
+
+def started(steps: Unsplit, step: Step) -> asyncio.Task[int]:
+    task: asyncio.Task[int] = asyncio.create_task(steps.run(step(lambda: task)))
+    return task
+
+
+async def test_unsplit_returns_what_the_step_returns() -> None:
+    step = Step()
+    step.release.set()
+
+    assert await started(Unsplit(), step) == 1
+
+
+async def test_unsplit_finishes_the_step_before_its_cancelled_caller_returns() -> None:
+    step = Step()
+    caller = started(Unsplit(), step)
+    await asyncio.wait_for(step.started.wait(), HANG_TIMEOUT_S)
+
+    caller.cancel()
+    step.release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(caller, HANG_TIMEOUT_S)
+    assert step.caller_done == [False]
+
+
+async def test_unsplit_logs_a_step_that_fails_after_its_caller_was_cancelled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    step = Step(error=OSError("the disk is full"))
+    caller = started(Unsplit(), step)
+    await asyncio.wait_for(step.started.wait(), HANG_TIMEOUT_S)
+
+    caller.cancel()
+    step.release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(caller, HANG_TIMEOUT_S)
+    (record,) = caplog.records
+    assert record.getMessage() == "a write whose caller was cancelled failed"
+    assert record.exc_info is not None
+    assert record.exc_info[1] is step.error
+
+
+async def test_unsplit_cancelled_twice_lets_the_step_run_on() -> None:
+    step = Step()
+    caller = started(Unsplit(), step)
+    await asyncio.wait_for(step.started.wait(), HANG_TIMEOUT_S)
+
+    caller.cancel()
+    # Let the first cancellation reach the caller before the second.
+    await asyncio.sleep(0)
+    caller.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(caller, HANG_TIMEOUT_S)
+    assert not step.finished.is_set()
+    step.release.set()
+    await asyncio.wait_for(step.finished.wait(), HANG_TIMEOUT_S)
+    assert step.caller_done == [True]
