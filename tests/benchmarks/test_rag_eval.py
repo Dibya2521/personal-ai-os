@@ -5,8 +5,9 @@
   cosines are sister 0.3 / sqrt(5.09) = 0.133, cat 0.2 / sqrt(4.04) = 0.0995
   and server 0.2 / sqrt(9.04) = 0.0665: server comes third. Fused adds the
   weight times kestrel's BM25 over the scale, 0.5108 / (ln 7 * 2.2) = 0.1193,
-  to server only: 0.0785, 0.0725 and 0.0904 at 0.1, 0.05 and 0.2 stay below
-  cat, 0.1143 at 0.4 passes cat but not sister, so it comes second.
+  to server only: 0.0904, 0.0725 and 0.0785 at 0.2 (the default), 0.05 and
+  0.1 stay below cat, 0.1142 at 0.4 passes cat but not sister, so it comes
+  second.
 - "pet" (paraphrase, gold cat.txt): no file holds the word, so words find
   nothing; by meaning cat is 2 / sqrt(4.04) = 0.995 and the others 0.
 - "osprey" (none): words find nothing; by meaning it is "kestrel" again, so
@@ -74,7 +75,7 @@ NAMED = {
     "meaning": (0.0, 1.0, 1 / 3, 0.5),
     "fused": (0.0, 1.0, 1 / 3, 0.5),
     "fused:0.05": (0.0, 1.0, 1 / 3, 0.5),
-    "fused:0.2": (0.0, 1.0, 1 / 3, 0.5),
+    "fused:0.1": (0.0, 1.0, 1 / 3, 0.5),
     "fused:0.4": (0.0, 1.0, 0.5, SECOND),
 }
 KEYS = [
@@ -109,12 +110,12 @@ def headless() -> list[Chunking]:
     return [c for c in chunkings(toy().spec) if not c.header]
 
 
-def test_chunkings_are_default_headless_and_line_windows() -> None:
+def test_chunkings_are_default_windows_then_structure_without_and_with_header() -> None:
     names = [c.recipe() for c in chunkings(toy().spec)]
     assert names == [
-        "structure+header/32/40/r1",
-        "structure/32/40/r1",
         "lines/32/40/r1",
+        "structure/32/40/r1",
+        "structure+header/32/40/r1",
     ]
 
 
@@ -125,7 +126,7 @@ def test_variants_are_the_six_named() -> None:
         "meaning",
         "fused",
         "fused:0.05",
-        "fused:0.2",
+        "fused:0.1",
         "fused:0.4",
     ]
 

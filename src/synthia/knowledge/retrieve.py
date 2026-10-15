@@ -36,10 +36,14 @@ if TYPE_CHECKING:
 CANDIDATES: Final = 50
 """Chunks each side gives before fusing, as memory's search takes; a larger
 limit takes that many instead."""
-WORD_WEIGHT: Final = 0.1
-"""The weight memory measured on its own questions: from 0.05 to 0.15 the
-fused ranking never did worse than meaning alone (:mod:`synthia.memory.hybrid`).
-Knowledge keeps it until it is measured on questions about the person's files."""
+WORD_WEIGHT: Final = 0.2
+"""The weight measured on knowledge's own questions (``benchmarks/rag_eval.py``):
+61 questions about this repository at commit ffd814e, 49 of them answerable,
+each searched 10 passages deep. 0.2 scored a higher nDCG@10 than 0.1 in 99.7 %
+of 2,000 paired bootstrap resamples over the questions with sections and a
+header, and in 86.5 % with windows of 40 lines, where it reached 0.461, the
+best of 18 (3 chunkings by 6 variants). Memory measured 0.1 on its own questions
+and keeps it (:mod:`synthia.memory.hybrid`); here that weight is ``fused:0.1``."""
 
 
 class VariantError(ValueError):

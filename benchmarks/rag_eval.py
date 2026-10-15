@@ -9,11 +9,11 @@ The files are taken with ``git archive <commit>`` and indexed as one source,
 so a gold path, relative to the repository root, is a passage's path.
 
 Each chunking builds its own cold index in a fresh home, embedded with the
-installed default model: the default chunking (structure with a header, at
-the embedder's token limit), structure without a header, and windows of 40
-lines without a header, the baseline. Each variant then searches that index
-for every question, 10 passages deep: words, meaning, and the fused score at
-the default word weight and at 0.05, 0.2 and 0.4.
+installed default model: the default chunking (windows of 40 lines without a
+header, at the embedder's token limit), then sections by structure without a
+header and with one. Each variant then searches that index for every
+question, 10 passages deep: words, meaning, and the fused score at the
+default word weight 0.2 and at 0.05, 0.1 (the earlier default) and 0.4.
 
 Output is JSON lines: first a header (commit, questions per category, files
 in the corpus, embedder, python, numpy and onnxruntime versions), then per
@@ -72,7 +72,7 @@ DIGITS: Final = 3
 OVERALL: Final = "overall"
 VARIANTS: Final = tuple(
     Variant.parse(name)
-    for name in ("words", "meaning", "fused", "fused:0.05", "fused:0.2", "fused:0.4")
+    for name in ("words", "meaning", "fused", "fused:0.05", "fused:0.1", "fused:0.4")
 )
 
 type Category = Literal["named", "paraphrase", "code", "multi", "none"]
@@ -194,13 +194,14 @@ def read_set(path: Path) -> QuestionSet:
 
 
 def chunkings(spec: Embedder) -> tuple[Chunking, ...]:
-    """Return the chunkings scored at ``spec``: the default first, the baseline last."""
+    """Return the chunkings scored at ``spec``, the default first.
+
+    Then sections by structure without a header, then with one, which was
+    the default until windows measured better.
+    """
     default = Chunking.for_embedder(spec)
-    return (
-        default,
-        replace(default, header=False),
-        replace(default, splitter=Splitter.LINES, header=False),
-    )
+    structure = replace(default, splitter=Splitter.STRUCTURE, header=False)
+    return (default, structure, replace(structure, header=True))
 
 
 @dataclass(frozen=True, slots=True)

@@ -232,10 +232,10 @@ def test_recipe_names_every_field_and_the_reader_version(
     assert Chunking(256).recipe() == "structure+header/256/40/r2"
 
 
-def test_chunking_for_an_embedder_uses_its_token_limit() -> None:
+def test_chunking_for_an_embedder_is_headerless_windows_at_its_token_limit() -> None:
     chunking = Chunking.for_embedder(EMBEDDER)
 
-    assert chunking == Chunking(8)
+    assert chunking == Chunking(8, Splitter.LINES, header=False)
     assert chunking.budget == 6
 
 

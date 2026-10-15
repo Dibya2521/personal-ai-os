@@ -53,7 +53,7 @@ class Splitter(Enum):
     STRUCTURE = auto()
     """Units, then blocks, then blank lines, then lines."""
     LINES = auto()
-    """Windows of whole lines, ignoring structure: the eval's baseline."""
+    """Windows of whole lines, ignoring structure: the default."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,8 +80,22 @@ class Chunking:
 
     @classmethod
     def for_embedder(cls, spec: Embedder) -> Chunking:
-        """Return the default chunking at ``spec``'s token limit."""
-        return cls(spec.max_tokens)
+        """Return the default chunking at ``spec``'s token limit.
+
+        Windows of :data:`WINDOW_LINES` lines without a header, the best
+        measured on 61 questions about this repository at commit ffd814e (49
+        answerable, ``benchmarks/rag_eval.py``). With the fused score at word
+        weight 0.2 they reach nDCG@10 0.461, against 0.390 for the earlier
+        default of sections with a header at weight 0.1: higher in 98.1 % of
+        2,000 paired bootstrap resamples over the questions, by 0.015 to 0.128
+        (90 % interval). Over sections with a header at the same weight 0.2
+        the win is not settled (76.6 % of resamples); windows are the simpler
+        cut, so they stay the default until a better one is measured. A
+        likely reason they win: sections are never packed with their small
+        neighbours, so at a 256-token limit the same 261 files gave 3,906
+        section chunks against 2,085 windows, about half the size.
+        """
+        return cls(spec.max_tokens, Splitter.LINES, header=False)
 
     @property
     def budget(self) -> int:

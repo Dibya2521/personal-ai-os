@@ -55,8 +55,8 @@ async def test_open_chunks_at_the_embedders_limit_by_default(
     found = await knowledge.search("miso", variant=WORDS)
 
     (passage,) = found.passages
-    assert passage.document.recipe == "structure+header/32/40/r1/s2"
-    assert passage.chunk.header == "cat.txt"
+    assert passage.document.recipe == "lines/32/40/r1/s2"
+    assert passage.chunk.header == ""
 
 
 async def test_open_holds_the_vectors_the_index_kept(db: Path, root: Path) -> None:

@@ -85,9 +85,9 @@ def test_variant_name_and_parse_round_trip(variant: Variant, name: str) -> None:
         "fused:nan",
         "fused:inf",
         "fused:-0.0",
-        "words:0.2",
-        "meaning:0.1",
-        "fused:0.1",
+        "words:0.1",
+        "meaning:0.2",
+        "fused:0.2",
         "fused:1",
         "fused:+0.5",
         "fused:1_0",
@@ -110,7 +110,7 @@ def test_variant_parse_refuses_a_name_it_would_not_write(name: str) -> None:
         (Side.FUSED, -0.0),
         (Side.FUSED, float("nan")),
         (Side.FUSED, float("inf")),
-        (Side.WORDS, 0.2),
+        (Side.WORDS, 0.1),
         (Side.MEANING, 0.0),
     ],
 )
@@ -206,7 +206,9 @@ async def test_search_scores_are_bm25_cosine_and_their_fusion(notes: Knowledge) 
             cosine(PET_KESTREL, SERVER),
         ]
     )
-    server = cosine(PET_KESTREL, SERVER) + WORD_WEIGHT * KESTREL_BM25 / WORD_SCALE
+    # The default weight is 0.2: server is 0.0066 + 0.2 * 0.5108 / (ln 7 * 2.2)
+    # = 0.0305, below cat's 1.0 and above sister's 0.0132.
+    server = cosine(PET_KESTREL, SERVER) + 0.2 * KESTREL_BM25 / WORD_SCALE
     assert [p.score for p in both.passages] == pytest.approx(
         [cosine(PET_KESTREL, CAT), server, cosine(PET_KESTREL, SISTER)]
     )
