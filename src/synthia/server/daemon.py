@@ -6,8 +6,8 @@ its connection waits in the queue until the server accepts it. Stopping
 (asked by a client, Ctrl+C, or the end of the process's session) ends every
 conversation, which cancels the turns still running, then stops the MCP
 servers and the local model, and removes ``daemon.json``. Each start, end
-and restart of the local model's server, and each consolidation of the facts
-held, goes to the daemon's own trace.
+and restart of the local model's server, each consolidation of the facts
+held, and each pass of the knowledge index goes to the daemon's own trace.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import asyncio
 import logging
 import os
 import socket
+from functools import partial
 from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
@@ -43,11 +44,14 @@ from synthia.server.host import (
     in_background,
     no_local_model,
     open_embedder,
+    open_knowledge,
     open_learning,
     open_memory,
     publish_route,
     start_tools,
+    traced_index,
 )
+from synthia.server.upkeep import Activity, Reindexing
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -57,6 +61,10 @@ if TYPE_CHECKING:
     from synthia.gateway.providers import RemoteProvider
     from synthia.kernel.config import Settings
     from synthia.kernel.supervisor import ServiceEvent
+    from synthia.retrieval.embed import TextEmbedder
+
+type EmbedderOpener = Callable[[Settings, Callable[[str], None]], TextEmbedder | None]
+"""Opens the embedding model, passing what goes wrong to the second argument."""
 
 LOOPBACK: Final = "127.0.0.1"
 BACKLOG: Final = 16
@@ -136,15 +144,31 @@ async def serve(host: Host, home: Path, *, stop: asyncio.Event | None = None) ->
         logger.info("stopped")
 
 
-async def run_daemon(
+def _warned(warnings: list[str], text: str) -> None:
+    warnings.append(text)
+    logger.warning("%s", text)
+
+
+def _started(local: LocalModels | None, trace: Trace) -> Callable[[], str]:
+    """Start loading ``local``, traced; return how to ask for its state."""
+    if local is None:
+        return no_local_model
+    local.start(trace.service)
+    return local.state
+
+
+async def run_daemon(  # noqa: PLR0913 - every outside part is injected for tests
     settings: Settings,
     local: LocalModels | None,
     *,
     transport: httpx.AsyncBaseTransport | None = None,
     remote: RemoteProvider = OPENROUTER_FREE,
     stop: asyncio.Event | None = None,
+    embedder: EmbedderOpener = open_embedder,
 ) -> None:
     """Start what every conversation shares, serve until stopped, then stop it all.
+
+    ``embedder`` is opened once and shared by memory and knowledge.
 
     Raises:
         ConfigError: If no model can be reached.
@@ -159,24 +183,25 @@ async def run_daemon(
             remote=remote,
         )
         warnings: list[str] = []
-
-        def warn(text: str) -> None:
-            warnings.append(text)
-            logger.warning("%s", text)
-
+        warn = partial(_warned, warnings)
         traces = settings.home / TRACES
         trace = Trace.start(traces)
-        memory = await open_memory(settings, warn, open_embedder(settings, warn))
+        model = embedder(settings, warn)
+        memory = await open_memory(settings, warn, model)
         learning = await open_learning(
             memory, gateway.model, warn, local=gateway.router.has_local, trace=trace
+        )
+        knowledge = await open_knowledge(settings, warn, model)
+        activity = Activity()
+        reindexing = (
+            None
+            if knowledge is None
+            else Reindexing(knowledge, activity, report=partial(traced_index, trace))
         )
         tools, servers = await start_tools(
             settings, warn, transport, () if memory is None else (memory_tool(memory),)
         )
-        local_state = no_local_model
-        if local is not None:
-            local.start(trace.service)
-            local_state = local.state
+        local_state = _started(local, trace)
         try:
             host = Host(
                 gateway,
@@ -188,6 +213,9 @@ async def run_daemon(
                 local_state,
                 memory,
                 learning,
+                knowledge,
+                activity,
+                reindexing,
             )
             async with in_background(*host.background()):
                 await serve(host, settings.home, stop=stop)

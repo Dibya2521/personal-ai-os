@@ -108,6 +108,17 @@ All notable changes are recorded here. The format follows
   about at least as often as bge-small on a 40-question recall set, in about
   half the time: on Windows without an NVIDIA card it
   fetches 3.25 GB instead of 3.23 GB.
+- `synthia knowledge` reads folders the person adds and finds passages in
+  them. `add <folder>` adds one (`--private`, `--exclude <path>`), `remove`
+  forgets it and everything read from it, `list` shows them, `index` reads
+  them now and prints what changed, and `search "<question>"` prints the
+  best passages, each with where it is as `name/path:start-end`, its score
+  and its first 8 lines, control characters shown escaped. The daemon does
+  the work, started if needed, and also reads every folder again after 10
+  minutes without a turn, at most once an hour, stopping before its next
+  file when a turn starts or another command needs the index and going on
+  at the next idle time; each pass goes to its trace. It needs an embedding
+  model (`synthia models install`).
 
 ### Changed
 

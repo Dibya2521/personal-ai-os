@@ -6,7 +6,9 @@ plan marks are rebuilt from the daemon's notifications. A tool call that
 needs a yes is asked here, in the terminal; Ctrl+C cancels the request,
 which tells the daemon to cancel the turn. ``synthia stop``, ``synthia
 status`` and ``synthia memory consolidate`` open a conversation only to ask
-the daemon to stop, how it is, or to consolidate the facts it holds.
+the daemon to stop, how it is, or to consolidate the facts it holds; each
+``synthia knowledge`` command opens one to make its one request, starting
+the daemon if it is not running, so the daemon stays the index's one writer.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import subprocess
 import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -34,15 +37,17 @@ from synthia.gateway.types import (
 )
 from synthia.kernel.errors import SynthiaError
 from synthia.kernel.jsonrpc import ConnectionClosedError, Peer, RpcError
+from synthia.knowledge.index import IndexReport
+from synthia.knowledge.model import SourceKind
 from synthia.memory.facts import Consolidated
 from synthia.server.api import IMAGE_REFUSED
 from synthia.server.conversation import Reply
 from synthia.server.discovery import DAEMON_FILE, DaemonInfo, is_running, read_info
 from synthia.server.session import ImageError, TurnReport
+from synthia.server.upkeep import Indexed
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
-    from pathlib import Path
 
     from websockets.asyncio.client import ClientConnection
 
@@ -239,6 +244,119 @@ async def consolidate_memory(home: Path) -> Consolidated | None:
         return None
     async with conversation(info, _refuse) as talk:
         return await talk.consolidate()
+
+
+async def ask_daemon(home: Path, method: str, params: Params) -> object:
+    """Make one request of the daemon, starting it if it is not running.
+
+    Raises:
+        DaemonError: If the daemon cannot be started.
+        RpcError: If the daemon refuses the request.
+    """
+    info = await current_daemon(home)
+    async with conversation(info, _refuse) as talk:
+        return await talk.peer.request(method, params)
+
+
+@dataclass(frozen=True, slots=True)
+class KnownSource:
+    """A folder knowledge reads: its name, where it is, and what it leaves out."""
+
+    name: str
+    root: Path
+    kind: SourceKind
+    private: bool
+    excludes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FoundPassage:
+    """A passage found in knowledge, with where it is and how well it matched."""
+
+    citation: str
+    title: str
+    header: str
+    body: str
+    score: float
+    private: bool
+
+
+@dataclass(frozen=True, slots=True)
+class Searched:
+    """The passages found for a question, best first, and the private ones left out."""
+
+    passages: tuple[FoundPassage, ...]
+    withheld: int
+
+
+def source_from(result: object) -> KnownSource:
+    """Rebuild a knowledge source from the daemon's answer."""
+    fields = cast("dict[str, object]", result)
+    return KnownSource(
+        name=str(fields["name"]),
+        root=Path(str(fields["root"])),
+        kind=SourceKind(str(fields["kind"])),
+        private=bool(fields["private"]),
+        excludes=tuple(cast("list[str]", fields["excludes"])),
+    )
+
+
+def sources_from(result: object) -> list[KnownSource]:
+    """Rebuild every source from the ``knowledge_sources`` result."""
+    fields = cast("dict[str, list[object]]", result)
+    return [source_from(source) for source in fields["sources"]]
+
+
+def removed_from(result: object) -> bool:
+    """Return whether ``knowledge_remove`` found the source it was asked to remove."""
+    return bool(cast("dict[str, object]", result)["removed"])
+
+
+def indexed_from(result: object) -> Indexed:
+    """Rebuild an asked pass of the knowledge index from its result."""
+    fields = cast("dict[str, object]", result)
+    error = fields.get("error")
+    if error is not None:
+        return Indexed(None, scheduled=False, error=str(error))
+
+    def count(name: str) -> int:
+        return int(cast("int", fields[name]))
+
+    report = IndexReport(
+        added=count("added"),
+        changed=count("changed"),
+        unchanged=count("unchanged"),
+        removed=count("removed"),
+        unreadable=count("unreadable"),
+        held_back=count("held_back"),
+        passed_over=count("passed_over"),
+        chunks=count("chunks"),
+        cut=count("cut"),
+        embedded=count("embedded"),
+        unavailable=tuple(cast("list[str]", fields["unavailable"])),
+        seconds=float(cast("float", fields["seconds"])),
+    )
+    return Indexed(report, scheduled=False, error=None)
+
+
+def searched_from(result: object) -> Searched:
+    """Rebuild the passages found from the ``knowledge_search`` result."""
+    fields = cast("dict[str, object]", result)
+    passages = cast("list[dict[str, object]]", fields["passages"])
+    return Searched(
+        tuple(
+            FoundPassage(
+                citation=str(passage["citation"]),
+                title=str(passage["title"]),
+                header=str(passage["header"]),
+                body=str(passage["body"]),
+                score=float(cast("float", passage["score"])),
+                private=bool(passage["private"]),
+            )
+            for passage in passages
+        ),
+        int(cast("int", fields["withheld"])),
+    )
 
 
 def chunk_from(params: Params) -> ChatChunk:

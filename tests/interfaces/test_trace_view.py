@@ -13,6 +13,8 @@ from synthia.agent.trace import (
     TRACES,
     Clip,
     ConsolidationRan,
+    IndexCounts,
+    IndexRan,
     ModelAnswered,
     PlanAnswerStarted,
     PlanMade,
@@ -301,6 +303,64 @@ def test_the_list_counts_a_daemon_trace_consolidations(tmp_path: Path) -> None:
     )
 
     assert summary(path) == "d | turns 0 | tool calls 0 | consolidations 2"
+
+
+COUNTS = IndexCounts(
+    added=2,
+    changed=1,
+    unchanged=40,
+    removed=0,
+    unreadable=1,
+    held_back=0,
+    passed_over=3,
+    chunks=9,
+    cut=0,
+    embedded=9,
+    unavailable=("share",),
+    seconds=12.25,
+)
+
+
+def test_an_index_pass_shows_why_it_ran_what_it_did_and_how_it_ended() -> None:
+    records: list[Record] = [
+        IndexRan(turn=0, at=AT, scheduled=True, counts=COUNTS),
+        IndexRan(
+            turn=0,
+            at=AT,
+            scheduled=True,
+            counts=COUNTS.model_copy(update={"unavailable": ()}),
+        ),
+        IndexRan(
+            turn=0,
+            at=AT,
+            scheduled=False,
+            error=Clip.of("database\nis locked"),
+        ),
+        IndexRan(turn=0, at=AT, scheduled=True, stopped=True),
+    ]
+
+    done = (
+        "  knowledge index pass at 15:15:00 when idle | "
+        "2 added, 1 changed, 0 removed, 40 unchanged | 9 chunks, 9 embedded | "
+        "12.2 s"
+    )
+    assert outline(build_tree("d", records, tz=UTC))[1:] == [
+        f"{done} | could not list share",
+        done,
+        "  knowledge index pass at 15:15:00 when asked | failed: database is locked",
+        (
+            "  knowledge index pass at 15:15:00 when idle | "
+            "gave way to a turn or a write; goes on when idle"
+        ),
+    ]
+
+
+def test_the_list_counts_a_daemon_trace_index_passes(tmp_path: Path) -> None:
+    path = tmp_path / "d.jsonl"
+    record = IndexRan(turn=0, at=AT, scheduled=True, counts=COUNTS)
+    path.write_text(record.model_dump_json() + "\n", encoding="utf-8")
+
+    assert summary(path) == "d | turns 0 | tool calls 0 | index passes 1"
 
 
 @pytest.fixture

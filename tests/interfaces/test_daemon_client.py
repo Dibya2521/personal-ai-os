@@ -29,8 +29,6 @@ from synthia.interfaces.daemon_client import (
 )
 from synthia.kernel.config import Settings
 from synthia.memory.store import MEMORY_FILE, MemoryStore
-from synthia.retrieval.embed import TextEmbedder
-from synthia.server import daemon as daemon_module
 from synthia.server.api import NOT_LEARNING, mark_of
 from synthia.server.discovery import (
     DAEMON_FILE,
@@ -41,10 +39,9 @@ from synthia.server.discovery import (
 )
 from synthia.server.session import ImageError, PlanMark
 from tests.agent.scripted import Reply
-from tests.interfaces.daemons import private_daemon
+from tests.interfaces.daemons import private_daemon, toy_embedder
 from tests.interfaces.test_chat import KEY
 from tests.memory.test_facts import SAME, held_facts
-from tests.retrieval.toy import Network, embedder
 from tests.server.test_daemon import Local, Service
 from tests.timing import HANG_TIMEOUT_S
 
@@ -265,11 +262,6 @@ def learns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A home whose daemon learns facts, holding two that say the same."""
     monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-
-    def loaded(*_: object) -> TextEmbedder:
-        return embedder(Network())
-
-    monkeypatch.setattr(daemon_module, "open_embedder", loaded)
     store = MemoryStore(tmp_path / MEMORY_FILE)
     asyncio.run(held_facts(store, "likes green tea", "likes green tea"))
     return tmp_path
@@ -279,7 +271,9 @@ def test_facts_are_consolidated_from_the_command_line_and_traced(
     learns: Path,
 ) -> None:
     runner = CliRunner()
-    with private_daemon(keyed(learns), local=Judging(SAME, SAME)):
+    with private_daemon(
+        keyed(learns), local=Judging(SAME, SAME), embedder=toy_embedder
+    ):
         merged = runner.invoke(app, ["memory", "consolidate"])
         again = runner.invoke(app, ["memory", "consolidate"])
     listed = runner.invoke(app, ["trace", "--list"])
@@ -299,7 +293,7 @@ def test_a_consolidation_the_local_model_fails_says_so_and_exits_2(
         message = "the local model is not running"
         raise GatewayError(message)
 
-    with private_daemon(keyed(learns), local=Judging(down)):
+    with private_daemon(keyed(learns), local=Judging(down), embedder=toy_embedder):
         failed = CliRunner().invoke(app, ["memory", "consolidate"])
 
     assert failed.exit_code == doctor.Status.FAIL

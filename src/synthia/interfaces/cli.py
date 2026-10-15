@@ -20,12 +20,18 @@ from synthia.gateway.assemble import NO_MODEL
 from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.interfaces import doctor as doctor_checks
 from synthia.interfaces import model_commands
-from synthia.interfaces.chat import run_chat
+from synthia.interfaces.chat import run_chat, visible
 from synthia.interfaces.daemon_client import (
     DaemonError,
+    ask_daemon,
     consolidate_memory,
     current_daemon,
     daemon_status,
+    indexed_from,
+    removed_from,
+    searched_from,
+    source_from,
+    sources_from,
     stop_running,
 )
 from synthia.interfaces.trace_view import build_tree, summary
@@ -34,15 +40,21 @@ from synthia.kernel.config import Settings, load_settings, unknown_variables
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.kernel.jsonrpc import RpcError
 from synthia.kernel.logs import logging_to
+from synthia.knowledge.service import SEARCH_LIMIT
 from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.models.server import Launch
 from synthia.models.service import SERVER_LOG, LocalService, LocalSetup, find_local
 from synthia.persona.model import PersonaError
+from synthia.server.api import MAX_SEARCH_LIMIT
 from synthia.server.daemon import run_daemon
+from synthia.server.upkeep import INDEX_IDLE_S
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from synthia.interfaces.daemon_client import FoundPassage, KnownSource
+    from synthia.kernel.jsonrpc import Params
+    from synthia.knowledge.index import IndexReport
     from synthia.models.catalogue import Item, Model
 
 app = typer.Typer(
@@ -62,7 +74,16 @@ memory_app = typer.Typer(
 )
 app.add_typer(memory_app, name="memory")
 
+knowledge_app = typer.Typer(
+    help="Add folders for SYNTHIA to read, and search what they hold.",
+    no_args_is_help=True,
+)
+app.add_typer(knowledge_app, name="knowledge")
+
 CHAT_LOG = Path("logs") / "synthia.log"
+SHOWN_BODY_LINES = 8
+INDENT = "    "
+SECONDS_PER_MINUTE = 60
 
 # A generous read timeout: a slow CDN may pause between chunks of a 2.7 GB file.
 DOWNLOAD_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
@@ -255,6 +276,160 @@ def memory_consolidate() -> None:
     if done.error is not None:
         typer.echo(f"error: {done.error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL)
+
+
+@knowledge_app.command("add")
+def knowledge_add(
+    path: Annotated[Path, typer.Argument(help="The folder to read.")],
+    *,
+    private: Annotated[
+        bool | None,
+        typer.Option(
+            "--private/--public",
+            help="Mark it private, or not. "
+            "Default: as before; a new folder is not private.",
+        ),
+    ] = None,
+    exclude: Annotated[
+        list[str] | None,
+        typer.Option(
+            help="A folder or file inside it to leave out, relative to it; "
+            "repeat for more. Replaces what it left out before.",
+        ),
+    ] = None,
+) -> None:
+    """Add a folder for SYNTHIA to read, or change how it reads one added before.
+
+    A folder holding .obsidian is read as an Obsidian vault. The daemon
+    reads it; it is started if it is not running. Exits 2 when the folder
+    cannot be added.
+    """
+    params: Params = {"root": str(path.resolve()), "private": private}
+    if exclude is not None:
+        params["excludes"] = exclude
+    source = source_from(_ask_knowledge("knowledge_add", params))
+    typer.echo(_source_line(source))
+    typer.echo(
+        "run `synthia knowledge index` to read it now; the daemon also reads it "
+        f"after {INDEX_IDLE_S / SECONDS_PER_MINUTE:g} minutes without a turn"
+    )
+
+
+@knowledge_app.command("remove")
+def knowledge_remove(
+    path: Annotated[Path, typer.Argument(help="The folder to stop reading.")],
+) -> None:
+    """Stop reading a folder, and forget everything read from it."""
+    root = path.resolve()
+    if removed_from(_ask_knowledge("knowledge_remove", {"root": str(root)})):
+        typer.echo(f"removed {visible(str(root))}")
+    else:
+        typer.echo(f"nothing to remove: {visible(str(root))} was not added")
+
+
+@knowledge_app.command("list")
+def knowledge_list() -> None:
+    """Show each folder SYNTHIA reads: name, kind, privacy, path, what it leaves out."""
+    sources = sources_from(_ask_knowledge("knowledge_sources", {}))
+    if not sources:
+        typer.echo("no folders added; add one with `synthia knowledge add <folder>`")
+    for source in sources:
+        typer.echo(_source_line(source))
+
+
+@knowledge_app.command("index")
+def knowledge_index() -> None:
+    """Read every folder now: new and changed files in, deleted ones out.
+
+    The daemon also does it on its own after ten minutes without a turn, at
+    most once an hour. Exits 2 when the pass failed.
+    """
+    try:
+        done = indexed_from(_ask_knowledge("knowledge_index", {}))
+    except KeyboardInterrupt:
+        typer.echo("stopped; what was read so far is kept")
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    if done.report is None:
+        typer.echo(f"error: {done.error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL)
+    typer.echo(_index_line(done.report))
+    if done.report.unavailable:
+        names = ", ".join(visible(name) for name in done.report.unavailable)
+        typer.echo(f"could not list {names}; what was read from it before is kept")
+
+
+@knowledge_app.command("search")
+def knowledge_search(
+    question: Annotated[str, typer.Argument(help="What to look for.")],
+    *,
+    limit: Annotated[
+        int,
+        typer.Option(min=1, max=MAX_SEARCH_LIMIT, help="How many passages."),
+    ] = SEARCH_LIMIT,
+    variant: Annotated[
+        str | None,
+        typer.Option(
+            help="How to rank: words, meaning, fused or fused:<word weight>. "
+            "Default: fused."
+        ),
+    ] = None,
+) -> None:
+    """Find the passages of the folders read that best answer a question.
+
+    Each shows where it is (name/path:start-end), its score and its first
+    lines. Private folders are searched too: this is your own terminal.
+    """
+    params: Params = {"query": question, "limit": limit, "variant": variant}
+    found = searched_from(_ask_knowledge("knowledge_search", params))
+    if not found.passages:
+        typer.echo("nothing found")
+    for number, passage in enumerate(found.passages):
+        if number:
+            typer.echo("")
+        for line in _passage_lines(passage):
+            typer.echo(line)
+
+
+def _ask_knowledge(method: str, params: Params) -> object:
+    """Make one request of the daemon, or exit 2 saying why it could not be made."""
+    settings = _settings()
+    try:
+        _require_a_model(settings)
+        result = asyncio.run(ask_daemon(settings.home, method, params))
+    except (ConfigError, DaemonError, RpcError) as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    return result
+
+
+def _source_line(source: KnownSource) -> str:
+    private = "private" if source.private else "not private"
+    line = f"{source.name} | {source.kind.value} | {private} | {source.root}"
+    if source.excludes:
+        line += f" | leaves out {', '.join(source.excludes)}"
+    return visible(line)
+
+
+def _index_line(report: IndexReport) -> str:
+    return (
+        f"files: {report.added} added, {report.changed} changed, "
+        f"{report.unchanged} unchanged, {report.removed} removed, "
+        f"{report.unreadable} unreadable, {report.held_back} held back, "
+        f"{report.passed_over} passed over | chunks: {report.chunks} written, "
+        f"{report.cut} cut, {report.embedded} embedded | {report.seconds:.1f} s"
+    )
+
+
+def _passage_lines(passage: FoundPassage) -> list[str]:
+    private = " (private)" if passage.private else ""
+    lines = [f"{visible(passage.citation)} | score {passage.score:.3f}{private}"]
+    body = passage.body.splitlines()
+    lines += [INDENT + visible(line) for line in body[:SHOWN_BODY_LINES]]
+    hidden = len(body) - SHOWN_BODY_LINES
+    if hidden > 0:
+        more = "line" if hidden == 1 else "lines"
+        lines.append(f"{INDENT}... {hidden} more {more}")
+    return lines
 
 
 @app.command()

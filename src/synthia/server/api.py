@@ -26,6 +26,24 @@ Methods, client to daemon:
   ``seconds``, ``scheduled``, ``stopped`` and ``error`` (null, or why the run
   failed). A daemon that learns no facts (no local model, or no embedding
   model) answers error ``-32003``.
+- ``knowledge_add`` {``root``: absolute, ``private``, ``excludes``} adds a folder as a
+  source, or changes the flags of one added before (``private`` and
+  ``excludes`` null keep them), and returns it: ``name``, ``root``, ``kind``,
+  ``private``, ``excludes``. ``knowledge_remove`` {``root``} removes one and
+  everything read from it, returning ``removed``; ``knowledge_sources`` {}
+  returns ``sources``, in the order added.
+- ``knowledge_index`` {} reads every source's folder now, without waiting
+  for turns, and returns the pass's counts (``added``, ``changed``,
+  ``unchanged``, ``removed``, ``unreadable``, ``held_back``, ``passed_over``,
+  ``chunks``, ``cut``, ``embedded``), ``unavailable`` sources, ``seconds``
+  and ``error`` null; a pass that failed returns ``error`` alone.
+- ``knowledge_search`` {``query``, ``limit``: 1 to 50, default 6,
+  ``variant``} returns ``passages`` best first, each with its ``citation``
+  (``source/path:start-end``), ``title``, ``header``, ``body``, ``score``
+  and ``private``, and ``withheld``. Private sources are searched: the
+  client is the person's own. A daemon with no embedding model has no
+  index and answers each of these with error ``-32004``; a folder knowledge
+  refuses is error ``-32005`` with the reason.
 - ``stop`` {} stops the daemon.
 
 Request, daemon to client: ``approve`` {``tool``, ``arguments``} returns true to
@@ -37,10 +55,10 @@ from __future__ import annotations
 import logging
 from contextlib import aclosing
 from dataclasses import asdict
-from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING, Annotated, Final
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError
 
 from synthia import __version__
 from synthia.agent.loop import ToolFinished
@@ -48,6 +66,8 @@ from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
 from synthia.gateway.errors import GatewayError
 from synthia.gateway.types import Reasoning
 from synthia.kernel.jsonrpc import ConnectionClosedError, Peer, RpcError
+from synthia.knowledge.retrieve import Variant, VariantError
+from synthia.knowledge.service import SEARCH_LIMIT, KnowledgeError
 from synthia.server.host import CURRENT_ROUTES
 from synthia.server.session import ImageError, TurnReport
 
@@ -57,9 +77,12 @@ if TYPE_CHECKING:
     from synthia.agent.tools import Tool
     from synthia.gateway.types import ChatChunk
     from synthia.kernel.jsonrpc import Method, Params
+    from synthia.knowledge.model import Source
+    from synthia.knowledge.retrieve import Passage
     from synthia.server.conversation import Reply
     from synthia.server.host import Host
     from synthia.server.session import PlanMark
+    from synthia.server.upkeep import Indexed
 
 INVALID_PARAMS: Final = -32602
 ANSWER_FAILED: Final = -32001
@@ -68,6 +91,13 @@ NO_LEARNING: Final = -32003
 NOT_LEARNING: Final = (
     "this daemon learns no facts: it needs a local model and an embedding model"
 )
+NO_KNOWLEDGE: Final = -32004
+NOT_INDEXING: Final = (
+    "no knowledge index: it needs an embedding model; "
+    "install one with `synthia models install`"
+)
+KNOWLEDGE_REFUSED: Final = -32005
+MAX_SEARCH_LIMIT: Final = 50
 APPROVE: Final = "approve"
 
 logger = logging.getLogger(__name__)
@@ -123,6 +153,43 @@ class WordsParams(_Params):
 
 class EmptyParams(_Params):
     """A method that takes nothing."""
+
+
+def _absolute(path: Path) -> Path:
+    """Return ``path`` if absolute; a relative one would start at the daemon's folder.
+
+    Raises:
+        ValueError: If ``path`` is relative.
+    """
+    if not path.is_absolute():
+        message = "must be an absolute path"
+        raise ValueError(message)
+    return path
+
+
+type AbsolutePath = Annotated[Path, AfterValidator(_absolute)]
+
+
+class SourceParams(_Params):
+    """A folder to add as a source; a flag left None keeps what the source has."""
+
+    root: AbsolutePath
+    private: bool | None = None
+    excludes: tuple[str, ...] | None = None
+
+
+class RootParams(_Params):
+    """The folder of a source."""
+
+    root: AbsolutePath
+
+
+class SearchParams(_Params):
+    """A question, how many passages to return, and the ranking by name."""
+
+    query: str = Field(min_length=1)
+    limit: int = Field(default=SEARCH_LIMIT, ge=1, le=MAX_SEARCH_LIMIT)
+    variant: str | None = None
 
 
 def checked[P: _Params](kind: type[P], params: Params) -> P:
@@ -187,6 +254,47 @@ def report_of(report: TurnReport) -> dict[str, object]:
     return fields
 
 
+def source_of(source: Source) -> dict[str, object]:
+    """Return a knowledge source as a client shows it."""
+    return {
+        "name": source.name,
+        "root": str(source.root),
+        "kind": source.kind.value,
+        "private": source.private,
+        "excludes": [exclude.as_posix() for exclude in source.excludes],
+    }
+
+
+def indexed_of(done: Indexed) -> dict[str, object]:
+    """Return an asked pass of the knowledge index as its result."""
+    fields: dict[str, object] = {} if done.report is None else asdict(done.report)
+    fields["error"] = done.error
+    return fields
+
+
+def passage_of(passage: Passage) -> dict[str, object]:
+    """Return a passage found in knowledge as a client shows it."""
+    return {
+        "citation": passage.citation(),
+        "title": passage.document.title,
+        "header": passage.chunk.header,
+        "body": passage.chunk.body,
+        "score": passage.score,
+        "private": passage.private,
+    }
+
+
+def _needed[T](held: T | None) -> T:
+    """Return ``held``, the daemon's knowledge or its re-indexing.
+
+    Raises:
+        RpcError: ``-32004`` if the daemon has none.
+    """
+    if held is None:
+        raise RpcError(NO_KNOWLEDGE, NOT_INDEXING)
+    return held
+
+
 class Served:
     """One client's conversation, served through ``peer``.
 
@@ -207,6 +315,9 @@ class Served:
         self._warnings = host.warnings
         self._local_state = host.local_state
         self._learning = host.learning
+        self._knowledge = host.knowledge
+        self._reindexing = host.reindexing
+        self._activity = host.activity
 
     async def close(self) -> None:
         """Stop serving: running turns are cancelled, the conversation closed."""
@@ -233,6 +344,11 @@ class Served:
             "resume": self._resume,
             "status": self._status,
             "consolidate": self._consolidate,
+            "knowledge_add": self._knowledge_add,
+            "knowledge_remove": self._knowledge_remove,
+            "knowledge_sources": self._knowledge_sources,
+            "knowledge_index": self._knowledge_index,
+            "knowledge_search": self._knowledge_search,
             "stop": self._stop,
         }
 
@@ -311,6 +427,49 @@ class Served:
             raise RpcError(NO_LEARNING, NOT_LEARNING)
         return asdict(await self._learning.consolidate())
 
+    async def _knowledge_add(self, params: Params) -> object:
+        asked = checked(SourceParams, params)
+        knowledge = _needed(self._knowledge)
+        excludes = (
+            None
+            if asked.excludes is None
+            else [PurePosixPath(exclude) for exclude in asked.excludes]
+        )
+        try:
+            source = await knowledge.add(
+                asked.root, private=asked.private, excludes=excludes
+            )
+        except KnowledgeError as error:
+            raise RpcError(KNOWLEDGE_REFUSED, str(error)) from None
+        return source_of(source)
+
+    async def _knowledge_remove(self, params: Params) -> object:
+        root = checked(RootParams, params).root
+        return {"removed": await _needed(self._knowledge).remove(root)}
+
+    async def _knowledge_sources(self, params: Params) -> object:
+        checked(EmptyParams, params)
+        sources = await _needed(self._knowledge).sources()
+        return {"sources": [source_of(source) for source in sources]}
+
+    async def _knowledge_index(self, params: Params) -> object:
+        checked(EmptyParams, params)
+        return indexed_of(await _needed(self._reindexing).index(scheduled=False))
+
+    async def _knowledge_search(self, params: Params) -> object:
+        asked = checked(SearchParams, params)
+        try:
+            variant = None if asked.variant is None else Variant.parse(asked.variant)
+        except VariantError as error:
+            raise RpcError(INVALID_PARAMS, f"variant: {error}") from None
+        found = await _needed(self._knowledge).search(
+            asked.query, limit=asked.limit, variant=variant, private=True
+        )
+        return {
+            "passages": [passage_of(passage) for passage in found.passages],
+            "withheld": found.withheld,
+        }
+
     async def _stop(self, params: Params) -> object:
         checked(EmptyParams, params)
         self._on_stop()
@@ -318,6 +477,10 @@ class Served:
 
     async def _turn(self, params: Params) -> object:
         asked = checked(TurnParams, params)
+        with self._activity.turn():
+            return await self._answer(asked)
+
+    async def _answer(self, asked: TurnParams) -> object:
         # This handler runs in its own task, so the setting is this turn's alone.
         CURRENT_ROUTES.set(self.conversation.session.routes)
         try:

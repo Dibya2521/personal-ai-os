@@ -346,6 +346,52 @@ async def test_remove_waits_for_a_running_pass(db: Path, root: Path) -> None:
     assert await shelf.knowledge.sources() == []
 
 
+async def test_write_waiting_is_true_only_while_a_write_waits_for_a_pass(
+    knowledge: Knowledge, root: Path
+) -> None:
+    await knowledge.add(root)
+    paused, release = asyncio.Event(), asyncio.Event()
+
+    async def pause() -> None:
+        paused.set()
+        await release.wait()
+
+    indexing = asyncio.create_task(knowledge.index(pause))
+    await asyncio.wait_for(paused.wait(), HANG_TIMEOUT_S)
+    before = knowledge.write_waiting
+    removal = asyncio.create_task(knowledge.remove(root))
+    await asyncio.sleep(0)
+    during = knowledge.write_waiting
+    release.set()
+    await asyncio.wait_for(asyncio.gather(indexing, removal), HANG_TIMEOUT_S)
+
+    assert (before, during, knowledge.write_waiting) == (False, True, False)
+
+
+async def test_a_write_given_up_while_waiting_no_longer_counts(
+    knowledge: Knowledge, root: Path
+) -> None:
+    await knowledge.add(root)
+    paused, release = asyncio.Event(), asyncio.Event()
+
+    async def pause() -> None:
+        paused.set()
+        await release.wait()
+
+    indexing = asyncio.create_task(knowledge.index(pause))
+    await asyncio.wait_for(paused.wait(), HANG_TIMEOUT_S)
+    removal = asyncio.create_task(knowledge.remove(root))
+    await asyncio.sleep(0)
+    removal.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await removal
+    gone = knowledge.write_waiting
+    release.set()
+    await asyncio.wait_for(indexing, HANG_TIMEOUT_S)
+
+    assert not gone
+
+
 class Gated(KnowledgeStore):
     """Holds the next write named :attr:`gate` in its thread until released."""
 

@@ -14,8 +14,17 @@ voice come later. Why it is built this way is in
 | `synthia serve` | Runs the daemon in the foreground (what `chat` starts in the background). Ctrl+C stops it. |
 | `synthia status` | Says whether the daemon runs: version, since when, process id, port, other conversations open, and the local model's state. |
 | `synthia stop` | Stops it: running answers are cancelled, the local model and the MCP servers stop, `daemon.json` is removed. Waits up to 30 s. |
-| `synthia trace` | Shows a conversation's trace, or the daemon's own (local model starts, ends and restarts, and consolidations of the facts it holds). |
+| `synthia trace` | Shows a conversation's trace, or the daemon's own (local model starts, ends and restarts, consolidations of the facts it holds, and passes of the knowledge index). |
 | `synthia memory consolidate` | Asks the running daemon to merge the facts it holds that the local model calls one, and prints how many pairs it asked about and merged. Exits 2 when no daemon runs, when it learns no facts, or when the run failed. |
+| `synthia knowledge add <folder>` | Adds a folder for SYNTHIA to read (a folder holding `.obsidian` is read as a vault), or changes how one added before is read. `--private` marks it private (search shows its passages as such), `--public` undoes it; each `--exclude <path>` leaves out a folder or file inside it, and replaces the earlier list. Nothing is read until the next pass. |
+| `synthia knowledge remove <folder>` | Stops reading a folder and forgets everything read from it. |
+| `synthia knowledge list` | Shows each folder read: its name, kind (`files` or `vault`), whether it is private, where it is, and what it leaves out. |
+| `synthia knowledge index` | Reads every folder now: new and changed files are read, deleted ones forgotten. Prints the counts in one line and names any folder that could not be listed (what was read from it before is kept). Exits 2 when the pass failed; Ctrl+C stops it and keeps what was read so far. |
+| `synthia knowledge search "<question>"` | Prints the passages that best answer it, each with where it is (`name/path:start-end`), its score, `(private)` when it comes from a private folder, and its first 8 lines, control characters shown escaped. `--limit` (1 to 50, default 6) and `--variant` (`words`, `meaning`, `fused`, `fused:<word weight>`) change what is found. |
+
+Each `synthia knowledge` command goes through the daemon, starting it if it
+is not running, so one process writes the index. Without an embedding model
+there is no index, and each exits 2 saying to run `synthia models install`.
 
 The local model's state is `ready` (answering), `starting` (loading, or
 waiting to be restarted), `stopped` (stopped, or given up after too many
@@ -30,6 +39,7 @@ All under `SYNTHIA_HOME`.
 | `daemon.json` | `port`, `pid`, `version`, `started`, `token`. Written after the port listens, readable only by its owner, removed on stop. |
 | `traces/*.jsonl` | One per conversation, created at its first turn, and one for the daemon, created at its first record. |
 | `memory.db` | Every finished turn of every conversation unless it is private, and the facts learned about the person (SQLite; [`memory.md`](memory.md)). |
+| `knowledge.db` | The folders added with `synthia knowledge add`, and every passage read from them with its vector (SQLite). Opened only when an embedding model is installed. |
 | `logs/synthia.log` | The daemon's log, shared with the CLI. |
 | `logs/llama-server.log` | The local model's server output. |
 
@@ -74,6 +84,11 @@ Messages are JSON-RPC 2.0, one per WebSocket text frame.
 | `budget`, `model`, `tools`, `reset` | `{}` | a reply |
 | `status` | `{}` | `sessions`, `local` (the local model's state) |
 | `consolidate` | `{}` | after the run: `asked`, `merged`, `seconds`, `scheduled`, `stopped`, `error` (null, or why it failed) |
+| `knowledge_add` | `root` (an absolute folder path), `private` (bool, or null to keep), `excludes` (paths inside the folder, or null to keep) | the source: `name`, `root`, `kind` (`files` or `vault`), `private`, `excludes` |
+| `knowledge_remove` | `root` | `removed`: false when no source has that folder |
+| `knowledge_sources` | `{}` | `sources`, each as `knowledge_add` returns it, in the order added |
+| `knowledge_index` | `{}` | after the pass, which does not wait for turns: `added`, `changed`, `unchanged`, `removed`, `unreadable`, `held_back`, `passed_over`, `chunks`, `cut`, `embedded`, `unavailable` (sources whose folder could not be listed), `seconds`, and `error` null; or `error` alone, saying why the pass failed |
+| `knowledge_search` | `query`, `limit` (1 to 50, default 6), `variant` (null for the default) | `passages` best first, each `citation` (`name/path:start-end`), `title`, `header`, `body`, `score`, `private`; and `withheld`. Private folders are searched too: the client is the person's own terminal. |
 | `stop` | `{}` | `{}`, then the daemon stops |
 
 A reply is `{"notes": [...], "errors": [...]}`: lines to show.
@@ -103,6 +118,8 @@ To stop a turn, the client sends `notifications/cancelled` with the turn's
 | `-32001` | The answer failed; the message says why. |
 | `-32002` | An image could not be sent; the message names the file. |
 | `-32003` | `consolidate` on a daemon that learns no facts: it needs a local model and an embedding model. |
+| `-32004` | A `knowledge_` method on a daemon with no knowledge index: it needs an embedding model. |
+| `-32005` | A folder knowledge refuses: missing, not a folder, inside or holding another source, or an exclude outside it. The message says which. |
 
 ## An exchange
 
@@ -133,3 +150,13 @@ when it starts, learns facts from each remembered turn one at a time, and
 consolidates the facts it holds after 10 minutes without a turn, at most
 once an hour. All of it runs on this machine in the background, and no turn
 waits for it; [`memory.md`](memory.md) describes it.
+
+By the same rule, 10 minutes without a turn and at most once an hour after
+the last pass ended, it reads the folders added with `synthia knowledge add`
+again, so the index follows files that changed. That pass stops before its
+next file when a turn starts or another `synthia knowledge` command needs to
+change the index, so neither waits for it; what it read is kept, and the
+next 10 idle minutes go on from there. A pass asked for with
+`synthia knowledge index` runs through, since the person is waiting for it.
+Every pass, asked or not, stopped, failed or cancelled, is a record in the
+daemon's trace.

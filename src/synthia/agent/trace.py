@@ -4,7 +4,8 @@ A chat writes one file per session under ``<home>/traces``, named by the time
 it started, so ``synthia trace`` can show afterwards which tools ran, with what,
 what came back, and where each model step was sent. The daemon writes one
 too, for the services it supervises (when each started, ended and was
-restarted) and for each consolidation of the facts it holds. Texts are cut to
+restarted), for each consolidation of the facts it holds, and for each pass
+of the knowledge index over the person's folders. Texts are cut to
 :data:`MAX_TRACED_CHARS` with their full length kept: a trace shows what
 happened, it is not a copy of every file a tool read. The key never appears,
 because no step carries it.
@@ -197,6 +198,43 @@ class ConsolidationRan(_Record):
     error: Clip | None = None
 
 
+class IndexCounts(BaseModel):
+    """What one pass of the knowledge index did, as its report counts it.
+
+    ``unavailable`` names the sources whose folder could not be listed.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    added: int
+    changed: int
+    unchanged: int
+    removed: int
+    unreadable: int
+    held_back: int
+    passed_over: int
+    chunks: int
+    cut: int
+    embedded: int
+    unavailable: tuple[Mended, ...]
+    seconds: float
+
+
+class IndexRan(_Record):
+    """The knowledge index was brought in step with its folders; never in a turn.
+
+    ``scheduled`` passes come when the daemon is idle, the others when
+    asked. A pass that failed or was cancelled has no ``counts`` and an
+    ``error``; one ``stopped`` gave way to a turn or a write, and has neither.
+    """
+
+    kind: Literal["index"] = "index"
+    scheduled: bool
+    stopped: bool = False
+    counts: IndexCounts | None = None
+    error: Clip | None = None
+
+
 type Record = Annotated[
     TurnBegan
     | ModelAnswered
@@ -208,7 +246,8 @@ type Record = Annotated[
     | TurnEnded
     | TurnFailed
     | ServiceChanged
-    | ConsolidationRan,
+    | ConsolidationRan
+    | IndexRan,
     Field(discriminator="kind"),
 ]
 _RECORD: Final[TypeAdapter[Record]] = TypeAdapter(Record)
@@ -406,6 +445,26 @@ class Trace:
                 seconds=seconds,
                 scheduled=scheduled,
                 stopped=stopped,
+                error=None if error is None else Clip.of(error),
+            )
+        )
+
+    def index_pass(
+        self,
+        counts: IndexCounts | None,
+        *,
+        scheduled: bool,
+        stopped: bool = False,
+        error: str | None,
+    ) -> None:
+        """Record a pass of the knowledge index."""
+        self._write(
+            IndexRan(
+                turn=0,
+                at=self._now(),
+                scheduled=scheduled,
+                stopped=stopped,
+                counts=counts,
                 error=None if error is None else Clip.of(error),
             )
         )

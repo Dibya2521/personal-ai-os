@@ -5,7 +5,7 @@ tool calls it asked for with what came back. A planned turn shows its plan,
 then each plan step with its model steps, then the answer written from them.
 A call that began and has no end was still running when the turn stopped.
 The daemon's trace shows each start, end and restart of a supervised service,
-and each consolidation of the facts held.
+each consolidation of the facts held, and each pass of the knowledge index.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from rich.tree import Tree
 
 from synthia.agent.trace import (
     ConsolidationRan,
+    IndexRan,
     ModelAnswered,
     PlanAnswerStarted,
     PlanMade,
@@ -117,6 +118,29 @@ def _consolidation(record: ConsolidationRan, tz: tzinfo | None) -> str:
     return " | ".join(parts)
 
 
+def _index(record: IndexRan, tz: tzinfo | None) -> str:
+    at = record.at.astimezone(tz).strftime("%H:%M:%S")
+    why = "when idle" if record.scheduled else "when asked"
+    parts = [f"knowledge index pass at {at} {why}"]
+    counts = record.counts
+    if counts is not None:
+        parts += [
+            (
+                f"{counts.added} added, {counts.changed} changed, "
+                f"{counts.removed} removed, {counts.unchanged} unchanged"
+            ),
+            f"{counts.chunks} chunks, {counts.embedded} embedded",
+            f"{counts.seconds:.1f} s",
+        ]
+        if counts.unavailable:
+            parts.append(f"could not list {', '.join(counts.unavailable)}")
+    if record.stopped:
+        parts.append("gave way to a turn or a write; goes on when idle")
+    if record.error is not None:
+        parts.append(f"failed: {_preview(record.error.text)}")
+    return " | ".join(parts)
+
+
 def _call(record: ToolBegan) -> str:
     return f"tool {record.name} {_preview(record.arguments.text or '{}')}"
 
@@ -168,6 +192,8 @@ class _Branches:
                 self._root.add(Text(_service(record, self._tz)))
             case ConsolidationRan():
                 self._root.add(Text(_consolidation(record, self._tz)))
+            case IndexRan():
+                self._root.add(Text(_index(record, self._tz)))
             case _:
                 self._plan(record)
 
@@ -201,8 +227,8 @@ def build_tree(
 def summary(path: Path) -> str:
     """Return one line about the trace at ``path``: its name, turns and tool calls.
 
-    The daemon's trace also counts the restarts of the services it supervises
-    and the consolidations of the facts it holds.
+    The daemon's trace also counts the restarts of the services it supervises,
+    the consolidations of the facts it holds, and the passes of its index.
     """
     records, _ = read_trace(path)
     turns = sum(isinstance(r, TurnBegan) for r in records)
@@ -215,4 +241,7 @@ def summary(path: Path) -> str:
     consolidations = sum(isinstance(r, ConsolidationRan) for r in records)
     if consolidations:
         line += f" | consolidations {consolidations}"
+    passes = sum(isinstance(r, IndexRan) for r in records)
+    if passes:
+        line += f" | index passes {passes}"
     return line

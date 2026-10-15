@@ -8,16 +8,24 @@ local model. It stops the way the real one does, through its stop event.
 import asyncio
 import threading
 import time
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager, suppress
 
 import httpx
 
 from synthia.gateway.providers import OPENROUTER_FREE, RemoteProvider
 from synthia.kernel.config import Settings
-from synthia.server.daemon import LocalModels, run_daemon
+from synthia.retrieval.embed import TextEmbedder
+from synthia.server.daemon import EmbedderOpener, LocalModels, run_daemon
 from synthia.server.discovery import DAEMON_FILE, DaemonInfo, read_info
+from synthia.server.host import open_embedder
+from tests.retrieval import toy
 from tests.timing import HANG_TIMEOUT_S
+
+
+def toy_embedder(_settings: Settings, _warn: Callable[[str], None]) -> TextEmbedder:
+    """Open the toy embedding model, as a daemon opens the installed one."""
+    return toy.embedder(toy.Network())
 
 
 class _Running:
@@ -34,6 +42,7 @@ def private_daemon(
     *,
     local: LocalModels | None = None,
     remote: RemoteProvider = OPENROUTER_FREE,
+    embedder: EmbedderOpener = open_embedder,
 ) -> Generator[DaemonInfo]:
     """Yield a running daemon's file; stop the daemon when the block ends."""
     running = _Running()
@@ -42,7 +51,12 @@ def private_daemon(
         running.loop = asyncio.get_running_loop()
         running.stop = asyncio.Event()
         await run_daemon(
-            settings, local, transport=transport, remote=remote, stop=running.stop
+            settings,
+            local,
+            transport=transport,
+            remote=remote,
+            stop=running.stop,
+            embedder=embedder,
         )
 
     def run() -> None:

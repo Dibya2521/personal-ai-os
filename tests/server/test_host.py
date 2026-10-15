@@ -9,9 +9,11 @@ import pytest
 
 from synthia.agent.policy import nobody_approves
 from synthia.agent.tools import Toolbox
-from synthia.agent.trace import ConsolidationRan, Trace, read_trace
+from synthia.agent.trace import ConsolidationRan, IndexRan, Trace, read_trace
 from synthia.gateway.assemble import build_gateway
 from synthia.kernel.config import Settings
+from synthia.knowledge.index import IndexReport
+from synthia.knowledge.store import KNOWLEDGE_FILE
 from synthia.memory.facts import Consolidated
 from synthia.memory.hybrid import Recall
 from synthia.memory.store import MEMORY_FILE, MemoryStore
@@ -22,11 +24,14 @@ from synthia.server.host import (
     fill_in,
     in_background,
     open_embedder,
+    open_knowledge,
     open_learning,
     open_memory,
     publish_route,
     traced,
+    traced_index,
 )
+from synthia.server.upkeep import Indexed
 from tests.agent.scripted import Scripted, says
 from tests.memory.test_facts import Watched, found, until_learned
 from tests.memory.test_hybrid import remember
@@ -222,6 +227,52 @@ def test_a_consolidation_goes_to_the_trace_field_by_field(tmp_path: Path) -> Non
     assert (record.scheduled, record.stopped) == (True, True)
     assert record.error is not None
     assert record.error.text == "no"
+
+
+def test_an_index_pass_goes_to_the_trace_with_its_counts(tmp_path: Path) -> None:
+    trace = Trace(tmp_path / "d.jsonl")
+    report = IndexReport(added=2, chunks=5, unavailable=("share",), seconds=1.5)
+
+    traced_index(trace, Indexed(report, scheduled=True, error=None))
+    traced_index(trace, Indexed(None, scheduled=False, error="disk I/O error"))
+
+    (done, failed), _ = read_trace(trace.path)
+    assert isinstance(done, IndexRan)
+    assert isinstance(failed, IndexRan)
+    assert done.counts is not None
+    assert (done.scheduled, done.error) == (True, None)
+    assert (done.counts.added, done.counts.chunks, done.counts.seconds) == (2, 5, 1.5)
+    assert done.counts.unavailable == ("share",)
+    assert (failed.scheduled, failed.counts) == (False, None)
+    assert failed.error is not None
+    assert failed.error.text == "disk I/O error"
+
+
+async def test_knowledge_needs_an_embedding_model(tmp_path: Path) -> None:
+    warnings: list[str] = []
+
+    without = await open_knowledge(Settings(home=tmp_path), warnings.append, None)
+    held = await open_knowledge(
+        Settings(home=tmp_path), warnings.append, embedder(Network())
+    )
+
+    assert without is None
+    assert held is not None
+    assert await held.sources() == []
+    assert warnings == []
+
+
+async def test_knowledge_that_cannot_be_opened_is_warned_about(tmp_path: Path) -> None:
+    (tmp_path / KNOWLEDGE_FILE).write_bytes(b"not a database, " * 64)
+    warnings: list[str] = []
+
+    found = await open_knowledge(
+        Settings(home=tmp_path), warnings.append, embedder(Network())
+    )
+
+    assert found is None
+    (warning,) = warnings
+    assert warning.startswith("no knowledge index: ")
 
 
 async def test_facts_that_cannot_be_read_are_warned_about(tmp_path: Path) -> None:

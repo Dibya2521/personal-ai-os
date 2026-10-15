@@ -5,7 +5,9 @@ breaker and daily budget are counted once for all of them. Each conversation
 still learns where its own turns were routed: the gateway's routing
 decisions go to the record of the conversation whose turn is running, found
 through a context variable that each turn sets for itself. One memory is
-shared too, so a turn one conversation forgets is forgotten for all of them.
+shared too, so a turn one conversation forgets is forgotten for all of them,
+and one index of the person's folders, which the daemon reads again on its
+own only while no conversation's turn runs.
 """
 
 from __future__ import annotations
@@ -15,15 +17,17 @@ import logging
 import sqlite3
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 import httpx
 
-from synthia.agent.trace import Trace
+from synthia.agent.trace import IndexCounts, Trace
 from synthia.kernel.errors import ConfigError
+from synthia.knowledge.service import Knowledge
+from synthia.knowledge.store import KNOWLEDGE_FILE
 from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
 from synthia.memory.facts import FactKeeper, FactLearning
 from synthia.memory.hybrid import Recall
@@ -35,6 +39,7 @@ from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.retrieval.embed import EmbedError, TextEmbedder
 from synthia.server.conversation import Conversation
 from synthia.server.session import ChatSession, LastRoute
+from synthia.server.upkeep import Activity
 from synthia.tools import local_tools, outside_tools
 
 if TYPE_CHECKING:
@@ -55,6 +60,7 @@ if TYPE_CHECKING:
     from synthia.memory.facts import Consolidated
     from synthia.models.catalogue import Embedder
     from synthia.persona.library import PersonaLibrary
+    from synthia.server.upkeep import Indexed, Reindexing
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +147,26 @@ async def open_memory(
     return memory
 
 
+async def open_knowledge(
+    settings: Settings,
+    warn: Callable[[str], None],
+    embedder: TextEmbedder | None,
+) -> Knowledge | None:
+    """Return the index of the person's folders under ``SYNTHIA_HOME``, or None.
+
+    None without ``embedder``, which counts the chunker's tokens and embeds
+    every chunk; None after a ``warn`` if the index cannot be opened.
+    """
+    if embedder is None:
+        return None
+    try:
+        knowledge = await Knowledge.open(settings.home / KNOWLEDGE_FILE, embedder)
+    except (sqlite3.Error, OSError) as error:
+        warn(f"no knowledge index: {error}")
+        return None
+    return knowledge
+
+
 async def fill_in(memory: Recall) -> None:
     """Embed the turns remembered without a vector; log a failure, never raise."""
     try:
@@ -192,6 +218,18 @@ def traced(trace: Trace, done: Consolidated) -> None:
     )
 
 
+def traced_index(trace: Trace, done: Indexed) -> None:
+    """Record the pass of the knowledge index ``done`` in ``trace``."""
+    counts = (
+        None
+        if done.report is None
+        else IndexCounts.model_validate(done.report, from_attributes=True)
+    )
+    trace.index_pass(
+        counts, scheduled=done.scheduled, stopped=done.stopped, error=done.error
+    )
+
+
 @asynccontextmanager
 async def in_background(
     *work: Coroutine[object, object, None],
@@ -225,14 +263,19 @@ class Host:
     local_state: Callable[[], str] = no_local_model
     memory: Recall | None = None
     learning: FactLearning | None = None
+    knowledge: Knowledge | None = None
+    activity: Activity = field(default_factory=Activity)
+    reindexing: Reindexing | None = None
 
     def background(self) -> list[Coroutine[object, object, None]]:
-        """Return the work that runs beside serving: embedding and learning."""
+        """Return the work that runs beside serving: embedding, learning, indexing."""
         work: list[Coroutine[object, object, None]] = []
         if self.memory is not None:
             work.append(fill_in(self.memory))
         if self.learning is not None:
             work.append(self.learning.run())
+        if self.reindexing is not None:
+            work.append(self.reindexing.run())
         return work
 
     def conversation(self, approver: Approver) -> Conversation:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+from contextlib import asynccontextmanager
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Final, Self
 
@@ -23,7 +24,7 @@ from synthia.knowledge.retrieve import DEFAULT_VARIANT, Ranker
 from synthia.knowledge.store import KnowledgeStore
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import AsyncGenerator, Iterable, Sequence
     from pathlib import Path
 
     from synthia.knowledge.index import IndexReport, Pause
@@ -113,6 +114,7 @@ class Knowledge:
         self._vectors = vectors
         self._ranker = Ranker(store, vectors)
         self._writing = asyncio.Lock()
+        self._queued = 0
         self._steps = Unsplit()
 
     @classmethod
@@ -136,6 +138,23 @@ class Knowledge:
             chunking = Chunking.for_embedder(embedder.spec)
         return cls(store, Indexer(store, chunking, embedder, embedder), vectors)
 
+    @property
+    def write_waiting(self) -> bool:
+        """Whether an add, a remove or a pass waits for the one running."""
+        return self._queued > 0
+
+    @asynccontextmanager
+    async def _write(self) -> AsyncGenerator[None]:
+        self._queued += 1
+        try:
+            await self._writing.acquire()
+        finally:
+            self._queued -= 1
+        try:
+            yield
+        finally:
+            self._writing.release()
+
     async def add(
         self,
         root: Path,
@@ -158,7 +177,7 @@ class Knowledge:
                 climbs out with ``..`` or is the root itself.
         """
         wanted = None if excludes is None else [_exclude(e) for e in excludes]
-        async with self._writing:
+        async with self._write():
             resolved, kind = await asyncio.to_thread(_folder, root)
             sources = await self._store.sources()
             _check_apart(resolved, sources)
@@ -190,7 +209,7 @@ class Knowledge:
         the removal, it finishes it, vectors forgotten, before the caller sees
         the cancellation.
         """
-        async with self._writing:
+        async with self._write():
             sources = await self._store.sources()
             resolved = await asyncio.to_thread(root.resolve)
             for source in sources:
@@ -209,9 +228,10 @@ class Knowledge:
     async def index(self, pause: Pause | None = None) -> IndexReport:
         """Bring every source in step with its files, and embed what is new.
 
-        ``pause`` is awaited before each file and each embedding round.
+        ``pause`` is awaited before each file and each embedding round; what
+        it raises ends the pass there, keeping what was written.
         """
-        async with self._writing:
+        async with self._write():
             return await self._indexer.run(
                 pause=pause,
                 on_removed=self._vectors.forget,
