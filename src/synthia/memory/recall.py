@@ -7,6 +7,11 @@ own words need not match. Dates are days on this machine's clock, the same
 days the clock tool names, so "last week" is turned into dates by the
 model, which reads the clock first; nothing here parses words like
 "yesterday".
+
+A turn remembered from a chat that held private text is shown only to a chat
+that can stay on this machine, a local model that takes tools being there to
+answer it; that chat is confined before it reads the turn. Anywhere else the
+turn is left out, as if it were not found.
 """
 
 from __future__ import annotations
@@ -17,9 +22,10 @@ from typing import TYPE_CHECKING, Annotated, Final
 from pydantic import Field
 
 from synthia.agent.tools import Effect, FunctionTool, Reach
+from synthia.gateway.confinement import CONFINEMENT
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
     from datetime import tzinfo
 
     from synthia.memory.hybrid import Recall
@@ -30,11 +36,35 @@ MAX_FOUND: Final = 8
 # answer in a 32,768-token window.
 MAX_PREVIEW_CHARS: Final = 300
 NOTHING_FOUND: Final = "nothing found in earlier conversations"
+RECALLED_PRIVATE: Final = "an earlier private conversation was recalled"
 
 
 def local_zone() -> tzinfo | None:
     """Return this machine's time zone, the one its clock tool names days in."""
     return datetime.now().astimezone().tzinfo
+
+
+def cannot_stay_local() -> bool:
+    """Return False: without a router to ask, no chat is known to stay local."""
+    return False
+
+
+def surfaced(
+    turns: Sequence[Remembered], most: int, can_stay_local: Callable[[], bool]
+) -> list[Remembered]:
+    """Return up to ``most`` of ``turns`` that the running chat may read.
+
+    A confined turn is kept only in a chat's turn whose latch is in context
+    and when ``can_stay_local``; the latch is then closed if one is returned.
+    Otherwise confined turns are left out.
+    """
+    latch = CONFINEMENT.get()
+    if latch is None or not can_stay_local():
+        return [turn for turn in turns if not turn.confined][:most]
+    shown = list(turns[:most])
+    if any(turn.confined for turn in shown):
+        latch.confine(RECALLED_PRIVATE)
+    return shown
 
 
 def _preview(text: str) -> str:
@@ -58,9 +88,16 @@ def shown(turn: Remembered, zone: tzinfo | None) -> str:
 
 
 def memory_tool(
-    recall: Recall, zone: Callable[[], tzinfo | None] = local_zone
+    recall: Recall,
+    zone: Callable[[], tzinfo | None] = local_zone,
+    *,
+    can_stay_local: Callable[[], bool] = cannot_stay_local,
 ) -> FunctionTool:
-    """Return the tool that searches what ``recall`` remembers."""
+    """Return the tool that searches what ``recall`` remembers.
+
+    ``can_stay_local`` says whether a chat could go on with no remote model,
+    which decides whether turns of private chats are shown.
+    """
 
     async def search_memory(
         query: Annotated[
@@ -92,8 +129,9 @@ def memory_tool(
             else datetime.combine(until + timedelta(days=1), time(), local)
         )
         found = await recall.find(query, since=start, until=end, limit=MAX_FOUND)
-        if not found:
+        turns = surfaced([r.turn for r in found], MAX_FOUND, can_stay_local)
+        if not turns:
             return NOTHING_FOUND
-        return "\n".join(shown(r.turn, local) for r in found)
+        return "\n".join(shown(turn, local) for turn in turns)
 
     return FunctionTool.of(search_memory, reach=Reach.LOCAL, effect=Effect.READ)

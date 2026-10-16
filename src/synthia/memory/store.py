@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS turns (
     calls TEXT NOT NULL,
     persona TEXT NOT NULL,
     route TEXT NOT NULL,
-    model TEXT NOT NULL
+    model TEXT NOT NULL,
+    confined INTEGER NOT NULL DEFAULT 0 CHECK (confined IN (0, 1))
 )
 """,
     "CREATE INDEX IF NOT EXISTS turns_by_time ON turns(at)",
@@ -146,7 +147,13 @@ CREATE TABLE IF NOT EXISTS facts_apart (
 )
 """,
 )
-_COLUMNS: Final = "t.id, t.conversation, t.at, t.question, t.answer"
+# A file made before turns were marked confined gains the column; its turns
+# were all remembered before any chat could read private text, so 0 is true.
+_CONFINED_COLUMN: Final = (
+    "ALTER TABLE turns ADD COLUMN"
+    " confined INTEGER NOT NULL DEFAULT 0 CHECK (confined IN (0, 1))"
+)
+_COLUMNS: Final = "t.id, t.conversation, t.at, t.question, t.answer, t.confined"
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,7 +168,11 @@ class ToolUse:
 
 @dataclass(frozen=True, slots=True)
 class Turn:
-    """A finished turn, as it is remembered."""
+    """A finished turn, as it is remembered.
+
+    ``confined`` marks a turn of a chat that held private text: no fact is
+    learned from it, and only a chat that stays on this machine is shown it.
+    """
 
     question: str
     answer: str
@@ -170,11 +181,15 @@ class Turn:
     route: str
     model: str
     tools: tuple[ToolUse, ...] = ()
+    confined: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class Remembered:
-    """A remembered turn: where and when it was, what was said, and its tool calls."""
+    """A remembered turn: where and when it was, what was said, and its tool calls.
+
+    ``confined`` is as the turn was remembered (:class:`Turn`).
+    """
 
     id: int
     conversation: int
@@ -182,6 +197,7 @@ class Remembered:
     question: str
     answer: str
     tools: tuple[ToolUse, ...] = ()
+    confined: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,6 +277,7 @@ class MemoryStore:
             connection.execute("PRAGMA journal_mode=WAL")
             for statement in _SCHEMA:
                 connection.execute(statement)
+        self._migrate()
 
     async def begin_conversation(self, persona: str, at: datetime) -> int:
         """Record a conversation starting now and return its id."""
@@ -272,7 +289,8 @@ class MemoryStore:
         """Remember ``turn`` in ``conversation`` and return its id.
 
         With ``to_learn``, the turn also waits in :meth:`to_learn` until
-        :meth:`learned`, kept in the same transaction so a stop loses neither.
+        :meth:`learned`, kept in the same transaction so a stop loses neither;
+        a confined turn never waits there, so nothing is learned from it.
         """
         return await asyncio.to_thread(self._add, conversation, turn, to_learn=to_learn)
 
@@ -463,6 +481,14 @@ class MemoryStore:
                 raise
             connection.execute("COMMIT")
 
+    def _migrate(self) -> None:
+        # In one write transaction, so two processes opening an old file at
+        # once cannot both add the column.
+        with self._transaction() as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(turns)")}
+            if "confined" not in columns:
+                connection.execute(_CONFINED_COLUMN)
+
     def _begin(self, persona: str, at: datetime) -> int:
         with self._opened() as connection:
             cursor = connection.execute(
@@ -476,7 +502,7 @@ class MemoryStore:
         with self._transaction() as connection:
             cursor = connection.execute(
                 "INSERT INTO turns (conversation, at, question, answer, calls,"
-                " persona, route, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " persona, route, model, confined) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     conversation,
                     _stamp(turn.at),
@@ -486,6 +512,7 @@ class MemoryStore:
                     mended(turn.persona),
                     mended(turn.route),
                     mended(turn.model),
+                    int(turn.confined),
                 ),
             )
             turn_id = int(cursor.lastrowid or 0)
@@ -504,7 +531,7 @@ class MemoryStore:
                     for position, use in enumerate(turn.tools)
                 ],
             )
-            if to_learn:
+            if to_learn and not turn.confined:
                 connection.execute(
                     "INSERT INTO facts_pending (turn) VALUES (?)", (turn_id,)
                 )
@@ -633,10 +660,10 @@ class MemoryStore:
     @staticmethod
     def _remembered(
         connection: sqlite3.Connection,
-        rows: Iterable[tuple[int, int, str, str, str]],
+        rows: Iterable[tuple[int, int, str, str, str, int]],
     ) -> list[Remembered]:
         found: list[Remembered] = []
-        for turn_id, conversation, at, question, answer in rows:
+        for turn_id, conversation, at, question, answer, confined in rows:
             uses = connection.execute(
                 "SELECT name, arguments, result, ok FROM tool_calls"
                 " WHERE turn = ? ORDER BY position",
@@ -650,6 +677,7 @@ class MemoryStore:
                     question,
                     answer,
                     tuple(ToolUse(n, a, r, bool(ok)) for n, a, r, ok in uses),
+                    confined=bool(confined),
                 )
             )
         return found

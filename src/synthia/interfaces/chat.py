@@ -19,6 +19,7 @@ from rich.text import Text
 
 from synthia.agent.loop import ToolFinished
 from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
+from synthia.gateway.confinement import confined
 from synthia.gateway.errors import GatewayError
 from synthia.interfaces.commands import (
     HELP,
@@ -69,6 +70,12 @@ MORE: Final = "...> "
 CONTINUES: Final = "\\"
 YES: Final = frozenset({"y", "yes"})
 MAX_SHOWN: Final = 80
+HOLDS_PRIVATE: Final = (
+    "this chat holds private text, and this call may carry some of it"
+)
+STAYS_LOCAL: Final = (
+    "this chat read private text, so it stays on this machine until /reset"
+)
 
 type ReadLine = Callable[[str], str]
 
@@ -110,17 +117,20 @@ def describe_mark(mark: PlanMark) -> str:
             return "answer:"
 
 
-def approval_question(name: str, arguments: str) -> str:
+def approval_question(name: str, arguments: str, *, confined: bool = False) -> str:
     """Return the question asked before running ``name`` with ``arguments``.
 
     Arguments too long for one line are shown whole, each string value on its
     own lines, so nothing is approved unseen. Characters a terminal would act
-    on are shown escaped, so they cannot hide or rewrite what is shown.
+    on are shown escaped, so they cannot hide or rewrite what is shown. In a
+    ``confined`` chat a line first says it holds private text, which the
+    arguments may carry.
     """
+    warning = f"{HOLDS_PRIVATE}\n" if confined else ""
     shown = visible(arguments or "{}")
     if len(shown) <= MAX_SHOWN:
-        return f"run {name} {shown}? [y/N] "
-    return f"run {name} with:\n{_whole(arguments)}\n[y/N] "
+        return f"{warning}run {name} {shown}? [y/N] "
+    return f"{warning}run {name} with:\n{_whole(arguments)}\n[y/N] "
 
 
 def visible(text: str) -> str:
@@ -153,9 +163,9 @@ def terminal_answer(read: ReadLine) -> Answer:
     same time are asked about one after another.
     """
 
-    async def answer(tool: str, arguments: str) -> bool:
+    async def answer(tool: str, arguments: str, *, confined: bool) -> bool:
         try:
-            said = read(approval_question(tool, arguments))
+            said = read(approval_question(tool, arguments, confined=confined))
         except EOFError:
             return False
         return said.strip().lower() in YES
@@ -168,7 +178,8 @@ def terminal_approver(read: ReadLine) -> Approver:
     answer = terminal_answer(read)
 
     async def approve(tool: Tool, arguments: str) -> bool:
-        return await answer(tool.spec.name, arguments)
+        # Asked during the turn, so the running chat's latch is in context.
+        return await answer(tool.spec.name, arguments, confined=confined())
 
     return approve
 
@@ -318,6 +329,7 @@ class ChatApp[T: Talk]:
         self.conversation = conversation
         self.console = console
         self._clock = clock
+        self._told_local = False
 
     def greet(self) -> None:
         """Print who is listening and how to get help."""
@@ -382,6 +394,7 @@ class ChatApp[T: Talk]:
                 reply = await conversation.tools()
             case _:
                 reply = await conversation.reset()
+                self._told_local = False
         return reply
 
     async def _memory_reply(
@@ -432,10 +445,14 @@ class ChatApp[T: Talk]:
             self._error(f"no answer: {error}")
             return
         shown.end_line()
-        if report is not None:
-            self.console.print(describe(report), style="dim", markup=False)
-        elif not shown.said:
-            self._note("no answer came back")
+        if report is None:
+            if not shown.said:
+                self._note("no answer came back")
+            return
+        self.console.print(describe(report), style="dim", markup=False)
+        if report.confined and not self._told_local:
+            self._told_local = True
+            self._note(STAYS_LOCAL)
 
     def _note(self, text: str) -> None:
         self.console.print(text, style="cyan", markup=False, highlight=False)

@@ -8,6 +8,14 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- A chat that has read private text stays on this machine until `/reset`:
+  every later request of it, the rest of the same turn included, goes to the
+  local model with the route reason `chat holds private text`, and
+  `/remote on` says why it stays off. Its turns are remembered marked, are
+  never learned from, and reach another chat's reminder, `search_memory` or
+  `--resume` only where that chat can stay local too, confining it first.
+  `synthia chat` says once when a chat becomes confined, and puts a line
+  saying the chat holds private text before each tool call it asks about.
 - `/plan <task>` in `synthia chat`: SYNTHIA plans the task as steps, does each
   step with its tools, re-plans once if a step does not finish, then answers
   from the results. The chat shows the plan, each step as it begins and

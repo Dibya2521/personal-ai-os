@@ -2,9 +2,10 @@
 
 Local comes first: a request goes to the remote model only when it asks for
 it with ``use_remote``, so SYNTHIA keeps working, and keeps conversations on
-the machine, whatever happens to the remote service. A request that may not
-leave the machine is never sent out, even when no local model can serve it:
-it fails with the reason instead.
+the machine, whatever happens to the remote service. A request made while its
+chat holds private text (:mod:`synthia.gateway.confinement`) goes local
+whatever it asks. A request that may not leave the machine is never sent out,
+even when no local model can serve it: it fails with the reason instead.
 
 A request that asks for the remote model gets it first, because the free
 remote models are far stronger than a small local one. It goes local instead
@@ -41,6 +42,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from synthia.gateway.circuit import CircuitBreakerModel, CircuitState
+from synthia.gateway.confinement import confined
 from synthia.gateway.errors import (
     GatewayError,
     LocalUnavailableError,
@@ -70,6 +72,7 @@ DEFAULT_MAX_WAIT_S = 5.0
 # tools the local model cannot take) does not grow when the cap does.
 DEFAULT_RESERVE = 10
 ROUTER_ID = "auto"
+HOLDS_PRIVATE_TEXT = "this chat holds private text, so it cannot leave this machine"
 
 
 class Route(StrEnum):
@@ -83,6 +86,7 @@ class RouteReason(StrEnum):
     """Why a request was sent where it was."""
 
     LOCAL_FIRST = "local first"
+    CONFINED = "chat holds private text"
     REMOTE_ASKED = "remote asked for"
     BACKGROUND = "background job"
     CAPABILITY = "remote cannot serve this request"
@@ -205,6 +209,14 @@ class Router:
         return self._local is not None
 
     @property
+    def can_stay_local(self) -> bool:
+        """Return whether a chat confined to this machine can still use its tools.
+
+        True when a local model that takes tools stands behind the router.
+        """
+        return self._local is not None and self._local.info.tools
+
+    @property
     def info(self) -> ModelInfo:
         """Return what a request sent here may use: the union of both models."""
         remote = None if self._remote is None else self._remote.model
@@ -270,6 +282,9 @@ class Router:
     async def _choose(
         self, request: ChatRequest, *, background: bool
     ) -> tuple[Route, RouteReason, ChatModel]:
+        if confined():
+            local = self._local_only(request, private=True)
+            return Route.LOCAL, RouteReason.CONFINED, local
         if not request.use_remote:
             return Route.LOCAL, RouteReason.LOCAL_FIRST, self._local_only(request)
         remote = self._remote
@@ -287,21 +302,26 @@ class Router:
             return Route.LOCAL, reason, local
         return Route.REMOTE, RouteReason.NO_LOCAL, remote.model
 
-    def _local_only(self, request: ChatRequest) -> ChatModel:
+    def _local_only(self, request: ChatRequest, *, private: bool = False) -> ChatModel:
         # Readiness is not checked: a starting local model is waited for,
         # since sending the request out instead is not allowed.
         local = self._local
         if local is None:
+            install = "install one with `synthia models install`"
             message = (
-                "no local model is installed: install one with "
-                "`synthia models install`, or ask for the remote model"
+                f"{HOLDS_PRIVATE_TEXT}, and no local model is installed: {install}"
+                if private
+                else f"no local model is installed: {install}, "
+                "or ask for the remote model"
             )
             raise LocalUnavailableError(message)
         if not can_serve(local.info, request):
             needs = "images" if request.has_images else "tools"
             message = (
-                f"the local model cannot take {needs}: ask for the remote model "
-                "to send this request off the machine"
+                f"{HOLDS_PRIVATE_TEXT}, and the local model cannot take {needs}"
+                if private
+                else f"the local model cannot take {needs}: ask for the remote "
+                "model to send this request off the machine"
             )
             raise LocalUnavailableError(message)
         return local

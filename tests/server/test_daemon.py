@@ -36,6 +36,7 @@ from synthia.server.daemon import run_daemon, serve
 from synthia.server.discovery import DAEMON_FILE, DaemonInfo, read_info
 from synthia.server.host import Host, open_learning, publish_route
 from tests.agent.scripted import Scripted, calls, says
+from tests.gateway.test_confinement import private_reader
 from tests.interfaces.test_chat import KEY
 from tests.memory.test_facts import SAME, held_facts
 from tests.retrieval.toy import Network, embedder
@@ -221,11 +222,35 @@ async def test_a_call_that_needs_a_yes_asks_the_client_that_asked_the_turn(
 
     assert ran == ["yes"]
     assert asked == [
-        {"tool": "edit", "arguments": '{"text": "yes"}'},
-        {"tool": "edit", "arguments": '{"text": "no"}'},
+        {"tool": "edit", "arguments": '{"text": "yes"}', "confined": False},
+        {"tool": "edit", "arguments": '{"text": "no"}', "confined": False},
     ]
     results = [p["result"] for name, p in talk.notes if name == "tool"]
     assert results == ["edited yes", "running edit was not approved"]
+
+
+async def test_a_call_asked_about_in_a_chat_holding_private_text_says_so(
+    tmp_path: Path,
+) -> None:
+    asked: list[Params] = []
+
+    async def approve(params: Params) -> object:
+        asked.append(params)
+        return True
+
+    model = Local(
+        calls(("read_note", "{}")), calls(("edit", '{"text": "x"}')), says("done")
+    )
+    tools = Toolbox([private_reader(), edit_tool([])])
+    async with (
+        daemon(tmp_path, model, tools) as info,
+        client(info, {"approve": approve}) as talk,
+    ):
+        report = await talk.call("turn", {"text": "read my note, then edit"})
+
+    assert asked == [{"tool": "edit", "arguments": '{"text": "x"}', "confined": True}]
+    assert isinstance(report, dict)
+    assert (report["route"], report["confined"]) == ("local", True)
 
 
 async def test_a_client_that_goes_away_mid_question_never_gets_the_call_run(

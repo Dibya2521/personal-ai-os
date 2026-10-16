@@ -62,7 +62,18 @@ ask goes to the local model:
 
 The permission is on the request rather than on the router, so every caller,
 the chat today and agents and voice later, inherits it with no code of its
-own. In the chat, `/remote on` and `/remote off` switch it for the session, and
+own.
+
+One rule comes before the permission. A chat that has read private text
+stays on this machine until `/reset`, and every request it makes from then
+on, the later steps of the same turn included, goes to the local model with
+the reason `chat holds private text` (`RouteReason.CONFINED`), whatever
+`use_remote` says. The chat puts its latch (`synthia/gateway/confinement.py`)
+in context for each turn, whatever reads private text closes it, and the
+router reads it for every request: the router is the one place every request
+of a turn passes, while the agent copies the first request's `use_remote` into
+each later step. With no local model that can serve the request, it fails
+saying the chat holds private text, never with "ask for the remote model". In the chat, `/remote on` and `/remote off` switch it for the session, and
 `synthia chat --remote` starts with it on. The chat asks OpenRouter for the
 key's daily cap only after the first `/remote on`, since that request also
 sends the key.

@@ -157,6 +157,27 @@ async def test_closing_stops_a_summary_still_being_written() -> None:
     assert session.summary == ""
 
 
+async def test_a_summary_still_being_written_at_reset_never_lands() -> None:
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def held(previous: str, messages: Sequence[Message]) -> str:
+        del previous, messages
+        started.set()
+        await finish.wait()
+        return "what was said before the reset"
+
+    session = chat(Model(window=6000), summarizer=held)
+    for n in range(12):
+        await say(session, f"question {n} {PADDING}")
+    await asyncio.wait_for(started.wait(), 5)
+
+    session.reset()
+    finish.set()
+    await say(session, "the next question")
+
+    assert session.summary == ""
+
+
 async def test_the_rate_is_learned_from_the_first_answer_of_a_turn() -> None:
     session = chat(
         Model(window=6000, usage=Usage(prompt_tokens=200, completion_tokens=1))

@@ -11,8 +11,10 @@ Methods, client to daemon:
   how many ``sessions`` the daemon holds, and the ``warnings`` it had at start
   (an MCP server that did not start, a broken ``mcp.toml``).
 - ``turn`` {``text``, ``plan``, ``images``: paths} returns the turn's report,
-  after notifications ``chunk``, ``tool`` and ``plan``. An answer that failed
-  is error ``-32001`` with the reason, an image that cannot be sent ``-32002``.
+  after notifications ``chunk``, ``tool`` and ``plan``; its ``confined`` says
+  the conversation holds private text, so it stays on this machine until
+  ``reset``. An answer that failed is error ``-32001`` with the reason, an
+  image that cannot be sent ``-32002``.
 - ``think`` {``level``}, ``remote`` {``on``}, ``private`` {``on``}, ``persona``
   {``key``}, ``adjust`` {``values``}, ``budget``, ``model``, ``tools``,
   ``reset``, ``forget``, ``facts``, ``forget_fact`` {``fact``: its number},
@@ -46,8 +48,10 @@ Methods, client to daemon:
   refuses is error ``-32005`` with the reason.
 - ``stop`` {} stops the daemon.
 
-Request, daemon to client: ``approve`` {``tool``, ``arguments``} returns true to
-run the call. A client that is gone, or answers anything but true, is a no.
+Request, daemon to client: ``approve`` {``tool``, ``arguments``, ``confined``}
+returns true to run the call; ``confined`` says the conversation holds private
+text, which the call's arguments may carry. A client that is gone, or answers
+anything but true, is a no.
 """
 
 from __future__ import annotations
@@ -510,10 +514,13 @@ class Served:
             self.peer.notify("chunk", chunk_of(step))
 
     async def _approve(self, tool: Tool, arguments: str) -> bool:
+        asked: Params = {
+            "tool": tool.spec.name,
+            "arguments": arguments,
+            "confined": self.conversation.session.confinement.confined,
+        }
         try:
-            answer = await self.peer.request(
-                APPROVE, {"tool": tool.spec.name, "arguments": arguments}
-            )
+            answer = await self.peer.request(APPROVE, asked)
         except (ConnectionClosedError, RpcError):
             return False
         return answer is True

@@ -19,7 +19,7 @@ import sys
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import httpx
 from websockets.asyncio.client import connect
@@ -66,8 +66,18 @@ SEE_LOG: Final = "see SYNTHIA_HOME/logs/synthia.log"
 STOPPED_AT_START: Final = f"the daemon stopped while starting; {SEE_LOG}"
 _DONE: Final = object()
 
-type Answer = Callable[[str, str], Awaitable[bool]]
-"""Asked with a tool's name and its arguments; True runs the call."""
+
+class Answer(Protocol):
+    """Asked whether to run a tool call; True runs it."""
+
+    def __call__(
+        self, tool: str, arguments: str, /, *, confined: bool
+    ) -> Awaitable[bool]:
+        """Answer for the call of ``tool`` with ``arguments``.
+
+        ``confined`` says the conversation holds private text.
+        """
+        ...
 
 
 class DaemonError(SynthiaError):
@@ -163,7 +173,8 @@ async def stopped(home: Path, info: DaemonInfo, timeout_s: float) -> None:
         raise DaemonError(message) from None
 
 
-async def _refuse(_tool: str, _arguments: str) -> bool:
+async def _refuse(_tool: str, _arguments: str, *, confined: bool) -> bool:
+    del confined
     return False
 
 
@@ -409,6 +420,7 @@ def report_from(result: object) -> TurnReport:
         completion_tokens=cast("int | None", fields.get("completion_tokens")),
         seconds=float(cast("float", fields["seconds"])),
         reasoning=None if level is None else Reasoning(str(level)),
+        confined=fields.get("confined") is True,
     )
 
 
@@ -588,7 +600,11 @@ class RemoteConversation:
             self._items.put_nowait(item)
 
     async def _approve(self, params: Params) -> object:
-        return await self._answer(str(params["tool"]), str(params["arguments"]))
+        return await self._answer(
+            str(params["tool"]),
+            str(params["arguments"]),
+            confined=params.get("confined") is True,
+        )
 
     async def run(self) -> None:
         """Carry messages both ways until the connection closes."""

@@ -31,7 +31,7 @@ logging mode, so a reader never waits for a writer. Times are stored in UTC.
 | Table | One row per | Holds |
 | --- | --- | --- |
 | `conversations` | chat | when it started and its persona; made at the chat's first remembered turn |
-| `turns` | finished turn | the question and the answer whole, when it was asked, the persona, the route and the model, and the tool calls' names and arguments as one text cut to 2,000 characters, which is all the full-text index sees of them |
+| `turns` | finished turn | the question and the answer whole, when it was asked, the persona, the route and the model, the tool calls' names and arguments as one text cut to 2,000 characters, which is all the full-text index sees of them, and `confined`, 1 when the chat held private text (see [Private text](#private-text)) |
 | `tool_calls` | tool call | its name, arguments and result, each cut to 2,000 characters, and whether it succeeded |
 | `turns_text`, `facts_text` | turn, fact | full-text indexes (SQLite FTS5, Porter stemming), kept in step by triggers |
 | `turn_vectors` | turn | the vector of the question's meaning, and the embedding model that made it |
@@ -146,7 +146,8 @@ the model what was wrong, when it does not match.
   none. A turn leaves it when it has been learned from, when the model's reply
   never matched the shape, or after three failures of another kind. While the
   local model is down, turns wait.
-- Private turns are never learned from.
+- Private turns are never learned from, and neither are turns of a chat that
+  held private text.
 
 ### Consolidation
 
@@ -197,7 +198,29 @@ which are kept cut short. Only the newest turns that fit the window come
 back, and older ones are not summarised, since all of them at once could be
 more than the model can read; the chat says how many stayed out, and
 `search_memory` still finds them. New turns are remembered as part of the
-resumed conversation.
+resumed conversation. A conversation that held private text is resumed only
+as the next section says.
+
+## Private text
+
+A chat that has read private text stays on this machine until `/reset`: the
+router sends every later request of it to the local model, whatever `/remote`
+says. Its turns are remembered with `confined` set, so the private text
+cannot leave through memory either:
+
+- No fact is learned from them, so none reaches the facts pinned in other
+  chats.
+- The reminder before a question and `search_memory` show one only to a chat
+  whose requests can all stay local, which needs a local model that takes
+  tools; that chat is then confined too before it reads the turn. Anywhere
+  else the turn is left out, as if it had not been found.
+- `synthia chat --resume` takes up such a conversation only with a local
+  model that takes tools, and the resumed chat is confined. Without one it
+  refuses and says why, and the chat starts a conversation of its own.
+
+A memory file made before turns could be marked gains the `confined` column
+when it is opened; its turns are 0, since no chat could read private text
+then.
 
 ## Commands
 

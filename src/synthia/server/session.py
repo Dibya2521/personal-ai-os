@@ -29,6 +29,7 @@ from synthia.agent.plan import PlanAnswerBegun, Planned, Planner, PlanStepBegun
 from synthia.agent.policy import Policy, nobody_approves
 from synthia.agent.tools import Toolbox
 from synthia.agent.trace import utc_now
+from synthia.gateway.confinement import CONFINEMENT, Confinement
 from synthia.gateway.errors import GatewayError, IncompleteResponseError
 from synthia.gateway.router import RouteDecided
 from synthia.gateway.types import (
@@ -125,6 +126,8 @@ class TurnReport:
 
     ``reasoning`` is the thinking level the model was sent, with ``auto``
     already decided when a router answered; ``None`` when none was sent.
+    ``confined`` is whether the chat holds private text once the turn is
+    over, so it stays on this machine until it starts again.
     """
 
     route: str
@@ -133,6 +136,7 @@ class TurnReport:
     completion_tokens: int | None
     seconds: float
     reasoning: Reasoning | None = None
+    confined: bool = False
 
 
 @dataclass(slots=True)
@@ -212,7 +216,22 @@ class ChatSession:
         self.routes = routes or LastRoute()
         self.reasoning = DEFAULT_REASONING
         self.use_remote = False
+        self.confinement = Confinement()
         self._pinned = ""
+        self._turns = 0
+
+    @property
+    def turning(self) -> bool:
+        """Return whether a turn of this chat is running."""
+        return self._turns > 0
+
+    @property
+    def may_leave(self) -> bool:
+        """Return whether this chat's requests may go to the remote model.
+
+        Only while remote is switched on and the chat holds no private text.
+        """
+        return self.use_remote and not self.confinement.confined
 
     def persona_names(self) -> tuple[str, ...]:
         """Return the keys of every persona the session can switch to."""
@@ -235,11 +254,18 @@ class ChatSession:
         self.persona = self.persona.adjusted(**values)
 
     def reset(self) -> None:
-        """Forget the conversation; what was remembered stays remembered."""
+        """Forget the conversation; what was remembered stays remembered.
+
+        The private text it held goes with it, so it may leave the machine again,
+        a summary still being written from it included.
+        """
+        if self._summarizing is not None:
+            self._summarizing.cancel()
         self.history.clear()
         self._starts.clear()
         self._leaving.clear()
         self.summary = ""
+        self.confinement.release()
         if self.memory is not None:
             self.memory.begin_again()
 
@@ -286,7 +312,7 @@ class ChatSession:
         return ChatRequest(
             (self._system(), *self.history, Message.user(text, *images)),
             reasoning=self.reasoning,
-            use_remote=self.use_remote,
+            use_remote=self.may_leave,
         )
 
     def make_room(self, text: str, *images: ImagePart) -> int:
@@ -326,10 +352,27 @@ class ChatSession:
         never into the history: after the turn the history holds ``text``
         alone, so old reminders do not fill the window, and a server that
         reuses the start of the last prompt has only that question to read again.
+        The chat's latch is put in context first, so anything in the turn that
+        reads private text, a reminder included, keeps the rest of it local.
+        :attr:`turning` is true until the turn ends, however it ends.
 
         Raises:
             GatewayError: If the answer failed; the history is unchanged.
         """
+        self._turns += 1
+        try:
+            async with aclosing(self._turn(text, *images, plan=plan)) as items:
+                async for item in items:
+                    yield item
+        finally:
+            self._turns -= 1
+
+    async def _turn(
+        self, text: str, *images: ImagePart, plan: bool
+    ) -> AsyncGenerator[TurnItem]:
+        # A generator's body runs in the context of the task iterating it, so
+        # this holds for the whole turn and every request made in it.
+        CONFINEMENT.set(self.confinement)
         asked = await self._prepared(text)
         self.make_room(asked, *images)
         request = self.request(asked, *images)
@@ -349,8 +392,8 @@ class ChatSession:
             return
         # The persona's system message is rebuilt every turn, so it is not kept.
         self.history = list(finished.messages[1:])
-        if asked != text:
-            self.history[before] = Message.user(text, *images)
+        # Kept as the person said it, without any reminder put before it.
+        self.history[before] = Message.user(text, *images)
         self._starts.append(before)
         report = self._report(request, taken.answers, self._clock() - started)
         if not plan:
@@ -365,6 +408,7 @@ class ChatSession:
                 report.route,
                 report.model,
                 tuple(taken.uses),
+                confined=report.confined,
             )
         )
         yield report
@@ -426,7 +470,7 @@ class ChatSession:
         if self._trace is None:
             return run
         self._trace.begin(
-            text, self.persona.name, self.reasoning, use_remote=self.use_remote
+            text, self.persona.name, self.reasoning, use_remote=self.may_leave
         )
         return self._trace.watch(run, lambda: self.routes.decision)
 
@@ -448,4 +492,5 @@ class ChatSession:
             ),
             seconds=seconds,
             reasoning=route.reasoning if route else request.reasoning,
+            confined=self.confinement.confined,
         )

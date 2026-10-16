@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
     from synthia.gateway.assemble import Gateway
     from synthia.gateway.types import Reasoning
+    from synthia.memory.remembering import Remembering, Resumed
     from synthia.server.session import ChatSession, TurnItem
 
 RULE_SHOWN: Final = {
@@ -38,6 +39,12 @@ NO_REMOTE: Final = (
 NO_MEMORY: Final = "nothing is remembered in this conversation"
 ALREADY_TALKING: Final = (
     "this conversation has turns already; resume from a new chat: synthia chat --resume"
+)
+TURN_RUNNING: Final = "a turn is still running: wait for its answer, or stop it first"
+RESUMED_PRIVATE: Final = "the resumed conversation read private text"
+PRIVATE_NEEDS_LOCAL: Final = (
+    "the last conversation read private text, so it can only go on with a "
+    "local model that takes tools; install one with `synthia models install`"
 )
 
 logger = logging.getLogger(__name__)
@@ -174,7 +181,11 @@ class Conversation:
         return note(f"thinking: {self.session.reasoning.value}")
 
     async def remote(self, *, on: bool | None) -> Reply:
-        """Allow or stop turns going to the remote model, or with None say which."""
+        """Allow or stop turns going to the remote model, or with None say which.
+
+        The person's choice is kept even in a chat that holds private text,
+        which stays on this machine, so the chat goes remote after /reset.
+        """
         if on and self.gateway.router.remote is None:
             return error(NO_REMOTE)
         if on is not None:
@@ -184,6 +195,12 @@ class Conversation:
             # the turns, so no answer waits for it.
             self.learning = asyncio.get_running_loop().create_task(
                 self.gateway.learn_daily_cap()
+            )
+        confinement = self.session.confinement
+        if self.session.use_remote and confinement.confined:
+            return note(
+                f"remote: stays off in this chat: {confinement.reason}; "
+                "/reset starts a chat that may leave this machine"
             )
         if self.session.use_remote:
             return note("remote: on, turns may leave this machine")
@@ -244,7 +261,13 @@ class Conversation:
         )
 
     async def reset(self) -> Reply:
-        """Forget the conversation so far."""
+        """Forget the conversation so far; refused while a turn of it runs.
+
+        A running turn would write its history back after the reset, and a
+        chat it had confined would be opened under it.
+        """
+        if self.session.turning:
+            return error(TURN_RUNNING)
         self.session.reset()
         return note("conversation forgotten")
 
@@ -260,7 +283,12 @@ class Conversation:
         return note("private: off, each finished turn is remembered")
 
     async def forget(self) -> Reply:
-        """Take the last turn out of the conversation and out of memory."""
+        """Take the last turn out of the conversation and out of memory.
+
+        Refused while a turn runs, which would put its history back.
+        """
+        if self.session.turning:
+            return error(TURN_RUNNING)
         if not self.session.drop_last():
             return note("no turn to forget")
         memory = self.session.memory
@@ -328,12 +356,14 @@ class Conversation:
         """Take up the newest remembered conversation, before any turn of this one.
 
         Its turns come back into the history and its last persona answers;
-        what is said from here on is remembered as part of it.
+        what is said from here on is remembered as part of it. A conversation
+        that held private text is taken up only where it can stay on this
+        machine, and this chat is then confined.
         """
         memory = self.session.memory
         if memory is None:
             return note(NO_MEMORY)
-        if self.session.history or self._resuming:
+        if self.session.history or self.session.turning or self._resuming:
             return error(ALREADY_TALKING)
         self._resuming = True
         try:
@@ -345,6 +375,14 @@ class Conversation:
             self._resuming = False
         if earlier is None:
             return note("no earlier conversation to resume")
+        return self._resumed(memory, earlier)
+
+    def _resumed(self, memory: Remembering, earlier: Resumed) -> Reply:
+        if any(turn.confined for turn in earlier.turns):
+            if not self.gateway.router.can_stay_local:
+                memory.begin_again()
+                return error(PRIVATE_NEEDS_LOCAL)
+            self.session.confinement.confine(RESUMED_PRIVATE)
         kept = self.session.resume(earlier.turns, earlier.persona)
         when = earlier.turns[-1].at.astimezone().strftime("%Y-%m-%d %H:%M")
         resumed = (

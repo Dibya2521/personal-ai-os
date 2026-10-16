@@ -60,7 +60,8 @@ class Process:
         return self.code
 
 
-async def refuse(_tool: str, _arguments: str) -> bool:
+async def refuse(_tool: str, _arguments: str, *, confined: bool) -> bool:
+    del confined
     return False
 
 

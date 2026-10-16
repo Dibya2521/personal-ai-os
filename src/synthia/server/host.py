@@ -280,6 +280,7 @@ class Host:
 
     def conversation(self, approver: Approver) -> Conversation:
         """Return a new conversation that asks ``approver`` before each call."""
+        router = self.gateway.router
         session = ChatSession(
             self.gateway.model,
             self.library,
@@ -289,12 +290,16 @@ class Host:
             approver=approver,
             trace=None if self.traces is None else Trace.start(self.traces),
             memory=(
-                None if self.memory is None else Remembering(self.memory, self.learning)
+                None
+                if self.memory is None
+                else Remembering(
+                    self.memory,
+                    self.learning,
+                    can_stay_local=lambda: router.can_stay_local,
+                )
             ),
             summarizer=(
-                partial(summarize, self.gateway.model)
-                if self.gateway.router.has_local
-                else None
+                partial(summarize, self.gateway.model) if router.has_local else None
             ),
         )
         return Conversation(session, self.gateway)

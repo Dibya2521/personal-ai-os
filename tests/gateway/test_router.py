@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator, Callable
-from contextlib import suppress
+from contextlib import aclosing, suppress
 from dataclasses import replace
 from datetime import UTC, datetime
 from itertools import product
@@ -7,8 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from synthia.agent.loop import Agent, Finished
+from synthia.agent.tools import Toolbox
 from synthia.gateway.budget import BudgetLedger
 from synthia.gateway.circuit import CircuitBreaker, CircuitOpenError
+from synthia.gateway.confinement import CONFINEMENT, Confinement
 from synthia.gateway.errors import (
     AuthError,
     GatewayError,
@@ -39,6 +42,8 @@ from synthia.gateway.types import (
     ToolSpec,
 )
 from synthia.kernel.bus import Event
+from tests.agent.scripted import Scripted, calls, says
+from tests.gateway.test_confinement import READ_NOTE, private_reader
 
 AUTO = Reasoning.AUTO
 PROVIDER = "openrouter"
@@ -384,6 +389,75 @@ async def test_info_is_what_either_model_can_do(setup: Setup) -> None:
     assert setup.router(None, Fake(BLIND)).info == ModelInfo(
         "auto", 8000, vision=False, tools=False
     )
+
+
+def closed_latch() -> Confinement:
+    latch = Confinement()
+    latch.confine(READ_NOTE)
+    CONFINEMENT.set(latch)
+    return latch
+
+
+async def test_a_confined_chat_goes_local_even_with_a_healthy_remote_asked(
+    setup: Setup,
+) -> None:
+    remote = Fake(REMOTE)
+    closed_latch()
+
+    answer = await collect(setup.router(remote, Fake(LOCAL)).stream(ASK))
+
+    assert answer.text == LOCAL.id
+    assert remote.calls == 0
+    assert setup.routes() == [(Route.LOCAL, RouteReason.CONFINED, LOCAL.id)]
+
+
+async def test_a_turn_that_reads_private_text_sends_its_next_steps_local(
+    setup: Setup,
+) -> None:
+    remote, local = Scripted(calls(("read_note", "{}"))), Scripted(says("done"))
+    router = Router(local, Remote(remote, setup.health), setup.publish)
+    CONFINEMENT.set(Confinement())
+    request = ChatRequest((Message.user("what does my note say?"),), use_remote=True)
+
+    async with aclosing(Agent(router, Toolbox([private_reader()])).run(request)) as run:
+        steps = [step async for step in run]
+
+    assert isinstance(steps[-1], Finished)
+    assert steps[-1].text == "done"
+    assert [r.use_remote for r in (*remote.requests, *local.requests)] == [True, True]
+    assert [(route, reason) for route, reason, _ in setup.routes()] == [
+        (Route.REMOTE, RouteReason.REMOTE_ASKED),
+        (Route.LOCAL, RouteReason.CONFINED),
+    ]
+
+
+async def test_a_confined_chat_with_no_local_model_fails_saying_why(
+    setup: Setup,
+) -> None:
+    remote = Fake(REMOTE)
+    closed_latch()
+    weather = ChatRequest((Message.user("weather?"),), tools=(WEATHER,))
+
+    with pytest.raises(LocalUnavailableError, match="holds private text") as missing:
+        await collect(setup.router(remote).stream(ASK))
+    with pytest.raises(LocalUnavailableError, match="holds private text") as blind:
+        await collect(setup.router(remote, Fake(BLIND)).stream(weather))
+
+    assert "install one with `synthia models install`" in str(missing.value)
+    assert "remote model" not in str(missing.value)
+    assert str(blind.value).endswith("and the local model cannot take tools")
+    assert remote.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("local", "stays"), [(None, False), (BLIND, False), (LOCAL, True)]
+)
+def test_a_chat_can_stay_local_only_with_a_local_model_that_takes_tools(
+    setup: Setup, local: ModelInfo | None, stays: bool
+) -> None:
+    router = setup.router(Fake(REMOTE), None if local is None else Fake(local))
+
+    assert router.can_stay_local is stays
 
 
 def test_a_negative_reserve_or_wait_is_refused(setup: Setup) -> None:

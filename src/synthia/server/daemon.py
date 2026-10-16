@@ -198,9 +198,16 @@ async def run_daemon(  # noqa: PLR0913 - every outside part is injected for test
             if knowledge is None
             else Reindexing(knowledge, activity, report=partial(traced_index, trace))
         )
-        tools, servers = await start_tools(
-            settings, warn, transport, () if memory is None else (memory_tool(memory),)
+        searching = (
+            ()
+            if memory is None
+            else (
+                memory_tool(
+                    memory, can_stay_local=lambda: gateway.router.can_stay_local
+                ),
+            )
         )
+        tools, servers = await start_tools(settings, warn, transport, searching)
         local_state = _started(local, trace)
         try:
             host = Host(

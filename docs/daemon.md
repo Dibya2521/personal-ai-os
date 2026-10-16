@@ -70,9 +70,9 @@ Messages are JSON-RPC 2.0, one per WebSocket text frame.
 | Method | Params | Result |
 | --- | --- | --- |
 | `hello` | `{}` | `version`, `persona`, `sessions` (conversations open, this one included), `warnings` from start-up |
-| `turn` | `text`, `plan` (bool), `images` (file paths) | the report: `route`, `model`, `prompt_tokens`, `completion_tokens`, `seconds`, `reasoning` |
+| `turn` | `text`, `plan` (bool), `images` (file paths) | the report: `route`, `model`, `prompt_tokens`, `completion_tokens`, `seconds`, `reasoning`, `confined` (true once the conversation holds private text: it stays on this machine until `reset`) |
 | `think` | `level`: `off`, `low`, `medium`, `high`, `auto`, or null to ask | a reply |
-| `remote` | `on`: true, false, or null to ask | a reply |
+| `remote` | `on`: true, false, or null to ask | a reply; in a conversation that holds private text, the choice is kept but the reply says remote stays off, with the reason, until `reset` |
 | `private` | `on`: true (stop remembering this conversation), false, or null to ask | a reply |
 | `forget` | `{}` | a reply; the last turn leaves the conversation and memory |
 | `facts` | `{}` | a reply listing the facts held about the person, by number |
@@ -102,9 +102,10 @@ A reply is `{"notes": [...], "errors": [...]}`: lines to show.
 | `plan` | `kind`: `planned` (`steps`, `revised`), `step` (`number`, `text`) or `answer` |
 
 A tool call that needs a yes is a request from the daemon to the client whose
-turn it is: `approve` with `tool` and `arguments`. Only a result of `true`
-runs the call; any other answer, an error, or a client that has gone away is
-a no.
+turn it is: `approve` with `tool`, `arguments` and `confined`, true when the
+conversation holds private text that the arguments may carry; `synthia chat`
+then says so on a line before the question. Only a result of `true` runs the
+call; any other answer, an error, or a client that has gone away is a no.
 
 To stop a turn, the client sends `notifications/cancelled` with the turn's
 `requestId`; the daemon cancels it, and the turn is dropped from the history.

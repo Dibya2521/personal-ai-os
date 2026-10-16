@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from synthia.memory.hybrid import CANDIDATES
-from synthia.memory.recall import local_zone, shown
+from synthia.memory.recall import cannot_stay_local, local_zone, shown, surfaced
 from synthia.memory.store import Asked
 
 if TYPE_CHECKING:
@@ -83,12 +83,23 @@ def _pinned(facts: Iterable[Fact], max_chars: int) -> _Pinned:
 class Remembering:
     """Keep one conversation's turns in ``recall``'s store unless it is private."""
 
-    def __init__(self, recall: Recall, learning: FactLearning | None = None) -> None:
-        """Remember into ``recall``; with ``learning``, learn facts from each turn."""
+    def __init__(
+        self,
+        recall: Recall,
+        learning: FactLearning | None = None,
+        *,
+        can_stay_local: Callable[[], bool] = cannot_stay_local,
+    ) -> None:
+        """Remember into ``recall``; with ``learning``, learn facts from each turn.
+
+        ``can_stay_local`` says whether a chat could go on with no remote
+        model; only then are turns of private chats put in its reminders.
+        """
         self.private = False
         self._recall = recall
         self._store = recall.store
         self._learning = learning
+        self._can_stay_local = can_stay_local
         self._conversation: int | None = None
         # The newest turn and when it was asked: its id alone can be given to
         # another chat's turn once forgotten there.
@@ -204,7 +215,8 @@ class Remembering:
         :data:`REMINDER_HEADER`; "" when none does, and always without an
         embedding model, since a word score alone says little about how
         close a turn is. A memory that cannot be read is logged and leaves
-        the question as it is.
+        the question as it is. A turn of a private chat is put here only as
+        :func:`~synthia.memory.recall.surfaced` allows, confining this chat.
         """
         if self._recall.embedder is None:
             return ""
@@ -215,11 +227,15 @@ class Remembering:
         except Exception:
             logger.exception("earlier conversations were not searched")
             return ""
-        others = [r.turn for r in found if r.turn.conversation != self._conversation]
+        others = surfaced(
+            [r.turn for r in found if r.turn.conversation != self._conversation],
+            REMINDED,
+            self._can_stay_local,
+        )
         if not others:
             return ""
         local = zone()
-        entries = "\n".join(shown(turn, local) for turn in others[:REMINDED])
+        entries = "\n".join(shown(turn, local) for turn in others)
         return f"{REMINDER_HEADER}\n{entries}\n\n"
 
     async def resume(self) -> Resumed | None:
