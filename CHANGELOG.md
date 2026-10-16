@@ -133,7 +133,12 @@ All notable changes are recorded here. The format follows
   minutes without a turn, at most once an hour, stopping before its next
   file when a turn starts or another command needs the index and going on
   at the next idle time; each pass goes to its trace. It needs an embedding
-  model (`synthia models install`).
+  model (`synthia models install`). Links between notes reach the note
+  Obsidian would open: `[[Note]]` by file name without case, `[[Folder/Note]]`
+  by its path from the folder's root, else by the path it ends with; when
+  names repeat, notes in the linking note's folder come first, then the
+  shorter path. Frontmatter `related` and `patterns` lists, Markdown links and
+  Python imports are links too.
 
 ### Changed
 

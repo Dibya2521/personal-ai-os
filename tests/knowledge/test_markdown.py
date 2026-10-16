@@ -85,7 +85,9 @@ def test_frontmatter_gives_the_title_and_related_links() -> None:
         (
             FoundLink(Link(LinkKind.RELATED, "A", "a"), None, 3),
             FoundLink(Link(LinkKind.RELATED, "b", "b"), None, 3),
-            FoundLink(Link(LinkKind.RELATED, "Folder/C.md", "c", "Part"), None, 6),
+            FoundLink(
+                Link(LinkKind.RELATED, "Folder/C.md", "folder/c", "Part"), None, 6
+            ),
             FoundLink(wiki("D", "d"), None, 7),
             FoundLink(wiki("E", "e"), None, 10),
         ),
@@ -192,19 +194,33 @@ def test_crlf_lines_and_a_byte_order_mark_read_as_plain_lines() -> None:
 
 
 def test_wikilinks_name_the_casefolded_stem() -> None:
-    assert links("[[a|b]] [[a#h]] ![[a]] [[Notes/Fusion.MD|f]] [[ ]]") == [
+    assert links("[[a|b]] [[a#h]] ![[a]] [[Fusion.MD|f]] [[ ]]") == [
         wiki("a", "a"),
         wiki("a", "a", "h"),
         wiki("a", "a"),
-        wiki("Notes/Fusion.MD", "fusion"),
+        wiki("Fusion.MD", "fusion"),
+    ]
+
+
+def test_a_wikilink_naming_folders_is_keyed_by_its_path_from_the_root() -> None:
+    assert links(
+        "[[Notes/Fusion.MD|f]] [[/Notes/./Fusion]] [[Files/Data.csv]] [[Notes/]]"
+    ) == [
+        wiki("Notes/Fusion.MD", "notes/fusion"),
+        wiki("/Notes/./Fusion", "notes/fusion"),
+        wiki("Files/Data.csv", "files/data.csv"),
+        wiki("Notes/", "notes"),
     ]
 
 
 def test_a_wikilink_to_another_note_suffix_or_an_attachment() -> None:
-    assert links("[[Note.markdown]] [[file.pdf]] ![[photo.png]] ![[Note]]") == [
+    assert links(
+        "[[Note.markdown]] [[file.pdf]] ![[photo.png]] ![[Note]] ![[Other.md]]"
+    ) == [
         wiki("Note.markdown", "note"),
         wiki("file.pdf", "file.pdf"),
         wiki("Note", "note"),
+        wiki("Other.md", "other"),
     ]
 
 

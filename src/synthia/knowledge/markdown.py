@@ -21,7 +21,7 @@ from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Final
 from urllib.parse import unquote
 
-from synthia.knowledge.model import Link, LinkKind
+from synthia.knowledge.model import NOTE_SUFFIXES, Link, LinkKind, note_key
 from synthia.knowledge.text import Block, FoundLink, Outline
 
 if TYPE_CHECKING:
@@ -35,7 +35,6 @@ LINK: Final = re.compile(
     r"|(?P<image>!)?\[[^\]\n]*\]\((?P<href><[^>\n]*>|(?:[^()\s]|\([^()\s]*\))+)"
     r"""(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'))?[ \t]*\)"""
 )
-NOTE_SUFFIXES: Final = (".md", ".markdown")
 CODE_SPAN: Final = re.compile(r"(?<!`)(?P<ticks>`+)(?!`).+?(?<!`)(?P=ticks)(?!`)")
 HEADING: Final = re.compile(
     r"^ {0,3}(?P<marks>#{1,6})(?:[ \t]+(?P<text>.*?))?(?:[ \t]+#+)?[ \t]*$"
@@ -217,15 +216,17 @@ def read_markdown(text: Text, path: PurePosixPath) -> Outline:
 def wikilink(match: re.Match[str], kind: LinkKind) -> Link | None:
     """Return the link a wikilink match names, or None when it names no note.
 
-    ``key`` is the casefolded last path component of the target, without a
-    ``.md`` or ``.markdown`` suffix, so "Notes/Fusion.md" and "fusion" match
-    the same note; ``anchor`` is the heading after ``#``; the alias is display
-    text only. An embedded attachment (``![[photo.png]]``) is not a link.
+    ``key`` is the target's :func:`note_key`: "Fusion.md" and "fusion" name
+    the note by its stem, "Notes/Fusion" by its path from the root, as
+    Obsidian writes a link when two notes share a name. ``anchor`` is the
+    heading after ``#``; the alias is display text only, since picking an
+    alias in Obsidian writes ``[[Note|Alias]]``. An embedded attachment
+    (``![[photo.png]]``) is not a link.
     """
     target = match["target"].strip()
+    key = note_key(target)
     name = PurePosixPath(target).name.casefold()
-    key = next((name.removesuffix(s) for s in NOTE_SUFFIXES if name.endswith(s)), name)
-    attachment = key == name and PurePosixPath(name).suffix != ""
+    attachment = not name.endswith(NOTE_SUFFIXES) and PurePosixPath(name).suffix != ""
     if not key or (match["embed"] and attachment):
         return None
     anchor = match["anchor"]

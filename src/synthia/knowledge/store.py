@@ -14,7 +14,8 @@ Three choices carry the module:
   held in memory can never be mistaken for a new chunk's.
 - Which document a link reaches is derived, never stored: the view
   ``resolved_links`` matches by kind each time it is read. Adding or renaming
-  a note re-resolves every link to it without a pass.
+  a note re-resolves every link to it without a pass, and the view is made
+  again on every open, so a file never keeps an older build's rule.
 - Cascades carry every removal: a source takes its documents, a document its
   chunks, a chunk its vector, its links and (by trigger) its words.
 """
@@ -40,6 +41,7 @@ from synthia.knowledge.model import (
     SourceId,
     SourceKind,
     module_name,
+    note_key,
 )
 from synthia.retrieval.fts import FTS_TOKENIZER, match_expression
 from synthia.retrieval.fusion import WordScores
@@ -50,8 +52,17 @@ if TYPE_CHECKING:
     from synthia.knowledge.model import Draft
 
 KNOWLEDGE_FILE: Final = Path("knowledge.db")
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
 BUSY_TIMEOUT_S: Final = 5.0
+
+_LINKER_FOLDER: Final = "rtrim(here.note_key, replace(here.note_key, '/', ''))"
+"""The linking document's folder with its trailing ``/``: rtrim strips every
+character but ``/`` from the end; "" at the root."""
+_UNDER_LINKER: Final = (
+    f"substr(t.note_key, 1, length({_LINKER_FOLDER})) = {_LINKER_FOLDER}"
+)
+_ENDS_WITH_KEY: Final = "substr(t.note_key, -length(l.key) - 1) = '/' || l.key"
+_NOTE_FIRST: Final = "ORDER BY t.kind != 'markdown', length(t.path), t.path LIMIT 1"
 
 _SCHEMA: Final = (
     """
@@ -78,10 +89,12 @@ CREATE TABLE IF NOT EXISTS documents (
     note TEXT NOT NULL DEFAULT '',
     stem_key TEXT NOT NULL,
     module_key TEXT,
+    note_key TEXT NOT NULL DEFAULT '',
     UNIQUE (source, path)
 )
 """,
     "CREATE INDEX IF NOT EXISTS documents_by_stem ON documents(source, stem_key)",
+    "CREATE INDEX IF NOT EXISTS documents_by_note ON documents(source, note_key)",
     """
 CREATE TABLE IF NOT EXISTS chunks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,22 +146,35 @@ CREATE TABLE IF NOT EXISTS links (
     PRIMARY KEY (chunk, position)
 )
 """,
-    # A note beats another file of its stem (as in Obsidian), an exact module a
-    # dotted suffix (substr: "_" is a LIKE wildcard); a document never links to
-    # itself. Subqueries, not a window: SQLite does not push a WHERE on chunk
-    # through a window function.
-    """
-CREATE VIEW IF NOT EXISTS resolved_links AS
+    "DROP VIEW IF EXISTS resolved_links",
+    # Wikilinks resolve in Obsidian 1.14's order (getLinkpathDest): the exact
+    # path, then a trailing path (bounded at "/", unlike its plain endsWith),
+    # the linking note's folder first, then the shorter path; a note beats
+    # another file. An exact module beats a dotted suffix (substr: "_" is a
+    # LIKE wildcard). A document never links to itself. Each preference is a
+    # coalesce arm because SQLite refuses an outer column in a correlated
+    # ORDER BY, and subqueries, not a window, keep a WHERE on chunk pushed in.
+    f"""
+CREATE VIEW resolved_links AS
 SELECT l.chunk, l.position, l.kind, l.anchor, d.id AS document, d.title
 FROM links l
 JOIN chunks c ON c.id = l.chunk
 JOIN documents here ON here.id = c.document
 JOIN documents d ON d.id = CASE
-    WHEN l.kind IN ('wikilink', 'related') THEN (
-        SELECT t.id FROM documents t
-        WHERE t.source = here.source AND t.stem_key = l.key
-        ORDER BY t.kind != 'markdown', length(t.path), t.path
-        LIMIT 1)
+    WHEN l.kind IN ('wikilink', 'related') AND instr(l.key, '/') THEN coalesce(
+        (SELECT t.id FROM documents t
+         WHERE t.source = here.source AND t.note_key = l.key {_NOTE_FIRST}),
+        (SELECT t.id FROM documents t
+         WHERE t.source = here.source AND {_ENDS_WITH_KEY} AND {_UNDER_LINKER}
+         {_NOTE_FIRST}),
+        (SELECT t.id FROM documents t
+         WHERE t.source = here.source AND {_ENDS_WITH_KEY} {_NOTE_FIRST}))
+    WHEN l.kind IN ('wikilink', 'related') THEN coalesce(
+        (SELECT t.id FROM documents t
+         WHERE t.source = here.source AND t.stem_key = l.key AND {_UNDER_LINKER}
+         {_NOTE_FIRST}),
+        (SELECT t.id FROM documents t
+         WHERE t.source = here.source AND t.stem_key = l.key {_NOTE_FIRST}))
     WHEN l.kind = 'markdown' THEN (
         SELECT t.id FROM documents t
         WHERE t.source = here.source AND t.path = l.key)
@@ -164,7 +190,7 @@ JOIN documents d ON d.id = CASE
         LIMIT 1))
 END
 WHERE d.id != here.id
-""",
+""",  # noqa: S608 - constant clauses
 )
 _CHUNK_COLUMNS: Final = (
     "c.id, c.document, c.ordinal, c.page, c.start_line, c.end_line,"
@@ -240,6 +266,32 @@ def _stem_key(path: PurePosixPath) -> str:
     return path.stem.casefold()
 
 
+def _keyed_by_note(connection: sqlite3.Connection) -> None:
+    """Bring a schema 1 file to 2 in place, so nothing is read or embedded again.
+
+    Schema 1 keyed a wikilink by its last path part alone, so "Archive/Plan"
+    reached whichever ``plan`` had the shortest path. Documents gain their
+    ``note_key`` and links naming a folder are keyed as the reader keys them
+    now; the schema then makes the view again, as on every open.
+    """
+    connection.execute(
+        "ALTER TABLE documents ADD COLUMN note_key TEXT NOT NULL DEFAULT ''"
+    )
+    documents = connection.execute("SELECT id, path FROM documents").fetchall()
+    connection.executemany(
+        "UPDATE documents SET note_key = ? WHERE id = ?",
+        [(note_key(path), document) for document, path in documents],
+    )
+    links = connection.execute(
+        "SELECT chunk, position, target FROM links"
+        " WHERE kind IN ('wikilink', 'related') AND instr(target, '/')"
+    ).fetchall()
+    connection.executemany(
+        "UPDATE links SET key = ? WHERE chunk = ? AND position = ?",
+        [(note_key(target), chunk, position) for chunk, position, target in links],
+    )
+
+
 def _ids(ids: Iterable[int]) -> str:
     return json.dumps(list(ids))
 
@@ -311,6 +363,8 @@ class KnowledgeStore:
             if version > SCHEMA_VERSION:
                 message = f"{path} has schema {version}, newer than {SCHEMA_VERSION}"
                 raise sqlite3.DatabaseError(message)
+            if 0 < version < SCHEMA_VERSION:
+                _keyed_by_note(connection)
             for statement in _SCHEMA:
                 connection.execute(statement)
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -529,8 +583,8 @@ class KnowledgeStore:
     ) -> DocumentId:
         (document,) = connection.execute(
             "INSERT INTO documents (source, path, kind, mtime_ns, size, sha256,"
-            " recipe, title, note, stem_key, module_key)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " recipe, title, note, stem_key, module_key, note_key)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT (source, path) DO UPDATE SET kind = excluded.kind,"
             " mtime_ns = excluded.mtime_ns, size = excluded.size,"
             " sha256 = excluded.sha256, recipe = excluded.recipe,"
@@ -547,6 +601,7 @@ class KnowledgeStore:
                 reading.note,
                 _stem_key(reading.path),
                 module_name(reading.path),
+                note_key(str(reading.path)),
             ),
         ).fetchone()
         return DocumentId(document)

@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING, Final, NewType
 
 if TYPE_CHECKING:
     from pathlib import Path, PurePosixPath
+
+NOTE_SUFFIXES: Final = (".md", ".markdown")
 
 SourceId = NewType("SourceId", int)
 DocumentId = NewType("DocumentId", int)
@@ -42,8 +44,10 @@ class DocumentKind(StrEnum):
 class LinkKind(StrEnum):
     """Where a link was found, which also decides how its target is matched.
 
-    ``WIKILINK`` and ``RELATED`` match a document's casefolded file stem,
-    ``MARKDOWN`` its path relative to the source root, ``IMPORT`` its dotted
+    ``WIKILINK`` and ``RELATED`` match a document's casefolded file stem, or,
+    when the target names folders, its :func:`note_key` (a path from the
+    root, as Obsidian reads one); ``MARKDOWN`` its path relative to the
+    source root, ``IMPORT`` its dotted
     module name, whole or as a dotted suffix. Only documents of the link's
     own source are matched.
     """
@@ -133,6 +137,17 @@ class Link:
     target: str
     key: str
     anchor: str | None = None
+
+
+def note_key(path: str) -> str:
+    """Return ``path`` as a wikilink names it: casefolded, from the root, no ``.md``.
+
+    "Notes/Fusion.md", "notes/fusion" and "/notes/Fusion" are all
+    ``notes/fusion``. Any other suffix stays, as Obsidian writes a link to a
+    file that is not a note ("files/data.csv").
+    """
+    key = "/".join(p for p in path.casefold().split("/") if p not in {"", "."})
+    return next((key.removesuffix(s) for s in NOTE_SUFFIXES if key.endswith(s)), key)
 
 
 def module_name(path: PurePosixPath) -> str | None:

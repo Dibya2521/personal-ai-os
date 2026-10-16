@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING, Final
 
-from synthia.knowledge.model import DocumentKind, Link
+from synthia.knowledge.model import NOTE_SUFFIXES, DocumentKind, Link
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -173,7 +173,7 @@ PLAIN_SUFFIXES: Final = (
 def _formats() -> Mapping[str, Format]:
     # The readers import this module, so the table is built on first use.
     from synthia.knowledge.code import read_python  # noqa: PLC0415
-    from synthia.knowledge.markdown import NOTE_SUFFIXES, read_markdown  # noqa: PLC0415
+    from synthia.knowledge.markdown import read_markdown  # noqa: PLC0415
 
     markdown = Format(DocumentKind.MARKDOWN, Text.of_bytes, read_markdown)
     python = Format(DocumentKind.PYTHON, Text.of_bytes, read_python)

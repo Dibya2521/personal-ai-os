@@ -608,6 +608,51 @@ async def test_the_shorter_path_wins_when_two_notes_share_a_stem(
     assert [t.document for t in (await store.linked([source]))[source]] == [winner]
 
 
+PLANS = (
+    "Archive/Plan.md",
+    "Work/Plan.md",
+    "proj/old/Archive/Plan.md",
+    "notes/sub/Plan.md",
+    "deep/x/Plan.md",
+    "aa/x/Plan.md",
+)
+
+
+@pytest.mark.parametrize(
+    ("linker", "link", "reaches"),
+    [
+        ("y.md", wikilink("archive/plan"), ["Archive/Plan.md"]),
+        (
+            "y.md",
+            Link(LinkKind.RELATED, "Archive/Plan", "archive/plan"),
+            ["Archive/Plan.md"],
+        ),
+        ("y.md", wikilink("work/plan"), ["Work/Plan.md"]),
+        ("y.md", wikilink("old/archive/plan"), ["proj/old/Archive/Plan.md"]),
+        ("y.md", wikilink("chive/plan"), []),
+        ("y.md", wikilink("nowhere/plan"), []),
+        ("y.md", wikilink("x/plan"), ["aa/x/Plan.md"]),
+        ("deep/y.md", wikilink("x/plan"), ["deep/x/Plan.md"]),
+        ("proj/y.md", wikilink("archive/plan"), ["Archive/Plan.md"]),
+        ("y.md", wikilink("plan"), ["Work/Plan.md"]),
+        ("notes/y.md", wikilink("plan"), ["notes/sub/Plan.md"]),
+        ("proj/y.md", wikilink("plan"), ["proj/old/Archive/Plan.md"]),
+    ],
+)
+async def test_a_wikilink_resolves_as_obsidian_resolves_it(
+    store: KnowledgeStore, vault: SourceId, linker: str, link: Link, reaches: list[str]
+) -> None:
+    for path in PLANS:
+        await store.replace_document(reading(vault, path, draft(0, "t")))
+    await store.replace_document(reading(vault, linker, draft(0, "see", link)))
+    *_, source = await chunk_ids(store)
+    paths = {s.document: str(p) for p, s in (await store.stamps(vault)).items()}
+
+    reached = (await store.linked([source])).get(source, ())
+
+    assert [paths[t.document] for t in reached] == reaches
+
+
 async def test_a_note_added_later_resolves_an_earlier_link_untouched(
     store: KnowledgeStore, vault: SourceId
 ) -> None:
@@ -631,8 +676,11 @@ async def test_links_never_cross_sources(
         REPO, "repo", SourceKind.FILES, private=False, excludes=()
     )
     await store.replace_document(reading(repo.id, "fusion.md", draft(0, "t")))
+    await store.replace_document(reading(repo.id, "x/fusion.md", draft(0, "t")))
     await store.replace_document(
-        reading(vault, "a.md", draft(0, "see", wikilink("fusion")))
+        reading(
+            vault, "a.md", draft(0, "see", wikilink("fusion"), wikilink("x/fusion"))
+        )
     )
 
     assert await titles_linked(store) == []
@@ -676,5 +724,59 @@ async def test_a_file_from_a_newer_synthia_is_refused(tmp_path: Path) -> None:
     with closing(sqlite3.connect(path)) as connection:
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
 
-    with pytest.raises(sqlite3.DatabaseError, match="newer than 1"):
+    with pytest.raises(sqlite3.DatabaseError, match=f"newer than {SCHEMA_VERSION}"):
         KnowledgeStore(path)
+
+
+async def test_a_schema_1_file_links_by_folder_path_without_reading_anything_again(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / KNOWLEDGE_FILE
+    store = KnowledgeStore(path)
+    source = await store.put_source(
+        VAULT, "vault", SourceKind.VAULT, private=True, excludes=()
+    )
+    await store.replace_document(reading(source.id, "Archive/Plan.md", draft(0, "t")))
+    await store.replace_document(reading(source.id, "Work/Plan.md", draft(0, "t")))
+    folder = Link(LinkKind.WIKILINK, "Archive/Plan", "plan")
+    await store.replace_document(reading(source.id, "x.md", draft(0, "see", folder)))
+    chunks = await chunk_ids(store)
+    with closing(sqlite3.connect(path)) as connection:
+        connection.executescript(
+            "DROP VIEW resolved_links;"
+            " DROP INDEX documents_by_note;"
+            " ALTER TABLE documents DROP COLUMN note_key;"
+            " CREATE VIEW resolved_links AS SELECT 0 AS chunk, 0 AS position,"
+            " '' AS kind, NULL AS anchor, 0 AS document, '' AS title WHERE 0;"
+            " PRAGMA user_version = 1;"
+        )
+
+    migrated = KnowledgeStore(path)
+    archive = (await migrated.stamps(source.id))[PurePosixPath("Archive/Plan.md")]
+
+    assert await chunk_ids(migrated) == chunks
+    assert [t.document for t in (await migrated.linked([chunks[-1]]))[chunks[-1]]] == [
+        archive.document
+    ]
+
+
+async def test_opening_a_file_replaces_a_view_an_older_build_left(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / KNOWLEDGE_FILE
+    store = KnowledgeStore(path)
+    source = await store.put_source(
+        VAULT, "vault", SourceKind.VAULT, private=True, excludes=()
+    )
+    await store.replace_document(reading(source.id, "Later.md", draft(0, "t")))
+    await store.replace_document(
+        reading(source.id, "a.md", draft(0, "see", wikilink("later")))
+    )
+    with closing(sqlite3.connect(path)) as connection:
+        connection.executescript(
+            "DROP VIEW resolved_links;"
+            " CREATE VIEW resolved_links AS SELECT 0 AS chunk, 0 AS position,"
+            " '' AS kind, NULL AS anchor, 0 AS document, '' AS title WHERE 0;"
+        )
+
+    assert await titles_linked(KnowledgeStore(path)) == ["Later"]
