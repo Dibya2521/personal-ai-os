@@ -76,6 +76,7 @@ HOLDS_PRIVATE: Final = (
 STAYS_LOCAL: Final = (
     "this chat read private text, so it stays on this machine until /reset"
 )
+SOURCES: Final = "sources: "
 
 type ReadLine = Callable[[str], str]
 
@@ -450,6 +451,13 @@ class ChatApp[T: Talk]:
                 self._note("no answer came back")
             return
         self.console.print(describe(report), style="dim", markup=False)
+        if report.sources:
+            self.console.print(
+                visible(SOURCES + ", ".join(report.sources)),
+                style="dim",
+                markup=False,
+                highlight=False,
+            )
         if report.confined and not self._told_local:
             self._told_local = True
             self._note(STAYS_LOCAL)

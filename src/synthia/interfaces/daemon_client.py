@@ -421,6 +421,7 @@ def report_from(result: object) -> TurnReport:
         seconds=float(cast("float", fields["seconds"])),
         reasoning=None if level is None else Reasoning(str(level)),
         confined=fields.get("confined") is True,
+        sources=tuple(map(str, cast("list[object]", fields.get("sources", [])))),
     )
 
 

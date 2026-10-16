@@ -8,6 +8,13 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- The chat model can search the person's folders added with
+  `synthia knowledge add`: `search_knowledge` returns up to 6 passages, each
+  under its citation (`name/path:start-end`) with the titles of the documents
+  it links to, and `synthia chat` lists the citations shown under the answer
+  (`sources` in the daemon's turn report). A private folder's passages are
+  shown only in a chat a local model with tools can answer, which then stays
+  on this machine until `/reset`; anywhere else they are withheld and counted.
 - A chat that has read private text stays on this machine until `/reset`:
   every later request of it, the rest of the same turn included, goes to the
   local model with the route reason `chat holds private text`, and

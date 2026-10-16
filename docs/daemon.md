@@ -70,7 +70,7 @@ Messages are JSON-RPC 2.0, one per WebSocket text frame.
 | Method | Params | Result |
 | --- | --- | --- |
 | `hello` | `{}` | `version`, `persona`, `sessions` (conversations open, this one included), `warnings` from start-up |
-| `turn` | `text`, `plan` (bool), `images` (file paths) | the report: `route`, `model`, `prompt_tokens`, `completion_tokens`, `seconds`, `reasoning`, `confined` (true once the conversation holds private text: it stays on this machine until `reset`) |
+| `turn` | `text`, `plan` (bool), `images` (file paths) | the report: `route`, `model`, `prompt_tokens`, `completion_tokens`, `seconds`, `reasoning`, `confined` (true once the conversation holds private text: it stays on this machine until `reset`), `sources` (the citations, `name/path:start-end`, of the passages of the person's files that `search_knowledge` showed in the turn, in the order first shown, each once; `synthia chat` lists them in a dim line under the answer) |
 | `think` | `level`: `off`, `low`, `medium`, `high`, `auto`, or null to ask | a reply |
 | `remote` | `on`: true, false, or null to ask | a reply; in a conversation that holds private text, the choice is kept but the reply says remote stays off, with the reason, until `reset` |
 | `private` | `on`: true (stop remembering this conversation), false, or null to ask | a reply |
@@ -131,7 +131,7 @@ To stop a turn, the client sends `notifications/cancelled` with the turn's
 <- {"jsonrpc": "2.0", "method": "chunk", "params": {"text": "", "reasoning": "", "tool_calls": true, "progress": null}}
 <- {"jsonrpc": "2.0", "method": "tool", "params": {"name": "current_time", "arguments": "{}", "result": "...", "ok": true, "seconds": 0.0, "flags": []}}
 <- {"jsonrpc": "2.0", "method": "chunk", "params": {"text": "It is ...", "reasoning": "", "tool_calls": false, "progress": null}}
-<- {"jsonrpc": "2.0", "id": 2, "result": {"route": "local", "model": "...", "prompt_tokens": 412, "completion_tokens": 18, "seconds": 2.4, "reasoning": "low"}}
+<- {"jsonrpc": "2.0", "id": 2, "result": {"route": "local", "model": "...", "prompt_tokens": 412, "completion_tokens": 18, "seconds": 2.4, "reasoning": "low", "confined": false, "sources": []}}
 ```
 
 ## Restarts

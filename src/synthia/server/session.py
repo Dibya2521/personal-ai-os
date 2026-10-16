@@ -40,6 +40,7 @@ from synthia.gateway.types import (
     Message,
     Reasoning,
 )
+from synthia.knowledge.tool import CITED
 from synthia.memory.store import ToolUse, Turn
 from synthia.memory.window import ContextWindow, message_chars, tools_chars
 
@@ -127,7 +128,9 @@ class TurnReport:
     ``reasoning`` is the thinking level the model was sent, with ``auto``
     already decided when a router answered; ``None`` when none was sent.
     ``confined`` is whether the chat holds private text once the turn is
-    over, so it stays on this machine until it starts again.
+    over, so it stays on this machine until it starts again. ``sources`` are
+    the citations of the person's files the turn's searches showed, in the
+    order first shown, each once.
     """
 
     route: str
@@ -137,6 +140,7 @@ class TurnReport:
     seconds: float
     reasoning: Reasoning | None = None
     confined: bool = False
+    sources: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -145,6 +149,7 @@ class _Taken:
 
     answers: list[ChatResponse] = field(default_factory=list[ChatResponse])
     uses: list[ToolUse] = field(default_factory=list[ToolUse])
+    cited: list[str] = field(default_factory=list[str])
     finished: Finished | None = None
 
     def take(self, step: PlanEvent) -> TurnItem | None:
@@ -353,7 +358,8 @@ class ChatSession:
         alone, so old reminders do not fill the window, and a server that
         reuses the start of the last prompt has only that question to read again.
         The chat's latch is put in context first, so anything in the turn that
-        reads private text, a reminder included, keeps the rest of it local.
+        reads private text, a reminder included, keeps the rest of it local;
+        so is a fresh list for the citations the turn's searches show.
         :attr:`turning` is true until the turn ends, however it ends.
 
         Raises:
@@ -373,13 +379,14 @@ class ChatSession:
         # A generator's body runs in the context of the task iterating it, so
         # this holds for the whole turn and every request made in it.
         CONFINEMENT.set(self.confinement)
+        taken = _Taken()
+        CITED.set(taken.cited)
         asked = await self._prepared(text)
         self.make_room(asked, *images)
         request = self.request(asked, *images)
         started = self._clock()
         asked_at = utc_now()
         before = len(self.history)
-        taken = _Taken()
         try:
             async with aclosing(self._run(request, text, plan=plan)) as steps:
                 async for step in steps:
@@ -395,7 +402,7 @@ class ChatSession:
         # Kept as the person said it, without any reminder put before it.
         self.history[before] = Message.user(text, *images)
         self._starts.append(before)
-        report = self._report(request, taken.answers, self._clock() - started)
+        report = self._report(request, taken, self._clock() - started)
         if not plan:
             self._learn(request, taken.answers)
         self._summarize_leaving()
@@ -475,9 +482,10 @@ class ChatSession:
         return self._trace.watch(run, lambda: self.routes.decision)
 
     def _report(
-        self, request: ChatRequest, answers: list[ChatResponse], seconds: float
+        self, request: ChatRequest, taken: _Taken, seconds: float
     ) -> TurnReport:
         route = self.routes.decision
+        answers = taken.answers
         usages = [a.usage for a in answers]
         counted = all(u is not None for u in usages)
         last = answers[-1].model if answers else None
@@ -493,4 +501,5 @@ class ChatSession:
             seconds=seconds,
             reasoning=route.reasoning if route else request.reasoning,
             confined=self.confinement.confined,
+            sources=tuple(dict.fromkeys(taken.cited)),
         )

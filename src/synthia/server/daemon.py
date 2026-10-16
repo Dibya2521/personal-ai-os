@@ -26,6 +26,7 @@ from synthia import __version__
 from synthia.agent.trace import TRACES, Trace
 from synthia.gateway.assemble import build_gateway
 from synthia.gateway.providers import OPENROUTER_FREE
+from synthia.knowledge.tool import knowledge_tool
 from synthia.memory.recall import memory_tool
 from synthia.persona.library import PersonaLibrary
 from synthia.server.app import create_app
@@ -57,10 +58,14 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from synthia.agent.tools import Tool
     from synthia.gateway.protocol import LocalChatModel
     from synthia.gateway.providers import RemoteProvider
+    from synthia.gateway.router import Router
     from synthia.kernel.config import Settings
     from synthia.kernel.supervisor import ServiceEvent
+    from synthia.knowledge.service import Knowledge
+    from synthia.memory.hybrid import Recall
     from synthia.retrieval.embed import TextEmbedder
 
 type EmbedderOpener = Callable[[Settings, Callable[[str], None]], TextEmbedder | None]
@@ -157,6 +162,25 @@ def _started(local: LocalModels | None, trace: Trace) -> Callable[[], str]:
     return local.state
 
 
+def _searching(
+    memory: Recall | None, knowledge: Knowledge | None, router: Router
+) -> tuple[Tool, ...]:
+    """Return the tools that search memory and the person's files, those open."""
+
+    def can_stay_local() -> bool:
+        return router.can_stay_local
+
+    memory_tools = (
+        () if memory is None else (memory_tool(memory, can_stay_local=can_stay_local),)
+    )
+    knowledge_tools = (
+        ()
+        if knowledge is None
+        else (knowledge_tool(knowledge, can_stay_local=can_stay_local),)
+    )
+    return (*memory_tools, *knowledge_tools)
+
+
 async def run_daemon(  # noqa: PLR0913 - every outside part is injected for tests
     settings: Settings,
     local: LocalModels | None,
@@ -198,15 +222,7 @@ async def run_daemon(  # noqa: PLR0913 - every outside part is injected for test
             if knowledge is None
             else Reindexing(knowledge, activity, report=partial(traced_index, trace))
         )
-        searching = (
-            ()
-            if memory is None
-            else (
-                memory_tool(
-                    memory, can_stay_local=lambda: gateway.router.can_stay_local
-                ),
-            )
-        )
+        searching = _searching(memory, knowledge, gateway.router)
         tools, servers = await start_tools(settings, warn, transport, searching)
         local_state = _started(local, trace)
         try:

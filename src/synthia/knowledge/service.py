@@ -28,8 +28,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from synthia.knowledge.index import IndexReport, Pause
-    from synthia.knowledge.model import Source, SourceId
-    from synthia.knowledge.retrieve import Found, Variant
+    from synthia.knowledge.model import ChunkId, Source, SourceId
+    from synthia.knowledge.retrieve import Found, Passage, Variant
+    from synthia.knowledge.store import LinkTarget
     from synthia.retrieval.embed import TextEmbedder
 
 SEARCH_LIMIT: Final = 6
@@ -261,3 +262,14 @@ class Knowledge:
         return await self._ranker.find(
             query, limit=limit, variant=chosen, private=private
         )
+
+    async def links(
+        self, passages: Iterable[Passage]
+    ) -> dict[ChunkId, tuple[LinkTarget, ...]]:
+        """Return, per passage's chunk, the documents its links reach, in link order.
+
+        A link reaches only documents of its own source, so a public passage
+        never names a private document. A chunk none of whose links reach a
+        document is left out.
+        """
+        return await self._store.linked({passage.chunk.id for passage in passages})
