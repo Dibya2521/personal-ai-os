@@ -138,7 +138,11 @@ All notable changes are recorded here. The format follows
   by its path from the folder's root, else by the path it ends with; when
   names repeat, notes in the linking note's folder come first, then the
   shorter path. Frontmatter `related` and `patterns` lists, Markdown links and
-  Python imports are links too.
+  Python imports are links too. `search --variant` picks the ranking (`words`,
+  `meaning`, `fused`, `fused:<word weight>`); adding `+hop1x<weight>` or
+  `+hop2x<weight>` follows the links of the best 5 passages one or two steps:
+  each passage of a document reached scores its own match plus the weight
+  times the best score among the passages linking to it.
 
 ### Changed
 

@@ -465,6 +465,15 @@ class KnowledgeStore:
         """
         return await asyncio.to_thread(self._linked, chunks)
 
+    async def linked_chunks(
+        self, chunks: Collection[ChunkId]
+    ) -> dict[ChunkId, tuple[ChunkId, ...]]:
+        """Return, per chunk, every chunk of the documents its links resolve to.
+
+        A chunk none of whose links resolve is left out.
+        """
+        return await asyncio.to_thread(self._linked_chunks, chunks)
+
     async def optimize(self) -> None:
         """Merge the full-text index's segments; refresh the planner's statistics."""
         await asyncio.to_thread(self._optimize)
@@ -747,6 +756,22 @@ class KnowledgeStore:
                 LinkTarget(DocumentId(document), title, anchor)
             )
         return {chunk: tuple(found) for chunk, found in targets.items()}
+
+    def _linked_chunks(
+        self, chunks: Collection[ChunkId]
+    ) -> dict[ChunkId, tuple[ChunkId, ...]]:
+        with self._opened() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT r.chunk, c.id FROM resolved_links r"
+                " JOIN chunks c ON c.document = r.document"
+                " WHERE r.chunk IN (SELECT value FROM json_each(?))"
+                " ORDER BY r.chunk, c.id",
+                (_ids(chunks),),
+            ).fetchall()
+        reached: defaultdict[ChunkId, list[ChunkId]] = defaultdict(list)
+        for chunk, target in rows:
+            reached[ChunkId(chunk)].append(ChunkId(target))
+        return {chunk: tuple(found) for chunk, found in reached.items()}
 
     def _optimize(self) -> None:
         with self._opened() as connection:

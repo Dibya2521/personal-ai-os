@@ -497,6 +497,28 @@ async def test_a_markdown_link_reaches_the_note_by_its_path(
     }
 
 
+async def test_linked_chunks_are_every_chunk_of_each_document_reached(
+    store: KnowledgeStore, vault: SourceId
+) -> None:
+    await store.replace_document(reading(vault, "b.md", draft(0, "x"), draft(1, "y")))
+    await store.replace_document(reading(vault, "c.md", draft(0, "z")))
+    await store.replace_document(
+        reading(
+            vault,
+            "a.md",
+            draft(0, "see", wikilink("c"), wikilink("b"), wikilink("c")),
+            draft(1, "lost", wikilink("nowhere")),
+            draft(2, "plain"),
+        )
+    )
+    b_first, b_second, c, linking, lost, plain = await chunk_ids(store)
+
+    assert await store.linked_chunks([linking, lost, plain, b_first]) == {
+        linking: (b_first, b_second, c)
+    }
+    assert await store.linked_chunks([]) == {}
+
+
 @pytest.mark.parametrize(
     ("key", "reaches"),
     [

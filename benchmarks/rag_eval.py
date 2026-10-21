@@ -13,7 +13,9 @@ installed default model: the default chunking (windows of 40 lines without a
 header, at the embedder's token limit), then sections by structure without a
 header and with one. Each variant then searches that index for every
 question, 10 passages deep: words, meaning, and the fused score at the
-default word weight 0.2 and at 0.05, 0.1 (the earlier default) and 0.4.
+default word weight 0.2 and at 0.05, 0.1 (the earlier default) and 0.4,
+then the default following links from the best 5 passages: one hop at link
+weight 0.1 and 0.3, two hops at 0.3.
 
 Output is JSON lines: first a header (commit, questions per category, files
 in the corpus, embedder, python, numpy and onnxruntime versions), then per
@@ -72,7 +74,17 @@ DIGITS: Final = 3
 OVERALL: Final = "overall"
 VARIANTS: Final = tuple(
     Variant.parse(name)
-    for name in ("words", "meaning", "fused", "fused:0.05", "fused:0.1", "fused:0.4")
+    for name in (
+        "words",
+        "meaning",
+        "fused",
+        "fused:0.05",
+        "fused:0.1",
+        "fused:0.4",
+        "fused+hop1x0.1",
+        "fused+hop1x0.3",
+        "fused+hop2x0.3",
+    )
 )
 
 type Category = Literal["named", "paraphrase", "code", "multi", "none"]

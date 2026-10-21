@@ -12,26 +12,33 @@ results and the default all name a ranking the same way.
 
 Each side gives its best :data:`CANDIDATES` chunks; fused adds the cosine of
 every chunk the words found, as memory's search does. Ties go to the lower
-chunk id, so a ranking never depends on the order a set was read in.
+chunk id, so a ranking never depends on the order a set was read in. A
+variant may then follow links from the best chunks one or two hops
+(:mod:`synthia.knowledge.graph`), scoring what they reach the same way.
 """
 
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from enum import Enum, auto, unique
+from functools import partial
 from typing import TYPE_CHECKING, Final, Self
 
+from synthia.knowledge.graph import hopped
 from synthia.knowledge.model import ChunkId
 from synthia.retrieval.fts import match_expression
 from synthia.retrieval.fusion import fused
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Collection, Mapping, Sequence
 
+    from synthia.knowledge.graph import Scorer
     from synthia.knowledge.meaning import ChunkVectors
     from synthia.knowledge.model import Chunk, Document
     from synthia.knowledge.store import KnowledgeStore, Row
+    from synthia.retrieval.vectors import Similarities
 
 CANDIDATES: Final = 50
 """Chunks each side gives before fusing, as memory's search takes; a larger
@@ -44,6 +51,7 @@ of 2,000 paired bootstrap resamples over the questions with sections and a
 header, and in 86.5 % with windows of 40 lines, where it reached 0.461, the
 best of 18 (3 chunkings by 6 variants). Memory measured 0.1 on its own questions
 and keeps it (:mod:`synthia.memory.hybrid`); here that weight is ``fused:0.1``."""
+MAX_HOPS: Final = 2
 
 
 class VariantError(ValueError):
@@ -60,6 +68,15 @@ class Side(Enum):
 
 
 _SIDES: Final = {side.name.lower(): side for side in Side}
+_FOLLOW: Final = "+hop"
+"""Not a bare "+", which a weight such as 1e+16 holds."""
+_HOPS: Final = re.compile(r"(?P<hops>[0-9]+)x(?P<weight>.+)")
+
+
+def _checked_weight(label: str, weight: float) -> None:
+    if not math.isfinite(weight) or math.copysign(1.0, weight) < 0:
+        message = f"{label}={weight!r} is not a finite number of at least 0"
+        raise ValueError(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,33 +85,45 @@ class Variant:
 
     Names are ``words``, ``meaning``, ``fused`` and ``fused:<weight>``: the
     weight as Python's shortest round-trip float, left out when it is
-    :data:`WORD_WEIGHT`. Only fused takes a weight, so each variant has one
-    name and :meth:`parse` reads back exactly what :meth:`name` writes.
+    :data:`WORD_WEIGHT`. Following links adds ``+hop<hops>x<link weight>``,
+    as in ``fused+hop1x0.3``. Only fused takes a word weight and only hops
+    take a link weight, so each variant has one name and :meth:`parse` reads
+    back exactly what :meth:`name` writes.
 
     Raises:
-        ValueError: If ``word_weight`` is not finite, is below 0 (negative
-            zero included), or is not the default on a side that does not fuse.
+        ValueError: If a weight is not finite or is below 0 (negative zero
+            included), ``word_weight`` is not the default on a side that does
+            not fuse, ``hops`` is not 0 to :data:`MAX_HOPS`, or
+            ``link_weight`` is not 0 without hops.
     """
 
     side: Side = Side.FUSED
     word_weight: float = WORD_WEIGHT
+    hops: int = 0
+    link_weight: float = 0.0
 
     def __post_init__(self) -> None:
-        weight = self.word_weight
-        if not math.isfinite(weight) or math.copysign(1.0, weight) < 0:
-            message = f"word_weight={weight!r} is not a finite number of at least 0"
-            raise ValueError(message)
-        if self.side is not Side.FUSED and weight != WORD_WEIGHT:
+        _checked_weight("word_weight", self.word_weight)
+        _checked_weight("link_weight", self.link_weight)
+        if self.side is not Side.FUSED and self.word_weight != WORD_WEIGHT:
             side = self.side.name.lower()
-            message = f"word_weight={weight!r} on {side}, which does not fuse"
+            message = f"word_weight={self.word_weight!r} on {side}, which does not fuse"
+            raise ValueError(message)
+        if not 0 <= self.hops <= MAX_HOPS:
+            message = f"hops={self.hops} is not 0 to {MAX_HOPS}"
+            raise ValueError(message)
+        if not self.hops and self.link_weight:
+            message = f"link_weight={self.link_weight!r} with no hops to weigh"
             raise ValueError(message)
 
     def name(self) -> str:
         """Return the variant's name, which :meth:`parse` reads back."""
-        side = self.side.name.lower()
-        if self.word_weight == WORD_WEIGHT:
-            return side
-        return f"{side}:{float(self.word_weight)!r}"
+        name = self.side.name.lower()
+        if self.word_weight != WORD_WEIGHT:
+            name += f":{float(self.word_weight)!r}"
+        if self.hops:
+            name += f"{_FOLLOW}{self.hops}x{float(self.link_weight)!r}"
+        return name
 
     @classmethod
     def parse(cls, name: str) -> Self:
@@ -104,13 +133,23 @@ class Variant:
             VariantError: If ``name`` is not a variant's name as :meth:`name`
                 writes it.
         """
-        label, colon, weight = name.partition(":")
+        ranking, plus, following = name.partition(_FOLLOW)
+        label, colon, weight = ranking.partition(":")
         side = _SIDES.get(label)
         if side is None:
             message = f"{name!r} is not a variant: start with words, meaning or fused"
             raise VariantError(message)
+        hops = _HOPS.fullmatch(following)
+        if plus and hops is None:
+            message = f"{name!r} is not a variant: follow links as +hop<N>x<weight>"
+            raise VariantError(message)
         try:
-            variant = cls(side, float(weight)) if colon else cls(side)
+            variant = cls(
+                side,
+                float(weight) if colon else WORD_WEIGHT,
+                int(hops["hops"]) if hops else 0,
+                float(hops["weight"]) if hops else 0.0,
+            )
         except ValueError as error:
             message = f"{name!r} is not a variant: {error}"
             raise VariantError(message) from error
@@ -209,11 +248,69 @@ class Ranker:
     async def _scores(
         self, query: str, variant: Variant, count: int
     ) -> dict[int, float]:
+        score = await self._scorer(query, variant, count)
+        scores = await score(None)
+        if not variant.hops:
+            return scores
+        return await hopped(
+            scores,
+            hops=variant.hops,
+            link_weight=variant.link_weight,
+            reach=self._store.linked_chunks,
+            score=score,
+        )
+
+    async def _scorer(self, query: str, variant: Variant, count: int) -> Scorer:
         if variant.side is Side.WORDS:
-            return (await self._store.word_scores(query, limit=count)).scores
+            return partial(_words, store=self._store, query=query, count=count)
         near = await self._vectors.similarities(query)
         if variant.side is Side.MEANING:
-            return near.nearest(count)
-        words = await self._store.word_scores(query, limit=count)
-        similar = near.nearest(count) | near.of(words.scores.keys())
-        return fused(similar, words, variant.word_weight)
+            return partial(_meaning, near=near, count=count)
+        return partial(
+            _fused,
+            store=self._store,
+            query=query,
+            near=near,
+            word_weight=variant.word_weight,
+            count=count,
+        )
+
+
+def _similar(
+    within: Collection[ChunkId] | None, near: Similarities, count: int
+) -> dict[int, float]:
+    return near.nearest(count) if within is None else near.of(within)
+
+
+async def _words(
+    within: Collection[ChunkId] | None,
+    /,
+    *,
+    store: KnowledgeStore,
+    query: str,
+    count: int,
+) -> dict[int, float]:
+    limit = count if within is None else len(within)
+    return (await store.word_scores(query, limit=limit, within=within)).scores
+
+
+async def _meaning(
+    within: Collection[ChunkId] | None, /, *, near: Similarities, count: int
+) -> dict[int, float]:
+    return _similar(within, near, count)
+
+
+async def _fused(  # noqa: PLR0913 - one query's evidence, bound once by partial
+    within: Collection[ChunkId] | None,
+    /,
+    *,
+    store: KnowledgeStore,
+    query: str,
+    near: Similarities,
+    word_weight: float,
+    count: int,
+) -> dict[int, float]:
+    limit = count if within is None else len(within)
+    words = await store.word_scores(query, limit=limit, within=within)
+    similar = _similar(within, near, count) | near.of(words.scores.keys())
+    return fused(similar, words, word_weight)

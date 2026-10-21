@@ -77,6 +77,9 @@ NAMED = {
     "fused:0.05": (0.0, 1.0, 1 / 3, 0.5),
     "fused:0.1": (0.0, 1.0, 1 / 3, 0.5),
     "fused:0.4": (0.0, 1.0, 0.5, SECOND),
+    "fused+hop1x0.1": (0.0, 1.0, 1 / 3, 0.5),
+    "fused+hop1x0.3": (0.0, 1.0, 1 / 3, 0.5),
+    "fused+hop2x0.3": (0.0, 1.0, 1 / 3, 0.5),
 }
 KEYS = [
     "chunking",
@@ -119,7 +122,7 @@ def test_chunkings_are_default_windows_then_structure_without_and_with_header() 
     ]
 
 
-def test_variants_are_the_six_named() -> None:
+def test_variants_are_the_nine_named() -> None:
     names = [v.name() for v in VARIANTS]
     assert names == [
         "words",
@@ -128,6 +131,9 @@ def test_variants_are_the_six_named() -> None:
         "fused:0.05",
         "fused:0.1",
         "fused:0.4",
+        "fused+hop1x0.1",
+        "fused+hop1x0.3",
+        "fused+hop2x0.3",
     ]
 
 

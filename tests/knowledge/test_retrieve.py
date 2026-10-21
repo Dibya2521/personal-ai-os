@@ -71,6 +71,15 @@ async def notes(tmp_path: Path, db: Path) -> Knowledge:
         (Variant(word_weight=1e-5), "fused:1e-05"),
         (Variant(word_weight=0.0), "fused:0.0"),
         (Variant(word_weight=1), "fused:1.0"),
+        (Variant(hops=1, link_weight=0.3), "fused+hop1x0.3"),
+        (Variant(word_weight=0.05, hops=2, link_weight=1), "fused:0.05+hop2x1.0"),
+        (Variant(Side.WORDS, hops=1, link_weight=0.0), "words+hop1x0.0"),
+        (Variant(Side.MEANING, hops=2, link_weight=2.5), "meaning+hop2x2.5"),
+        (Variant(word_weight=1e16), "fused:1e+16"),
+        (
+            Variant(word_weight=1e16, hops=1, link_weight=1e16),
+            "fused:1e+16+hop1x1e+16",
+        ),
     ],
 )
 def test_variant_name_and_parse_round_trip(variant: Variant, name: str) -> None:
@@ -96,6 +105,22 @@ def test_variant_name_and_parse_round_trip(variant: Variant, name: str) -> None:
         "hops",
         "",
         "FUSED",
+        "fused+",
+        "fused+hop1",
+        "fused+hop1x",
+        "fused+hopx0.3",
+        "fused+hop0x0.3",
+        "fused+hop0x0.0",
+        "fused+hop3x0.3",
+        "fused+hop01x0.3",
+        "fused+hop1x-0.3",
+        "fused+hop1x-0.0",
+        "fused+hop1xnan",
+        "fused+hop1x0.3+hop1x0.3",
+        "fused+HOP1x0.3",
+        "fused:0.2+hop1x0.3",
+        "words:0.1+hop1x0.3",
+        "fused+hop1x 0.3",
     ],
 )
 def test_variant_parse_refuses_a_name_it_would_not_write(name: str) -> None:
@@ -119,12 +144,37 @@ def test_variant_refuses_a_weight_it_cannot_use(side: Side, weight: float) -> No
         Variant(side, weight)
 
 
+@pytest.mark.parametrize(
+    ("hops", "weight", "message"),
+    [
+        (1, -1.0, r"^link_weight=-1\.0 is not"),
+        (1, -0.0, r"^link_weight=-0\.0 is not"),
+        (1, float("nan"), r"^link_weight=nan is not"),
+        (2, float("inf"), r"^link_weight=inf is not"),
+        (3, 0.3, r"^hops=3 is not 0 to 2$"),
+        (-1, 0.0, r"^hops=-1 is not 0 to 2$"),
+        (0, 0.3, r"^link_weight=0\.3 with no hops"),
+    ],
+)
+def test_variant_refuses_hops_it_cannot_follow(
+    hops: int, weight: float, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        Variant(hops=hops, link_weight=weight)
+
+
 @given(
     st.one_of(
         st.sampled_from([Variant(Side.WORDS), Variant(Side.MEANING)]),
         st.builds(
             Variant,
             word_weight=st.floats(min_value=0.0, allow_nan=False, allow_infinity=False),
+        ),
+        st.builds(
+            Variant,
+            side=st.sampled_from(Side),
+            hops=st.integers(1, 2),
+            link_weight=st.floats(min_value=0.0, allow_nan=False, allow_infinity=False),
         ),
     )
 )
@@ -382,3 +432,76 @@ async def test_a_chunk_removed_behind_the_search_is_left_out(
 
     assert len(shelf.vectors) == 3
     assert citations(found) == [SISTER_AT, SERVER_AT]
+
+
+LINKED = {
+    "cat.txt": "my cat is miso\n",
+    "guide.md": "my sister lives in pune city, see [next](middle.md)\n",
+    "middle.md": "[on](server.md)\n",
+    "server.md": "the database server host kestrel\n",
+}
+GUIDE, MIDDLE = "notes/guide.md:1", "notes/middle.md:1"
+SERVER_MD = "notes/server.md:1"
+
+
+@pytest.fixture
+async def linked(tmp_path: Path, db: Path) -> Knowledge:
+    knowledge = await opened(db)
+    await knowledge.add(planted(tmp_path / "notes", LINKED))
+    await knowledge.index()
+    return knowledge
+
+
+def scored(found: Found) -> dict[str, float]:
+    return {passage.citation(): passage.score for passage in found.passages}
+
+
+@pytest.mark.parametrize(
+    ("name", "ranked"),
+    [
+        ("fused", [GUIDE, CAT_AT, MIDDLE, SERVER_MD]),
+        ("fused+hop1x0.5", [GUIDE, MIDDLE, CAT_AT, SERVER_MD]),
+        ("fused+hop2x0.5", [GUIDE, MIDDLE, SERVER_MD, CAT_AT]),
+    ],
+)
+async def test_hops_lift_a_passage_only_a_link_relates_to_the_query(
+    linked: Knowledge, name: str, ranked: list[str]
+) -> None:
+    found = await linked.search("pune", variant=Variant.parse(name))
+
+    assert citations(found) == ranked
+
+
+async def test_a_hop_adds_the_weighted_seed_score_to_the_linked_chunks_own(
+    linked: Knowledge,
+) -> None:
+    alone = scored(await linked.search("pune kestrel"))
+    hops = scored(
+        await linked.search("pune kestrel", variant=Variant.parse("fused+hop2x0.5"))
+    )
+
+    middle = alone[MIDDLE] + 0.5 * alone[GUIDE]
+    assert hops[MIDDLE] == pytest.approx(middle)
+    assert hops[SERVER_MD] == pytest.approx(alone[SERVER_MD] + 0.5 * middle)
+    assert alone[SERVER_MD] > 0
+    assert hops[CAT_AT] == alone[CAT_AT]
+
+
+async def test_a_linked_chunk_beyond_the_candidates_is_scored_by_its_own_meaning(
+    tmp_path: Path, db: Path
+) -> None:
+    decoys = {f"cat{n:02}.txt": NOTES["cat.txt"] for n in range(CANDIDATES)}
+    guide = "my sister lives in pune city, see [it](server.md)\n"
+    files = {**decoys, "guide.md": guide, "server.md": NOTES["server.txt"]}
+    knowledge = await opened(db)
+    await knowledge.add(planted(tmp_path / "notes", files))
+    await knowledge.index()
+    meaning = Variant(Side.MEANING)
+
+    alone = scored(await knowledge.search("pune kestrel", variant=meaning))
+    hop = Variant(Side.MEANING, hops=1, link_weight=0.5)
+    hops = scored(await knowledge.search("pune kestrel", variant=hop))
+
+    assert SERVER_MD not in alone
+    own = cosine((0.0, 0.0, 1.0, 0.0, 0.1), SERVER)
+    assert hops[SERVER_MD] == pytest.approx(own + 0.5 * alone[GUIDE])

@@ -369,8 +369,9 @@ def knowledge_search(
     variant: Annotated[
         str | None,
         typer.Option(
-            help="How to rank: words, meaning, fused or fused:<word weight>. "
-            "Default: fused."
+            help="How to rank: words, meaning, fused or fused:<word weight>, "
+            "with +hop1x<weight> or +hop2x<weight> to follow links from the "
+            "best 5 passages. Default: fused."
         ),
     ] = None,
 ) -> None:

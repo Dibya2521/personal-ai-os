@@ -20,7 +20,7 @@ voice come later. Why it is built this way is in
 | `synthia knowledge remove <folder>` | Stops reading a folder and forgets everything read from it. |
 | `synthia knowledge list` | Shows each folder read: its name, kind (`files` or `vault`), whether it is private, where it is, and what it leaves out. |
 | `synthia knowledge index` | Reads every folder now: new and changed files are read, deleted ones forgotten. Prints the counts in one line and names any folder that could not be listed (what was read from it before is kept). Exits 2 when the pass failed; Ctrl+C stops it and keeps what was read so far. |
-| `synthia knowledge search "<question>"` | Prints the passages that best answer it, each with where it is (`name/path:start-end`), its score, `(private)` when it comes from a private folder, and its first 8 lines, control characters shown escaped. `--limit` (1 to 50, default 6) and `--variant` (`words`, `meaning`, `fused`, `fused:<word weight>`) change what is found. |
+| `synthia knowledge search "<question>"` | Prints the passages that best answer it, each with where it is (`name/path:start-end`), its score, `(private)` when it comes from a private folder, and its first 8 lines, control characters shown escaped. `--limit` (1 to 50, default 6) and `--variant` (`words`, `meaning`, `fused`, `fused:<word weight>`, each optionally followed by `+hop1x<weight>` or `+hop2x<weight>` to follow the links of the best 5 passages one or two steps) change what is found. |
 
 Each `synthia knowledge` command goes through the daemon, starting it if it
 is not running, so one process writes the index. Without an embedding model
