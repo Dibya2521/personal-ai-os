@@ -4,14 +4,17 @@ from synthia.kernel.config import DEFAULT_LOCAL_MODEL
 from synthia.models.catalogue import (
     DEFAULT_EMBEDDER,
     EMBEDDERS,
+    ITEMS,
     LLAMA_CPP_BUILD,
     MODELS,
+    RERANKERS,
     RUNTIMES,
     Backend,
     Download,
     Embedder,
     Model,
     Pooling,
+    Reranker,
     Runtime,
     Target,
     find,
@@ -29,10 +32,10 @@ ASSET_TARGET = {
 
 
 def test_every_name_in_the_catalogue_is_unique() -> None:
-    ids = [item.id for item in (*RUNTIMES, *MODELS, *EMBEDDERS)]
+    ids = [item.id for item in ITEMS]
     # Each item downloads into a folder of its own, so a name is unique per item.
     per_item = [[d.name for d in r.archives] for r in RUNTIMES] + [
-        [f.name for f in m.files] for m in (*MODELS, *EMBEDDERS)
+        [f.name for f in m.files] for m in (*MODELS, *EMBEDDERS, *RERANKERS)
     ]
 
     assert len(ids) == len(set(ids))
@@ -56,7 +59,7 @@ def test_each_runtime_archive_is_the_build_it_claims(runtime: Runtime) -> None:
 
 
 def test_model_files_come_from_the_pinned_revision() -> None:
-    for model in (*MODELS, *EMBEDDERS):
+    for model in (*MODELS, *EMBEDDERS, *RERANKERS):
         for file in model.files:
             assert file.url.startswith(
                 f"https://huggingface.co/{model.repo}/resolve/{model.revision}/"
@@ -81,6 +84,24 @@ def test_an_embedder_is_its_network_and_its_tokenizer() -> None:
     )
     assert find("all-minilm-l6-v2-int8").size == 23_026_053 + 466_247
     assert DEFAULT_EMBEDDER.id == "all-minilm-l6-v2-int8"
+
+
+def test_the_rerankers_are_the_int8_and_fp32_files_of_one_model() -> None:
+    int8, fp32 = (
+        find(name) for name in ("ms-marco-minilm-l6-int8", "ms-marco-minilm-l6")
+    )
+
+    assert isinstance(int8, Reranker)
+    assert isinstance(fp32, Reranker)
+    assert int8.files == (int8.model, int8.tokenizer)
+    assert (int8.size, fp32.size) == (23_200_716 + 711_396, 91_011_230 + 711_396)
+    assert [r.model.url.rsplit("/", 2)[-2:] for r in RERANKERS] == [
+        ["onnx", "model_qint8_avx512.onnx"],
+        ["onnx", "model.onnx"],
+    ]
+    assert int8.tokenizer == fp32.tokenizer
+    assert int8.tokenizer.sha256 == EMBEDDERS[0].tokenizer.sha256
+    assert (int8.max_tokens, int8.licence) == (512, "apache-2.0")
 
 
 def test_this_laptops_download_is_the_recorded_total() -> None:
@@ -132,6 +153,7 @@ def test_recommended_puts_the_accelerator_first_and_keeps_the_cpu_floor(
 def test_find_returns_runtimes_and_models_and_refuses_unknown_names() -> None:
     assert find(DEFAULT_LOCAL_MODEL).id == DEFAULT_LOCAL_MODEL
     assert find(RUNTIMES[0].id) is RUNTIMES[0]
+    assert find(RERANKERS[0].id) is RERANKERS[0]
     with pytest.raises(KeyError, match="gpt-5"):
         find("gpt-5")
 

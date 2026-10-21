@@ -155,7 +155,35 @@ class Embedder:
         return sum(file.size for file in self.files)
 
 
-type Item = Runtime | Model | Embedder
+@dataclass(frozen=True, slots=True)
+class Reranker:
+    """A cross-encoder: an ONNX file that scores a question and a passage read together.
+
+    It reads ``[CLS] question [SEP] passage [SEP]`` through its WordPiece
+    tokenizer and returns one number per pair, higher for a passage that
+    answers the question better.
+    """
+
+    id: str
+    repo: str
+    revision: str
+    licence: str
+    model: Download
+    tokenizer: Download
+    max_tokens: int
+
+    @property
+    def files(self) -> tuple[Download, ...]:
+        """Every file of the model, the network first."""
+        return (self.model, self.tokenizer)
+
+    @property
+    def size(self) -> int:
+        """Bytes to download."""
+        return sum(file.size for file in self.files)
+
+
+type Item = Runtime | Model | Embedder | Reranker
 """Anything ``synthia models`` can install."""
 
 
@@ -402,6 +430,62 @@ EMBEDDERS: Final = (
 # more at 5 (0.925 against 0.875), about half its time to embed a turn even one
 # text at a time against bge's sixteen, a sixth of its size.
 DEFAULT_EMBEDDER: Final = EMBEDDERS[1]
+
+_MS_MARCO_REPO: Final = "cross-encoder/ms-marco-MiniLM-L6-v2"
+_MS_MARCO_REVISION: Final = (
+    # pragma: allowlist nextline secret
+    "233902d25c440f23af6f7d6e94d2946bac0bee0a"
+)
+# The same file, byte for byte, as bge-small's: BERT's uncased vocabulary of
+# 30,522 pieces. Its git blob id matched the tree before it was hashed.
+_MS_MARCO_TOKENIZER: Final = _hugging_face(
+    _MS_MARCO_REPO,
+    _MS_MARCO_REVISION,
+    "tokenizer.json",
+    711_396,
+    # pragma: allowlist nextline secret
+    "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66",
+)
+# Trained on MS MARCO passage ranking (questions from Bing, web passages),
+# BERT with 6 layers and 512 positions; one output, the pair's relevance.
+RERANKERS: Final = (
+    Reranker(
+        "ms-marco-minilm-l6-int8",
+        _MS_MARCO_REPO,
+        _MS_MARCO_REVISION,
+        "apache-2.0",
+        _hugging_face(
+            _MS_MARCO_REPO,
+            _MS_MARCO_REVISION,
+            "model.onnx",
+            23_200_716,
+            # pragma: allowlist nextline secret
+            "3573b6b9593cb2f75987a31815d409ca3dd8808629118fd20451bb1a5d90cec7",
+            path="onnx/model_qint8_avx512.onnx",
+        ),
+        _MS_MARCO_TOKENIZER,
+        max_tokens=512,
+    ),
+    Reranker(
+        "ms-marco-minilm-l6",
+        _MS_MARCO_REPO,
+        _MS_MARCO_REVISION,
+        "apache-2.0",
+        _hugging_face(
+            _MS_MARCO_REPO,
+            _MS_MARCO_REVISION,
+            "model.onnx",
+            91_011_230,
+            # pragma: allowlist nextline secret
+            "5d3e70fd0c9ff14b9b5169a51e957b7a9c74897afd0a35ce4bd318150c1d4d4a",
+            path="onnx/model.onnx",
+        ),
+        _MS_MARCO_TOKENIZER,
+        max_tokens=512,
+    ),
+)
+ITEMS: Final[tuple[Item, ...]] = (*RUNTIMES, *MODELS, *EMBEDDERS, *RERANKERS)
+"""Everything the catalogue holds, in the order ``synthia models list`` shows it."""
 _SYSTEMS: Final = {"windows": "windows", "linux": "linux", "darwin": "macos"}
 _MACHINES: Final = {
     "amd64": "x64",
@@ -440,12 +524,12 @@ def recommended(target: Target, *, nvidia: bool) -> tuple[Runtime, ...]:
 
 
 def find(name: str) -> Item:
-    """Return the runtime, model or embedding model called ``name``.
+    """Return the runtime, model, embedding model or reranker called ``name``.
 
     Raises:
         KeyError: If nothing in the catalogue has that name.
     """
-    for item in (*RUNTIMES, *MODELS, *EMBEDDERS):
+    for item in ITEMS:
         if item.id == name:
             return item
     raise KeyError(name)

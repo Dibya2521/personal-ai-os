@@ -24,9 +24,8 @@ from rich.table import Table
 
 from synthia.models.catalogue import (
     DEFAULT_EMBEDDER,
-    EMBEDDERS,
+    ITEMS,
     MODELS,
-    RUNTIMES,
     Embedder,
     Model,
     Target,
@@ -104,7 +103,7 @@ def resolve(names: Sequence[str]) -> tuple[Item, ...]:
 
 
 def _known(name: str) -> bool:
-    return any(item.id == name for item in (*RUNTIMES, *MODELS, *EMBEDDERS))
+    return any(item.id == name for item in ITEMS)
 
 
 def _state(installer: Installer, item: Item) -> str:
@@ -133,7 +132,7 @@ def list_table(
     table = Table(box=None, pad_edge=False)
     for column in ("", "name", "size", "state"):
         table.add_column(column)
-    for item in (*RUNTIMES, *MODELS, *EMBEDDERS):
+    for item in ITEMS:
         mark = "*" if item.id in picks else ""
         table.add_row(mark, item.id, size_text(item.size), _state(installer, item))
     return table

@@ -123,6 +123,12 @@ All notable changes are recorded here. The format follows
   about at least as often as bge-small on a 40-question recall set, in about
   half the time: on Windows without an NVIDIA card it
   fetches 3.25 GB instead of 3.23 GB.
+- `synthia models` knows a reranker, the cross-encoder
+  ms-marco-MiniLM-L6-v2 (Apache-2.0), which reads a question and a passage
+  together and scores how well the passage answers it: quantised to 8 bits
+  as `ms-marco-minilm-l6-int8` (22.8 MB) and at full precision as
+  `ms-marco-minilm-l6` (87.5 MB), each pinned to a revision and to SHA-256
+  digests. Neither is installed unless named.
 - `synthia knowledge` reads folders the person adds and finds passages in
   them. `add <folder>` adds one (`--private`, `--exclude <path>`), `remove`
   forgets it and everything read from it, `list` shows them, `index` reads
