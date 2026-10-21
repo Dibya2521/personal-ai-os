@@ -11,7 +11,8 @@ order the Hugging Face tokenizers library applies them:
 5. Split each word greedily into the longest pieces in the vocabulary, all
    but the first written with a ``##`` prefix; a word with no such split,
    or longer than 100 characters, becomes ``[UNK]``.
-6. Wrap in ``[CLS]`` ... ``[SEP]``, cut to the model's limit.
+6. Wrap in ``[CLS]`` ... ``[SEP]``, cut to the model's limit; a pair, as a
+   cross-encoder reads one, is ``[CLS] a [SEP] b [SEP]``.
 
 One difference on purpose: text that spells a special token ("[SEP]") is
 read as text, never as the token, so nothing typed can steer the encoder.
@@ -22,6 +23,7 @@ from __future__ import annotations
 import json
 import string
 import unicodedata
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
@@ -33,6 +35,8 @@ START: Final = "[CLS]"
 END: Final = "[SEP]"
 PREFIX: Final = "##"
 MAX_WORD_CHARS: Final = 100
+PAIR_FRAME: Final = 3
+"""``[CLS]`` and two ``[SEP]``: the tokens a pair adds around its texts."""
 _CJK: Final = (
     (0x4E00, 0x9FFF),
     (0x3400, 0x4DBF),
@@ -111,6 +115,14 @@ def words(text: str) -> list[str]:
     return found
 
 
+@dataclass(frozen=True, slots=True)
+class Pair:
+    """A pair's token ids and, per id, its text: 0 the first, 1 the second."""
+
+    ids: tuple[int, ...]
+    types: tuple[int, ...]
+
+
 class WordPiece:
     """A WordPiece vocabulary, and the rules that turn text into its ids."""
 
@@ -182,3 +194,48 @@ class WordPiece:
             if len(inner) >= room:
                 break
         return [self._vocabulary[START], *inner[:room], self._vocabulary[END]]
+
+    def pair(self, first: str, second: str, max_tokens: int) -> Pair:
+        """Return ``[CLS] first [SEP] second [SEP]``, as a cross-encoder reads a pair.
+
+        When the pair does not fit, pieces are cut from the end of the longer
+        text first, as the tokenizers library's ``LongestFirst`` does: the
+        shorter keeps all its pieces if that leaves the longer at least as
+        many, else each gets half the room, and an odd piece goes to the
+        second text unless the first is longer and the shorter text is
+        under ``max_tokens`` pieces. When both texts hold ``max_tokens``
+        pieces or more, tokenizers 0.23 gives an odd piece by how the pieces
+        group into words, so the cut can differ from its by that one piece;
+        a question far shorter than the limit never meets that case.
+
+        Raises:
+            ValueError: If ``max_tokens`` leaves no room inside the three
+                special tokens.
+        """
+        room = max_tokens - PAIR_FRAME
+        if room < 1:
+            message = f"max_tokens={max_tokens} leaves no room for a pair"
+            raise ValueError(message)
+        a, b = self._all_pieces(first), self._all_pieces(second)
+        keep_a, keep_b = _longest_first(len(a), len(b), room)
+        start, end = self._vocabulary[START], self._vocabulary[END]
+        head = [start, *a[:keep_a], end]
+        tail = [*b[:keep_b], end]
+        return Pair((*head, *tail), (0,) * len(head) + (1,) * len(tail))
+
+    def _all_pieces(self, text: str) -> list[int]:
+        return [id_ for word in words(normalized(text)) for id_ in self.pieces(word)]
+
+
+def _longest_first(first: int, second: int, room: int) -> tuple[int, int]:
+    if first + second <= room:
+        return first, second
+    shorter = min(first, second)
+    if shorter <= room - shorter:
+        less, more = shorter, room - shorter
+        return (less, more) if first <= second else (more, less)
+    less, more = room // 2, room // 2 + room % 2
+    # Measured against tokenizers 0.23, not taken from its documentation.
+    if first > second and shorter < room + PAIR_FRAME:
+        return more, less
+    return less, more

@@ -70,7 +70,11 @@ def bert_spec(vocabulary: dict[str, int], max_tokens: int) -> str:
         "post_processor": {
             "type": "TemplateProcessing",
             "single": wrapped,
-            "pair": wrapped,
+            "pair": [
+                *wrapped,
+                {"Sequence": {"id": "B", "type_id": 1}},
+                {"SpecialToken": {"id": END, "type_id": 1}},
+            ],
             "special_tokens": {START: special(START), END: special(END)},
         },
         "decoder": None,
@@ -114,6 +118,109 @@ def test_ids_are_the_ones_the_tokenizers_library_makes(tokenizer_file: Path) -> 
     texts = [made_up_text(rng) for _ in range(5000)]
 
     assert [ours.ids(t, 64) for t in texts] == [theirs.encode(t).ids for t in texts]
+
+
+def made_up_pairs(seed: int, count: int) -> list[tuple[str, str]]:
+    rng = random.Random(seed)
+    return [
+        (made_up_text(rng) * rng.randint(1, 3), made_up_text(rng) * rng.randint(1, 3))
+        for _ in range(count)
+    ]
+
+
+def lengths_decide(ours: WordPiece, a: str, b: str, max_tokens: int) -> bool:
+    """Whether the pair's cut follows from the two lengths alone.
+
+    Only when both texts are cut to half an odd room and neither is under
+    ``max_tokens`` pieces does tokenizers 0.23 hand the odd piece to one side
+    or the other by how the pieces group into words.
+    """
+    first, second, room = ours.count(a), ours.count(b), max_tokens - 3
+    halved = 2 * min(first, second) > room and first + second > room
+    return not halved or room % 2 == 0 or min(first, second) < max_tokens
+
+
+@pytest.mark.parametrize("max_tokens", [64, 16, 9])
+def test_pairs_are_the_ones_the_tokenizers_library_makes(
+    vocabulary: dict[str, int], max_tokens: int
+) -> None:
+    ours = WordPiece(vocabulary)
+    theirs = Tokenizer.from_str(bert_spec(vocabulary, max_tokens))
+    pairs = [
+        (a, b)
+        for a, b in made_up_pairs(max_tokens, 3000)
+        if lengths_decide(ours, a, b, max_tokens)
+    ]
+
+    ours_encoded = [ours.pair(a, b, max_tokens) for a, b in pairs]
+    theirs_encoded = [theirs.encode(a, b) for a, b in pairs]
+
+    assert len(pairs) > 1500
+    assert [(p.ids, p.types) for p in ours_encoded] == [
+        (tuple(e.ids), tuple(e.type_ids)) for e in theirs_encoded
+    ]
+
+
+@pytest.mark.parametrize("max_tokens", [16])
+def test_an_odd_piece_the_lengths_do_not_decide_moves_at_most_one_piece(
+    vocabulary: dict[str, int], max_tokens: int
+) -> None:
+    ours = WordPiece(vocabulary)
+    theirs = Tokenizer.from_str(bert_spec(vocabulary, max_tokens))
+    pairs = [
+        (a, b)
+        for a, b in made_up_pairs(max_tokens, 3000)
+        if not lengths_decide(ours, a, b, max_tokens)
+    ]
+
+    kept = [
+        (
+            ours.pair(a, b, max_tokens).types.count(0),
+            theirs.encode(a, b).type_ids.count(0),
+        )
+        for a, b in pairs
+    ]
+
+    assert len(pairs) > 100
+    assert all(abs(mine - library) <= 1 for mine, library in kept)
+    assert all(len(ours.pair(a, b, max_tokens).ids) == max_tokens for a, b in pairs)
+
+
+LETTERS = {t: i for i, t in enumerate((*SPECIALS, "a", "b"))}
+
+
+def test_a_pair_is_both_texts_between_the_special_tokens() -> None:
+    pair = WordPiece(LETTERS).pair("a", "b b", 64)
+    a, b, start, end = LETTERS["a"], LETTERS["b"], LETTERS[START], LETTERS[END]
+
+    assert pair.ids == (start, a, end, b, b, end)
+    assert pair.types == (0, 0, 0, 1, 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "room", "kept"),
+    [
+        (2, 9, 7, (2, 5)),
+        (9, 2, 7, (5, 2)),
+        (5, 5, 7, (3, 4)),
+        (6, 5, 7, (4, 3)),
+        (11, 10, 7, (3, 4)),
+        (4, 9, 6, (3, 3)),
+    ],
+)
+def test_a_pair_cuts_the_longer_text_first(
+    first: int, second: int, room: int, kept: tuple[int, int]
+) -> None:
+    pair = WordPiece(LETTERS).pair(
+        " ".join("a" * first), " ".join("b" * second), room + 3
+    )
+
+    assert (pair.ids.count(LETTERS["a"]), pair.ids.count(LETTERS["b"])) == kept
+
+
+def test_a_pair_needs_room_inside_its_three_special_tokens() -> None:
+    with pytest.raises(ValueError, match=r"^max_tokens=3 leaves no room"):
+        WordPiece(LETTERS).pair("a", "b", 3)
 
 
 def test_count_is_the_number_of_pieces_the_tokenizers_library_makes_uncut(
