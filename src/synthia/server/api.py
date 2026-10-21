@@ -462,13 +462,14 @@ class Served:
 
     async def _knowledge_search(self, params: Params) -> object:
         asked = checked(SearchParams, params)
+        knowledge = _needed(self._knowledge)
         try:
             variant = None if asked.variant is None else Variant.parse(asked.variant)
+            found = await knowledge.search(
+                asked.query, limit=asked.limit, variant=variant, private=True
+            )
         except VariantError as error:
             raise RpcError(INVALID_PARAMS, f"variant: {error}") from None
-        found = await _needed(self._knowledge).search(
-            asked.query, limit=asked.limit, variant=variant, private=True
-        )
         return {
             "passages": [passage_of(passage) for passage in found.passages],
             "withheld": found.withheld,

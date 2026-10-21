@@ -102,6 +102,7 @@ def test_the_rerankers_are_the_int8_and_fp32_files_of_one_model() -> None:
     assert int8.tokenizer == fp32.tokenizer
     assert int8.tokenizer.sha256 == EMBEDDERS[0].tokenizer.sha256
     assert (int8.max_tokens, int8.licence) == (512, "apache-2.0")
+    assert (int8.batch, fp32.batch) == (1, 16)
 
 
 def test_this_laptops_download_is_the_recorded_total() -> None:

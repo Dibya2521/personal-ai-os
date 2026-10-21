@@ -129,6 +129,11 @@ async def test_what_knowledge_or_the_params_refuse_is_an_error_with_its_code(
         variant = await refused(
             tmp_path, "knowledge_search", {"query": "cat", "variant": "loud"}
         )
+        unloaded = await refused(
+            tmp_path,
+            "knowledge_search",
+            {"query": "cat", "variant": "fused+rerank:ms-marco-minilm-l6-int8@10"},
+        )
         limit = await refused(
             tmp_path, "knowledge_search", {"query": "cat", "limit": 51}
         )
@@ -141,6 +146,8 @@ async def test_what_knowledge_or_the_params_refuse_is_an_error_with_its_code(
     assert "missing cannot be added" in str(missing)
     assert variant.code == INVALID_PARAMS
     assert str(variant).startswith("variant: 'loud' is not a variant")
+    assert unloaded.code == INVALID_PARAMS
+    assert str(unloaded).endswith("needs the reranker ms-marco-minilm-l6-int8")
     assert limit.code == INVALID_PARAMS
     assert str(limit).startswith("limit: ")
     assert [(e.code, str(e)) for e in relative] == 2 * [

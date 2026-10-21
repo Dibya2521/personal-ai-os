@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from synthia.knowledge.meaning import ChunkVectors
     from synthia.knowledge.model import Chunk, Document
     from synthia.knowledge.store import KnowledgeStore, Row
+    from synthia.retrieval.rerank import CrossEncoder
     from synthia.retrieval.vectors import Similarities
 
 CANDIDATES: Final = 50
@@ -55,7 +56,7 @@ MAX_HOPS: Final = 2
 
 
 class VariantError(ValueError):
-    """A variant name that does not parse."""
+    """A variant name that does not parse, or one needing a reranker not loaded."""
 
 
 @unique
@@ -71,6 +72,9 @@ _SIDES: Final = {side.name.lower(): side for side in Side}
 _FOLLOW: Final = "+hop"
 """Not a bare "+", which a weight such as 1e+16 holds."""
 _HOPS: Final = re.compile(r"(?P<hops>[0-9]+)x(?P<weight>.+)")
+_RERANK: Final = "+rerank:"
+_RERANKED: Final = re.compile(r"(?P<model>.+)@(?P<top>[0-9]+)")
+_RERANKER_ID: Final = re.compile(r"[a-z0-9][a-z0-9.-]*")
 
 
 def _checked_weight(label: str, weight: float) -> None:
@@ -80,15 +84,38 @@ def _checked_weight(label: str, weight: float) -> None:
 
 
 @dataclass(frozen=True, slots=True)
+class Rerank:
+    """Reorder the first ``top`` chunks with the reranker catalogued as ``model``.
+
+    Raises:
+        ValueError: If ``model`` is not a catalogue id (lower-case letters,
+            digits, dots and hyphens) or ``top`` is below 1.
+    """
+
+    model: str
+    top: int
+
+    def __post_init__(self) -> None:
+        if not _RERANKER_ID.fullmatch(self.model):
+            message = f"model={self.model!r} is not a reranker's catalogue id"
+            raise ValueError(message)
+        if self.top < 1:
+            message = f"top={self.top} is below 1"
+            raise ValueError(message)
+
+
+@dataclass(frozen=True, slots=True)
 class Variant:
     """One way to rank chunks, with a name a flag or a table can spell.
 
     Names are ``words``, ``meaning``, ``fused`` and ``fused:<weight>``: the
     weight as Python's shortest round-trip float, left out when it is
     :data:`WORD_WEIGHT`. Following links adds ``+hop<hops>x<link weight>``,
-    as in ``fused+hop1x0.3``. Only fused takes a word weight and only hops
-    take a link weight, so each variant has one name and :meth:`parse` reads
-    back exactly what :meth:`name` writes.
+    as in ``fused+hop1x0.3``. Reranking the first chunks adds
+    ``+rerank:<reranker>@<top>``, last, as in
+    ``fused+rerank:ms-marco-minilm-l6-int8@10``. Only fused takes a word
+    weight and only hops take a link weight, so each variant has one name and
+    :meth:`parse` reads back exactly what :meth:`name` writes.
 
     Raises:
         ValueError: If a weight is not finite or is below 0 (negative zero
@@ -101,6 +128,7 @@ class Variant:
     word_weight: float = WORD_WEIGHT
     hops: int = 0
     link_weight: float = 0.0
+    rerank: Rerank | None = None
 
     def __post_init__(self) -> None:
         _checked_weight("word_weight", self.word_weight)
@@ -123,6 +151,8 @@ class Variant:
             name += f":{float(self.word_weight)!r}"
         if self.hops:
             name += f"{_FOLLOW}{self.hops}x{float(self.link_weight)!r}"
+        if self.rerank is not None:
+            name += f"{_RERANK}{self.rerank.model}@{self.rerank.top}"
         return name
 
     @classmethod
@@ -133,7 +163,12 @@ class Variant:
             VariantError: If ``name`` is not a variant's name as :meth:`name`
                 writes it.
         """
-        ranking, plus, following = name.partition(_FOLLOW)
+        before, reranked, after = name.partition(_RERANK)
+        rerank = _RERANKED.fullmatch(after)
+        if reranked and rerank is None:
+            message = f"{name!r} is not a variant: rerank as +rerank:<reranker>@<top>"
+            raise VariantError(message)
+        ranking, plus, following = before.partition(_FOLLOW)
         label, colon, weight = ranking.partition(":")
         side = _SIDES.get(label)
         if side is None:
@@ -149,6 +184,7 @@ class Variant:
                 float(weight) if colon else WORD_WEIGHT,
                 int(hops["hops"]) if hops else 0,
                 float(hops["weight"]) if hops else 0.0,
+                Rerank(rerank["model"], int(rerank["top"])) if rerank else None,
             )
         except ValueError as error:
             message = f"{name!r} is not a variant: {error}"
@@ -223,10 +259,19 @@ def _shown(
 class Ranker:
     """Ranks a store's chunks for a query, as ``Knowledge.search`` asks."""
 
-    def __init__(self, store: KnowledgeStore, vectors: ChunkVectors) -> None:
-        """Rank ``store``'s chunks by their words and by ``vectors``."""
+    def __init__(
+        self,
+        store: KnowledgeStore,
+        vectors: ChunkVectors,
+        rerankers: Mapping[str, CrossEncoder] | None = None,
+    ) -> None:
+        """Rank ``store``'s chunks by their words and by ``vectors``.
+
+        ``rerankers`` are the loaded rerankers, by catalogue id.
+        """
         self._store = store
         self._vectors = vectors
+        self._rerankers = dict(rerankers or {})
 
     async def find(
         self, query: str, *, limit: int, variant: Variant, private: bool
@@ -236,13 +281,28 @@ class Ranker:
         A query with no word the full-text index can match finds nothing,
         whatever the variant. A chunk removed since it was scored is left
         out. With ``private`` False, private passages are left out and
-        counted in :attr:`Found.withheld`.
+        counted in :attr:`Found.withheld`. A reranked variant reorders the
+        first ``top`` chunks, private ones included, by the reranker's
+        scores, which then are their passages' scores.
+
+        Raises:
+            VariantError: If ``variant`` reranks with a reranker not loaded.
         """
+        encoder = None
+        if variant.rerank is not None:
+            encoder = self._rerankers.get(variant.rerank.model)
+            if encoder is None:
+                message = (
+                    f"{variant.name()!r} needs the reranker {variant.rerank.model}"
+                )
+                raise VariantError(message)
         if not match_expression(query):
             return Found((), 0)
         scores = await self._scores(query, variant, max(CANDIDATES, limit))
         ranked = sorted(scores, key=lambda chunk: (-scores[chunk], chunk))
         rows = await self._store.rows([ChunkId(chunk) for chunk in ranked])
+        if encoder is not None and variant.rerank is not None:
+            rows = await _reranked(query, rows, scores, encoder, variant.rerank.top)
         return _shown(rows, scores, limit=limit, private=private)
 
     async def _scores(
@@ -274,6 +334,29 @@ class Ranker:
             word_weight=variant.word_weight,
             count=count,
         )
+
+
+async def _reranked(
+    query: str,
+    rows: Sequence[Row],
+    scores: dict[int, float],
+    encoder: CrossEncoder,
+    top: int,
+) -> list[Row]:
+    """Return ``rows`` with the first ``top`` in the reranker's order.
+
+    Each reordered chunk's entry in ``scores`` becomes the reranker's score.
+    """
+    first = rows[:top]
+    judged = await encoder.rank(query, [_text(row.chunk) for row in first])
+    for row, score in zip(first, judged, strict=True):
+        scores[row.chunk.id] = score
+    order = sorted(range(len(first)), key=lambda i: (-judged[i], i))
+    return [first[i] for i in order] + list(rows[top:])
+
+
+def _text(chunk: Chunk) -> str:
+    return f"{chunk.header}\n{chunk.body}" if chunk.header else chunk.body
 
 
 def _similar(

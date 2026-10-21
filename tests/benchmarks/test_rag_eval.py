@@ -24,6 +24,7 @@ import pytest
 import rag_eval
 from rag_eval import (
     MAX_SET_BYTES,
+    RERANKED,
     VARIANTS,
     Measured,
     SetError,
@@ -46,10 +47,10 @@ from synthia.knowledge.evaluate import (
 )
 from synthia.knowledge.index import IndexReport
 from synthia.knowledge.retrieve import Variant
-from synthia.models.catalogue import DEFAULT_EMBEDDER, Embedder
+from synthia.models.catalogue import DEFAULT_EMBEDDER, RERANKERS, Embedder
 from synthia.retrieval.embed import TextEmbedder
 from tests.knowledge.corpus import NOTES, planted
-from tests.retrieval.toy import Network, embedder
+from tests.retrieval.toy import Judge, Network, embedder, reranker
 
 COMMIT = "0123456789abcdef0123456789abcdef01234567"  # pragma: allowlist secret
 QUESTIONS: list[dict[str, object]] = [
@@ -365,7 +366,7 @@ async def test_main_archives_the_commit_and_prints_the_chosen_rows(
         "--variant",
         "fused:0.4",
     ]
-    assert await main(argv, load=toy) == 0
+    assert await main(argv, load=toy, load_rerankers=dict) == 0
     header, index, *printed = [
         json.loads(line) for line in capsys.readouterr().out.splitlines()
     ]
@@ -383,6 +384,7 @@ async def test_main_archives_the_commit_and_prints_the_chosen_rows(
         "embedder": "tiny-embedder",
     }
     assert set(header) >= {"python", "numpy", "onnxruntime"}
+    assert header["rerankers"] == []
     assert [unspent(row) for row in printed] == [
         expected("words", "named", (1, 1, 1.0, 1.0, 1.0, 1.0, 1.0, 0.511, 3)),
         expected("words", "paraphrase", (1, 1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3)),
@@ -413,7 +415,7 @@ async def test_main_refuses_an_unknown_chunking(
     question_set.write_bytes(encoded(QUESTIONS))
     argv = ["--set", str(question_set), "--chunking", "sentences/32/40/r1"]
     with pytest.raises(SystemExit) as stopped:
-        await main(argv, load=toy)
+        await main(argv, load=toy, load_rerankers=dict)
     assert stopped.value.code == 2
     assert "unknown chunking ['sentences/32/40/r1']" in capsys.readouterr().err
 
@@ -434,3 +436,46 @@ def test_installed_embedder_loads_the_default_from_the_home(
     ((directory, spec),) = calls
     assert spec is DEFAULT_EMBEDDER
     assert directory.is_relative_to(tmp_path)
+
+
+async def test_main_refuses_a_reranked_variant_whose_reranker_is_not_installed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    question_set = tmp_path / "set.json"
+    question_set.write_bytes(encoded(QUESTIONS))
+    name = RERANKED[0].name()
+    argv = ["--set", str(question_set), "--variant", name]
+    with pytest.raises(SystemExit) as stopped:
+        await main(argv, load=toy, load_rerankers=dict)
+    assert stopped.value.code == 2
+    assert f"variant [{name!r}] needs a reranker" in capsys.readouterr().err
+
+
+def test_every_reranked_variant_names_a_catalogued_reranker() -> None:
+    ids = {spec.id for spec in RERANKERS}
+    assert all(v.rerank is not None and v.rerank.model in ids for v in RERANKED)
+
+
+async def test_evaluate_scores_a_reranked_variant_with_the_reranker_given(
+    tmp_path: Path,
+) -> None:
+    corpus = planted(tmp_path / "corpus", NOTES)
+    questions = parse_set(encoded(QUESTIONS)).questions
+    judge = reranker(Judge("kestrel"))
+    variant = Variant.parse("fused+rerank:ms-marco-minilm-l6-int8@10")
+
+    [measured] = [
+        m
+        async for m in evaluate(
+            corpus,
+            questions,
+            toy(),
+            headless()[:1],
+            [variant],
+            rerankers={"ms-marco-minilm-l6-int8": judge},
+        )
+    ]
+
+    named = measured.report.categories["named"].ranks
+    assert named is not None
+    assert (named.recall[1], named.ndcg) == (1.0, 1.0)

@@ -4,7 +4,9 @@ from dataclasses import replace
 
 import numpy as np
 
+from synthia.models.catalogue import RERANKERS
 from synthia.retrieval.embed import Feeds, TextEmbedder
+from synthia.retrieval.rerank import CrossEncoder
 from synthia.retrieval.wordpiece import WordPiece
 from tests.models.fakes import EMBEDDER
 from tests.retrieval.test_wordpiece import SPECIALS
@@ -72,3 +74,25 @@ class Network:
 def embedder(network: Network) -> TextEmbedder:
     spec = replace(EMBEDDER, dimensions=TABLE.shape[1], max_tokens=32)
     return TextEmbedder(spec, WordPiece(VOCABULARY), network, token_types=False)
+
+
+class Judge:
+    """A reranker network: a pair scores how often ``word`` is in its passage.
+
+    Records the shape of every batch it is given.
+    """
+
+    def __init__(self, word: str) -> None:
+        self.word = VOCABULARY[word]
+        self.batches: list[tuple[int, ...]] = []
+
+    def __call__(self, feeds: Feeds) -> np.ndarray:
+        ids, types = feeds["input_ids"], feeds["token_type_ids"]
+        self.batches.append(ids.shape)
+        hits = (ids == self.word) & (types == 1) & (feeds["attention_mask"] == 1)
+        return hits.sum(axis=1, keepdims=True).astype(np.float32)
+
+
+def reranker(judge: Judge, batch: int = 2) -> CrossEncoder:
+    spec = replace(RERANKERS[0], max_tokens=32, batch=batch)
+    return CrossEncoder(spec, WordPiece(VOCABULARY), judge)

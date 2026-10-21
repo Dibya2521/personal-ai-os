@@ -161,7 +161,8 @@ class Reranker:
 
     It reads ``[CLS] question [SEP] passage [SEP]`` through its WordPiece
     tokenizer and returns one number per pair, higher for a passage that
-    answers the question better.
+    answers the question better. ``batch`` is how many pairs run through the
+    network together, 1 where the score of a pair changes with its batch.
     """
 
     id: str
@@ -171,6 +172,7 @@ class Reranker:
     model: Download
     tokenizer: Download
     max_tokens: int
+    batch: int
 
     @property
     def files(self) -> tuple[Download, ...]:
@@ -465,6 +467,8 @@ RERANKERS: Final = (
         ),
         _MS_MARCO_TOKENIZER,
         max_tokens=512,
+        # Batched, a pair's score moved by up to 0.24 and the order changed.
+        batch=1,
     ),
     Reranker(
         "ms-marco-minilm-l6",
@@ -482,6 +486,7 @@ RERANKERS: Final = (
         ),
         _MS_MARCO_TOKENIZER,
         max_tokens=512,
+        batch=16,
     ),
 )
 ITEMS: Final[tuple[Item, ...]] = (*RUNTIMES, *MODELS, *EMBEDDERS, *RERANKERS)

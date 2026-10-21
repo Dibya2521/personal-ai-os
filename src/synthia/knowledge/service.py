@@ -24,7 +24,7 @@ from synthia.knowledge.retrieve import DEFAULT_VARIANT, Ranker
 from synthia.knowledge.store import KnowledgeStore
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Iterable, Sequence
+    from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
     from pathlib import Path
 
     from synthia.knowledge.index import IndexReport, Pause
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from synthia.knowledge.retrieve import Found, Passage, Variant
     from synthia.knowledge.store import LinkTarget
     from synthia.retrieval.embed import TextEmbedder
+    from synthia.retrieval.rerank import CrossEncoder
 
 SEARCH_LIMIT: Final = 6
 VAULT_MARKER: Final = ".obsidian"
@@ -104,29 +105,40 @@ class Knowledge:
     """The person's folders, indexed and searchable."""
 
     def __init__(
-        self, store: KnowledgeStore, indexer: Indexer, vectors: ChunkVectors
+        self,
+        store: KnowledgeStore,
+        indexer: Indexer,
+        vectors: ChunkVectors,
+        rerankers: Mapping[str, CrossEncoder] | None = None,
     ) -> None:
         """Serve ``store``, kept in step by ``indexer``, searched through ``vectors``.
 
-        :meth:`open` builds all three over one store.
+        :meth:`open` builds all three over one store. ``rerankers`` are the
+        loaded rerankers a variant may name, by catalogue id.
         """
         self._store = store
         self._indexer = indexer
         self._vectors = vectors
-        self._ranker = Ranker(store, vectors)
+        self._ranker = Ranker(store, vectors, rerankers)
         self._writing = asyncio.Lock()
         self._queued = 0
         self._steps = Unsplit()
 
     @classmethod
     async def open(
-        cls, path: Path, embedder: TextEmbedder, *, chunking: Chunking | None = None
+        cls,
+        path: Path,
+        embedder: TextEmbedder,
+        *,
+        chunking: Chunking | None = None,
+        rerankers: Mapping[str, CrossEncoder] | None = None,
     ) -> Self:
         """Open the index at ``path`` and hold the vectors it keeps from ``embedder``.
 
         ``embedder`` also counts the chunker's tokens. ``chunking`` defaults
         to :meth:`Chunking.for_embedder`; a document cut another way is read
-        again on the next pass.
+        again on the next pass. ``rerankers`` are the loaded rerankers a
+        variant may name, by catalogue id.
 
         Raises:
             sqlite3.DatabaseError: If the file is not the index, or a newer one.
@@ -137,7 +149,8 @@ class Knowledge:
         await vectors.load()
         if chunking is None:
             chunking = Chunking.for_embedder(embedder.spec)
-        return cls(store, Indexer(store, chunking, embedder, embedder), vectors)
+        indexer = Indexer(store, chunking, embedder, embedder)
+        return cls(store, indexer, vectors, rerankers)
 
     @property
     def write_waiting(self) -> bool:

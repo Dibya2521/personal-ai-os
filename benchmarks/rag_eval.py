@@ -15,7 +15,10 @@ header and with one. Each variant then searches that index for every
 question, 10 passages deep: words, meaning, and the fused score at the
 default word weight 0.2 and at 0.05, 0.1 (the earlier default) and 0.4,
 then the default following links from the best 5 passages: one hop at link
-weight 0.1 and 0.3, two hops at 0.3.
+weight 0.1 and 0.3, two hops at 0.3. With the ms-marco-MiniLM-L6-v2
+rerankers installed, also the default reranked: the first 10 and 20 by the
+8-bit file, the first 10 by the full-precision one, and one hop at 0.3 then
+the first 10 by the 8-bit file.
 
 Output is JSON lines: first a header (commit, questions per category, files
 in the corpus, embedder, python, numpy and onnxruntime versions), then per
@@ -52,12 +55,13 @@ from synthia.knowledge.chunk import Chunking, Splitter
 from synthia.knowledge.evaluate import Answerable, Gold, Report, scored
 from synthia.knowledge.retrieve import Variant
 from synthia.knowledge.service import Knowledge
-from synthia.models.catalogue import DEFAULT_EMBEDDER
+from synthia.models.catalogue import DEFAULT_EMBEDDER, RERANKERS
 from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.retrieval.embed import TextEmbedder
+from synthia.retrieval.rerank import CrossEncoder
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Iterable, Sequence
+    from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 
     from synthia.knowledge.evaluate import Means, Scored
     from synthia.knowledge.index import IndexReport
@@ -86,6 +90,16 @@ VARIANTS: Final = tuple(
         "fused+hop2x0.3",
     )
 )
+RERANKED: Final = tuple(
+    Variant.parse(name)
+    for name in (
+        "fused+rerank:ms-marco-minilm-l6-int8@10",
+        "fused+rerank:ms-marco-minilm-l6-int8@20",
+        "fused+rerank:ms-marco-minilm-l6@10",
+        "fused+hop1x0.3+rerank:ms-marco-minilm-l6-int8@10",
+    )
+)
+"""Scored only when their reranker is installed, which the header names."""
 
 type Category = Literal["named", "paraphrase", "code", "multi", "none"]
 UNANSWERABLE: Final[Category] = "none"
@@ -265,12 +279,14 @@ async def _searched(
     return tuple(results), tuple(ms)
 
 
-async def evaluate(
+async def evaluate(  # noqa: PLR0913 - the eval's whole configuration
     corpus: Path,
     questions: Sequence[Question],
     embedder: TextEmbedder,
     chunkings: Iterable[Chunking],
     variants: Sequence[Variant],
+    *,
+    rerankers: Mapping[str, CrossEncoder] | None = None,
 ) -> AsyncIterator[Measured]:
     """Yield, per chunking then variant, how its search scores on ``questions``.
 
@@ -280,7 +296,10 @@ async def evaluate(
     for chunking in chunkings:
         with tempfile.TemporaryDirectory() as home:
             knowledge = await Knowledge.open(
-                Path(home) / "knowledge.db", embedder, chunking=chunking
+                Path(home) / "knowledge.db",
+                embedder,
+                chunking=chunking,
+                rerankers=rerankers,
             )
             await knowledge.add(corpus)
             started = time.perf_counter()
@@ -449,6 +468,16 @@ def installed_embedder() -> TextEmbedder:
     return TextEmbedder.load(models.path_of(DEFAULT_EMBEDDER), DEFAULT_EMBEDDER)
 
 
+def installed_rerankers() -> dict[str, CrossEncoder]:
+    """Return every installed reranker, loaded, by catalogue id; blocking."""
+    models = Installer(default_home(), BYTES_PER_GB)
+    return {
+        spec.id: CrossEncoder.load(models.path_of(spec), spec)
+        for spec in RERANKERS
+        if models.installed(spec)
+    }
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Score knowledge search on the question set's commit."
@@ -470,7 +499,7 @@ def _parser() -> argparse.ArgumentParser:
         "--variant",
         action="append",
         default=[],
-        choices=[variant.name() for variant in VARIANTS],
+        choices=[variant.name() for variant in (*VARIANTS, *RERANKED)],
         help="score only this variant; repeatable",
     )
     return parser
@@ -483,7 +512,9 @@ def _chosen[T](
     return [item for item in every if not names or name(item) in names]
 
 
-def _header(question_set: QuestionSet, corpus: Path, spec: Embedder) -> str:
+def _header(
+    question_set: QuestionSet, corpus: Path, spec: Embedder, rerankers: Iterable[str]
+) -> str:
     files = sum(1 for path in corpus.rglob("*") if path.is_file())
     return json.dumps(
         {
@@ -491,6 +522,7 @@ def _header(question_set: QuestionSet, corpus: Path, spec: Embedder) -> str:
             "questions": Counter(q.category for q in question_set.questions),
             "corpus_files": files,
             "embedder": spec.id,
+            "rerankers": sorted(rerankers),
             "python": platform.python_version(),
             "numpy": version("numpy"),
             "onnxruntime": version("onnxruntime"),
@@ -516,10 +548,13 @@ async def main(
     argv: Sequence[str] | None = None,
     *,
     load: Callable[[], TextEmbedder] = installed_embedder,
+    load_rerankers: Callable[[], dict[str, CrossEncoder]] = installed_rerankers,
 ) -> int:
     """Print the header line, then one JSON line per chunking, variant and category.
 
-    ``load`` returns the embedder to index and search with.
+    ``load`` returns the embedder to index and search with, ``load_rerankers``
+    the rerankers by catalogue id; a reranked variant is scored only when its
+    reranker is loaded.
     """
     parser = _parser()
     arguments = parser.parse_args(argv)
@@ -532,16 +567,34 @@ async def main(
             f"unknown chunking {sorted(unknown)}: one of {[c.recipe() for c in known]}"
         )
     chosen = _chosen(known, arguments.chunking, Chunking.recipe)
-    variants = _chosen(VARIANTS, arguments.variant, Variant.name)
+    rerankers = await asyncio.to_thread(load_rerankers)
+    usable = [
+        v for v in RERANKED if v.rerank is not None and v.rerank.model in rerankers
+    ]
+    missing = set(arguments.variant) - {v.name() for v in (*VARIANTS, *usable)}
+    if missing:
+        parser.error(
+            f"variant {sorted(missing)} needs a reranker that is not installed"
+        )
+    variants = _chosen((*VARIANTS, *usable), arguments.variant, Variant.name)
     with tempfile.TemporaryDirectory() as scratch:
         corpus = await asyncio.to_thread(
             archived, arguments.repository, question_set.commit, Path(scratch)
         )
         await asyncio.to_thread(check_gold, corpus, question_set.questions)
-        header = await asyncio.to_thread(_header, question_set, corpus, embedder.spec)
+        header = await asyncio.to_thread(
+            _header, question_set, corpus, embedder.spec, rerankers
+        )
         print(header, flush=True)
         per_question = await _printed(
-            evaluate(corpus, question_set.questions, embedder, chosen, variants)
+            evaluate(
+                corpus,
+                question_set.questions,
+                embedder,
+                chosen,
+                variants,
+                rerankers=rerankers,
+            )
         )
     if arguments.per_question is not None:
         text = "".join(f"{line}\n" for line in per_question)

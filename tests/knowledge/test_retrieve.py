@@ -5,6 +5,8 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from synthia.knowledge.index import Indexer
+from synthia.knowledge.meaning import ChunkVectors
 from synthia.knowledge.model import (
     Chunk,
     ChunkId,
@@ -12,6 +14,7 @@ from synthia.knowledge.model import (
     DocumentId,
     DocumentKind,
     SourceId,
+    SourceKind,
 )
 from synthia.knowledge.retrieve import (
     CANDIDATES,
@@ -19,6 +22,7 @@ from synthia.knowledge.retrieve import (
     WORD_WEIGHT,
     Found,
     Passage,
+    Rerank,
     Side,
     Variant,
     VariantError,
@@ -28,6 +32,7 @@ from synthia.knowledge.store import KnowledgeStore
 from synthia.retrieval.fusion import word_scale
 from tests.knowledge.corpus import (
     CAT,
+    HEADLESS,
     KESTREL,
     KESTREL_BM25,
     NOTES,
@@ -42,6 +47,8 @@ from tests.knowledge.corpus import (
     planted,
     wired,
 )
+from tests.knowledge.test_store import draft, reading
+from tests.retrieval.toy import Judge, Network, embedder, reranker
 
 CAT_AT = "notes/cat.txt:1"
 SERVER_AT = "notes/server.txt:1"
@@ -80,6 +87,15 @@ async def notes(tmp_path: Path, db: Path) -> Knowledge:
             Variant(word_weight=1e16, hops=1, link_weight=1e16),
             "fused:1e+16+hop1x1e+16",
         ),
+        (
+            Variant(rerank=Rerank("ms-marco-minilm-l6-int8", 10)),
+            "fused+rerank:ms-marco-minilm-l6-int8@10",
+        ),
+        (
+            Variant(hops=1, link_weight=0.3, rerank=Rerank("m1.v2", 1)),
+            "fused+hop1x0.3+rerank:m1.v2@1",
+        ),
+        (Variant(Side.WORDS, rerank=Rerank("r", 50)), "words+rerank:r@50"),
     ],
 )
 def test_variant_name_and_parse_round_trip(variant: Variant, name: str) -> None:
@@ -121,6 +137,16 @@ def test_variant_name_and_parse_round_trip(variant: Variant, name: str) -> None:
         "fused:0.2+hop1x0.3",
         "words:0.1+hop1x0.3",
         "fused+hop1x 0.3",
+        "fused+rerank:",
+        "fused+rerank:m",
+        "fused+rerank:@10",
+        "fused+rerank:M@10",
+        "fused+rerank:-m@10",
+        "fused+rerank:m@0",
+        "fused+rerank:m@01",
+        "fused+rerank:m@10+hop1x0.3",
+        "fused+rerank:m@10+rerank:m@10",
+        "fused+rerank:m b@10",
     ],
 )
 def test_variant_parse_refuses_a_name_it_would_not_write(name: str) -> None:
@@ -505,3 +531,119 @@ async def test_a_linked_chunk_beyond_the_candidates_is_scored_by_its_own_meaning
     assert SERVER_MD not in alone
     own = cosine((0.0, 0.0, 1.0, 0.0, 0.1), SERVER)
     assert hops[SERVER_MD] == pytest.approx(own + 0.5 * alone[GUIDE])
+
+
+@pytest.mark.parametrize(
+    ("model", "top", "message"),
+    [
+        ("", 10, r"^model='' is not a reranker's catalogue id$"),
+        ("Model", 10, r"^model='Model' is not"),
+        ("m", 0, r"^top=0 is below 1$"),
+    ],
+)
+def test_a_rerank_refuses_what_it_cannot_run(
+    model: str, top: int, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        Rerank(model, top)
+
+
+async def reranking(tmp_path: Path, db: Path, judge: Judge) -> Knowledge:
+    knowledge = await Knowledge.open(
+        db,
+        embedder(Network()),
+        chunking=HEADLESS,
+        rerankers={"judge": reranker(judge)},
+    )
+    await knowledge.add(planted(tmp_path / "notes", NOTES))
+    await knowledge.index()
+    return knowledge
+
+
+async def test_a_reranker_reorders_the_first_passages_and_gives_their_scores(
+    tmp_path: Path, db: Path
+) -> None:
+    knowledge = await reranking(tmp_path, db, Judge("kestrel"))
+    fused = await knowledge.search("pet kestrel", limit=3)
+    variant = Variant(rerank=Rerank("judge", 2))
+
+    found = await knowledge.search("pet kestrel", limit=3, variant=variant)
+
+    assert citations(fused) == [CAT_AT, SERVER_AT, SISTER_AT]
+    assert citations(found) == [SERVER_AT, CAT_AT, SISTER_AT]
+    assert [p.score for p in found.passages] == [1.0, 0.0, fused.passages[2].score]
+
+
+async def test_a_reranker_keeps_the_order_of_ties(tmp_path: Path, db: Path) -> None:
+    knowledge = await reranking(tmp_path, db, Judge("osprey"))
+    variant = Variant(rerank=Rerank("judge", 3))
+
+    found = await knowledge.search("pet kestrel", limit=3, variant=variant)
+
+    assert citations(found) == [CAT_AT, SERVER_AT, SISTER_AT]
+    assert [p.score for p in found.passages] == [0.0, 0.0, 0.0]
+
+
+async def test_a_variant_naming_a_reranker_not_loaded_is_refused(
+    notes: Knowledge,
+) -> None:
+    variant = Variant(rerank=Rerank("ms-marco-minilm-l6-int8", 10))
+
+    with pytest.raises(
+        VariantError, match="needs the reranker ms-marco-minilm-l6-int8"
+    ):
+        await notes.search("pet", variant=variant)
+
+
+async def test_a_reranker_reads_a_chunks_header_with_its_body(db: Path) -> None:
+    store = KnowledgeStore(db)
+    source = await store.put_source(
+        Path("D:/notes"), "notes", SourceKind.FILES, private=False, excludes=()
+    )
+    await store.replace_document(reading(source.id, "a.md", draft(0, "the cat")))
+    await store.replace_document(
+        reading(source.id, "b.md", draft(0, "my cat", header="kestrel"))
+    )
+    model = embedder(Network())
+    knowledge = Knowledge(
+        store,
+        Indexer(store, HEADLESS, model, model),
+        ChunkVectors(store, model),
+        {"judge": reranker(Judge("kestrel"))},
+    )
+    words = Variant(Side.WORDS)
+
+    plain = await knowledge.search("cat", variant=words)
+    found = await knowledge.search(
+        "cat", variant=Variant(Side.WORDS, rerank=Rerank("judge", 2))
+    )
+
+    assert citations(plain)[0] == "notes/a.md:1"
+    assert citations(found) == ["notes/b.md:1", "notes/a.md:1"]
+
+
+async def test_a_reranked_search_withholds_private_passages_it_reorders(
+    tmp_path: Path, db: Path
+) -> None:
+    knowledge = await Knowledge.open(
+        db,
+        embedder(Network()),
+        chunking=HEADLESS,
+        rerankers={"judge": reranker(Judge("kestrel"))},
+    )
+    await knowledge.add(planted(tmp_path / "notes", NOTES))
+    await knowledge.add(
+        planted(tmp_path / "diary", {"bird.txt": "kestrel kestrel osprey\n"}),
+        private=True,
+    )
+    await knowledge.index()
+    variant = Variant(rerank=Rerank("judge", 4))
+
+    found = await knowledge.search(
+        "pet kestrel", limit=2, variant=variant, private=False
+    )
+    everything = await knowledge.search("pet kestrel", limit=2, variant=variant)
+
+    assert citations(everything) == ["diary/bird.txt:1", SERVER_AT]
+    assert citations(found) == [SERVER_AT, CAT_AT]
+    assert found.withheld == 1
