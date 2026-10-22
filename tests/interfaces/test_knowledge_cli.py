@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -9,10 +10,14 @@ from synthia.interfaces import cli, doctor
 from synthia.interfaces.cli import app
 from synthia.kernel.config import Settings
 from synthia.kernel.jsonrpc import Params
+from synthia.knowledge.deep import NO_REWRITES
 from synthia.server.api import NOT_INDEXING
+from tests.agent.scripted import says
 from tests.interfaces.daemons import private_daemon, toy_embedder
 from tests.interfaces.test_chat import KEY
 from tests.knowledge.corpus import NOTES, planted
+from tests.server.test_confinement import Serving
+from tests.server.test_daemon import Local
 
 runner = CliRunner()
 FAIL = doctor.Status.FAIL
@@ -114,6 +119,48 @@ def test_a_long_passage_shows_its_first_lines_with_control_characters_escaped(
     ]
     assert lines[9:] == ["    ... 2 more lines"]
     assert "\x1b" not in shown
+
+
+def deep_searched(home: Path, *replies: str) -> tuple[int, str, str]:
+    model = Local(*(says(text) for text in replies))
+    with private_daemon(keyed(home), local=Serving(model), embedder=toy_embedder):
+        knowledge("add", "notes")
+        knowledge("index")
+        return knowledge("search", "kestrel", "--variant", "words", "--deep")
+
+
+SECONDS = r"\d+\.\d s asking the local model, \d+\.\d\d s searching"
+
+
+@pytest.mark.parametrize(
+    ("queries", "passage", "said"),
+    [
+        (["miso", "pune"], "a cat", "2 rewrites and a drafted passage"),
+        (["miso"], "", "1 rewrite and no drafted passage"),
+        ([], "a cat", "no rewrites and a drafted passage"),
+    ],
+)
+def test_a_deep_search_says_what_the_model_wrote_before_the_passages(
+    home: Path, queries: list[str], passage: str, said: str
+) -> None:
+    reply = json.dumps({"queries": queries, "passage": passage})
+
+    code, shown, error = deep_searched(home, reply)
+
+    lines = shown.splitlines()
+    assert (code, error) == (0, "")
+    assert re.fullmatch(f"deep: {said}, {SECONDS}", lines[0])
+    assert re.fullmatch(r"notes/\w+\.txt:1 \| score \d+\.\d{3}", lines[1])
+
+
+def test_a_deep_search_that_fell_back_says_so(home: Path) -> None:
+    code, shown, _ = deep_searched(home, "no", "still no", "never")
+
+    lines = shown.splitlines()
+    assert code == 0
+    assert re.fullmatch(f"deep: nothing usable written, {SECONDS}", lines[0])
+    assert lines[1] == NO_REWRITES
+    assert lines[2].startswith("notes/server.txt:1 | score ")
 
 
 @pytest.mark.parametrize(

@@ -59,9 +59,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from synthia.agent.tools import Tool
+    from synthia.gateway.assemble import Gateway
     from synthia.gateway.protocol import LocalChatModel
     from synthia.gateway.providers import RemoteProvider
-    from synthia.gateway.router import Router
     from synthia.kernel.config import Settings
     from synthia.kernel.supervisor import ServiceEvent
     from synthia.knowledge.service import Knowledge
@@ -163,9 +163,10 @@ def _started(local: LocalModels | None, trace: Trace) -> Callable[[], str]:
 
 
 def _searching(
-    memory: Recall | None, knowledge: Knowledge | None, router: Router
+    memory: Recall | None, knowledge: Knowledge | None, gateway: Gateway
 ) -> tuple[Tool, ...]:
     """Return the tools that search memory and the person's files, those open."""
+    router = gateway.router
 
     def can_stay_local() -> bool:
         return router.can_stay_local
@@ -176,7 +177,11 @@ def _searching(
     knowledge_tools = (
         ()
         if knowledge is None
-        else (knowledge_tool(knowledge, can_stay_local=can_stay_local),)
+        else (
+            knowledge_tool(
+                knowledge, can_stay_local=can_stay_local, model=gateway.model
+            ),
+        )
     )
     return (*memory_tools, *knowledge_tools)
 
@@ -222,7 +227,7 @@ async def run_daemon(  # noqa: PLR0913 - every outside part is injected for test
             if knowledge is None
             else Reindexing(knowledge, activity, report=partial(traced_index, trace))
         )
-        searching = _searching(memory, knowledge, gateway.router)
+        searching = _searching(memory, knowledge, gateway)
         tools, servers = await start_tools(settings, warn, transport, searching)
         local_state = _started(local, trace)
         try:

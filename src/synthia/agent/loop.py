@@ -126,6 +126,15 @@ class Finished:
 type Step = ModelChunk | ModelTurn | ToolStarted | ToolFinished | Finished
 
 
+def failure(call: ToolCall, error: Exception) -> str:
+    """Return the result the model is given for ``call`` raising ``error``.
+
+    For an error the tool did not mean for the model; a :class:`ToolError`'s
+    own message is the result instead.
+    """
+    return f"{call.name} failed: {type(error).__name__}"
+
+
 class Agent:
     """Runs a request to its answer, calling tools from ``toolbox`` on the way.
 
@@ -271,7 +280,7 @@ class Agent:
                 )
             except Exception as error:
                 logger.exception("tool %s failed", call.name)
-                result = f"{call.name} failed: {type(error).__name__}"
+                result = failure(call, error)
         return ToolFinished(call, result, ok, self._clock() - started, flags(result))
 
     async def _refusal(self, tool: Tool, arguments: str) -> str | None:

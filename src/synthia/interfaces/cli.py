@@ -52,7 +52,7 @@ from synthia.server.upkeep import INDEX_IDLE_S
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from synthia.interfaces.daemon_client import FoundPassage, KnownSource
+    from synthia.interfaces.daemon_client import Expanded, FoundPassage, KnownSource
     from synthia.kernel.jsonrpc import Params
     from synthia.knowledge.index import IndexReport
     from synthia.models.catalogue import Item, Model
@@ -374,14 +374,30 @@ def knowledge_search(
             "best 5 passages. Default: fused."
         ),
     ] = None,
+    deep: Annotated[
+        bool,
+        typer.Option(
+            help="First have the local model rewrite the question in the words "
+            "files likely use and draft a passage that answers it, and search "
+            "for those too: about 35 s on a laptop CPU."
+        ),
+    ] = False,
 ) -> None:
     """Find the passages of the folders read that best answer a question.
 
     Each shows where it is (name/path:start-end), its score and its first
     lines. Private folders are searched too: this is your own terminal.
+    A deep search waits for the local model as long as it takes (up to
+    136 s measured on a laptop CPU); Ctrl+C stops it.
     """
     params: Params = {"query": question, "limit": limit, "variant": variant}
+    if deep:
+        params["deep"] = True
     found = searched_from(_ask_knowledge("knowledge_search", params))
+    if found.deep is not None:
+        typer.echo(_deep_line(found.deep))
+        if found.deep.note is not None:
+            typer.echo(found.deep.note)
     if not found.passages:
         typer.echo("nothing found")
     for number, passage in enumerate(found.passages):
@@ -409,6 +425,17 @@ def _source_line(source: KnownSource) -> str:
     if source.excludes:
         line += f" | leaves out {', '.join(source.excludes)}"
     return visible(line)
+
+
+def _deep_line(deep: Expanded) -> str:
+    count = len(deep.queries)
+    rewrites = {0: "no rewrites", 1: "1 rewrite"}.get(count, f"{count} rewrites")
+    drafted = "no drafted passage" if deep.passage is None else "a drafted passage"
+    written = f"{rewrites} and {drafted}" if deep.written else "nothing usable written"
+    return (
+        f"deep: {written}, {deep.expand_s:.1f} s asking the local model, "
+        f"{deep.search_s:.2f} s searching"
+    )
 
 
 def _index_line(report: IndexReport) -> str:

@@ -82,9 +82,16 @@ class Talk(Protocol):
         ...
 
     def turn(
-        self, text: str, *, images: tuple[Path, ...] = (), plan: bool = False
+        self,
+        text: str,
+        *,
+        images: tuple[Path, ...] = (),
+        plan: bool = False,
+        deep: bool = False,
     ) -> AsyncGenerator[TurnItem]:
         """Yield the answer as it streams, tool calls, plan marks, then the report.
+
+        With ``deep`` the person's files are first searched deep for ``text``.
 
         Raises:
             ImageError: If an image cannot be sent, when the call is made or
@@ -164,7 +171,12 @@ class Conversation:
         return self.session.persona.name
 
     def turn(
-        self, text: str, *, images: tuple[Path, ...] = (), plan: bool = False
+        self,
+        text: str,
+        *,
+        images: tuple[Path, ...] = (),
+        plan: bool = False,
+        deep: bool = False,
     ) -> AsyncGenerator[TurnItem]:
         """Yield the answer as it streams, tool calls, plan marks, then the report.
 
@@ -172,7 +184,7 @@ class Conversation:
             ImageError: If an image is missing, of the wrong kind or too large.
         """
         loaded = [load_image(path) for path in images]
-        return self.session.turn(text, *loaded, plan=plan)
+        return self.session.turn(text, *loaded, plan=plan, deep=deep)
 
     async def think(self, level: Reasoning | None) -> Reply:
         """Set how much each answer may think, or with None say what it is."""

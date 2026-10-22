@@ -13,20 +13,25 @@ searched alike and their rankings merged by
 best score over them.
 
 It costs a generation on the local model, tens of seconds on a CPU, so it
-runs only when the person asks for it and is never the default. The model is
-handed in directly, never the router, and the request does not allow the
-remote model: the question never leaves the machine.
+runs only when the person asks for it and is never the default. The request
+goes to the gateway's model, the router, so it is routed and traced like any
+other, and it does not allow the remote model: the router sends it to the
+local model, or refuses it when none is installed. The question never leaves
+the machine. A reply that never fits :class:`Rewrites` leaves the plain
+search, which the result says.
 """
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Final, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from synthia.gateway.structured import generate
+from synthia.gateway.errors import LocalUnavailableError
+from synthia.gateway.structured import StructuredOutputError, generate
 from synthia.gateway.types import ChatRequest, Message, Reasoning
 from synthia.knowledge.retrieve import Merge
 from synthia.knowledge.service import SEARCH_LIMIT
@@ -34,10 +39,21 @@ from synthia.knowledge.service import SEARCH_LIMIT
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from synthia.gateway.protocol import LocalChatModel
+    from synthia.gateway.protocol import ChatModel
     from synthia.knowledge.retrieve import Found, Variant
     from synthia.knowledge.service import Knowledge
 
+logger = logging.getLogger(__name__)
+
+# The router's own message suggests the remote model, which deep search
+# never uses; a request with no tools and no images is refused only for this.
+NO_LOCAL_MODEL: Final = (
+    "no local model is installed to write the rewrites: "
+    "install one with `synthia models install`"
+)
+NO_REWRITES: Final = (
+    "the local model wrote no valid rewrites, so these are the plain search's passages"
+)
 MAX_QUERIES: Final = 3
 MAX_QUERY_CHARS: Final = 200
 MAX_PASSAGE_CHARS: Final = 1200
@@ -132,31 +148,40 @@ def expansion_request(question: str) -> ChatRequest:
     )
 
 
-async def expand(model: LocalChatModel, question: str) -> Expansion:
+async def expand(model: ChatModel, question: str) -> Expansion:
     """Return the queries and the passage ``model`` writes for ``question``.
 
     Raises:
         StructuredOutputError: If the model's replies never match
             :class:`Rewrites`, each shown back with its errors to repair.
-        GatewayError: Whatever the model raised.
+        LocalUnavailableError: If ``model`` is the router and no local model
+            is installed, saying :data:`NO_LOCAL_MODEL`.
+        GatewayError: Whatever else the model raised.
     """
-    reply = await generate(model, expansion_request(question), Rewrites)
+    try:
+        reply = await generate(model, expansion_request(question), Rewrites)
+    except LocalUnavailableError as error:
+        raise LocalUnavailableError(NO_LOCAL_MODEL) from error
     return Expansion.of(question, reply)
 
 
 @dataclass(frozen=True, slots=True)
 class Deep:
-    """A deep search's passages, what the model added, and where the time went."""
+    """A deep search's passages, what the model added, and where the time went.
+
+    ``expansion`` is None when the model never wrote valid rewrites: the
+    passages are then the plain search's.
+    """
 
     found: Found
-    expansion: Expansion
+    expansion: Expansion | None
     expand_s: float
     search_s: float
 
 
 async def deep_search(  # noqa: PLR0913 - a search's whole request, and its clock
     knowledge: Knowledge,
-    model: LocalChatModel,
+    model: ChatModel,
     question: str,
     *,
     limit: int = SEARCH_LIMIT,
@@ -168,23 +193,29 @@ async def deep_search(  # noqa: PLR0913 - a search's whole request, and its cloc
     """Search ``knowledge`` for ``question`` and for what ``model`` expands it to.
 
     ``limit``, ``variant`` and ``private`` are as :meth:`Knowledge.search`
-    takes them; ``merge`` joins the rankings.
+    takes them; ``merge`` joins the rankings. ``variant`` is checked before
+    the model is asked, so a wrong one costs no generation.
 
     Raises:
-        StructuredOutputError: As :func:`expand` does.
-        GatewayError: Whatever the model raised.
+        LocalUnavailableError: As :func:`expand` does.
+        GatewayError: Whatever else the model raised.
         ValueError: If ``limit`` is below 1.
         VariantError: If ``variant`` reranks with a reranker not loaded.
     """
+    knowledge.check_variant(variant)
     started = clock()
-    expansion = await expand(model, question)
+    try:
+        expansion = await expand(model, question)
+    except StructuredOutputError:
+        logger.warning("deep search fell back to the plain search: no valid rewrites")
+        expansion = None
     expanded = clock()
     found = await knowledge.search(
         question,
         limit=limit,
         variant=variant,
         private=private,
-        also=expansion.also(),
+        also=() if expansion is None else expansion.also(),
         merge=merge,
     )
     return Deep(found, expansion, expanded - started, clock() - expanded)

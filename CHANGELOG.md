@@ -8,6 +8,21 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- Deep search, only when the person asks for it: `synthia knowledge search
+  "<question>" --deep` and `/deep <question>` in `synthia chat`. The local
+  model rewrites the question as up to 3 search queries in the words files
+  likely use and drafts a short passage that answers it; the question, the
+  rewrites and the passage are searched alike, each passage keeping its best
+  score. It runs on the local model only, so the question never leaves the
+  machine, and a generation costs about 35 s per search on a laptop CPU
+  (up to 136 s measured), so it is never the default and the chat model
+  cannot start it. On 61 questions about this repository it raised nDCG@10
+  from 0.461 to 0.486 overall, and by 0.08 on questions that name an
+  identifier. `--deep` prints a line with what the model wrote and the
+  seconds spent before the passages; `/deep` runs that search first, shown
+  as a `search_knowledge` call the model made, and the model may search again
+  before it answers. A model reply that never parses falls back to the plain
+  search and says so.
 - The chat model can search the person's folders added with
   `synthia knowledge add`: `search_knowledge` returns up to 6 passages, each
   under its citation (`name/path:start-end`) with the titles of the documents

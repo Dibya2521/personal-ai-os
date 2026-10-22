@@ -20,7 +20,7 @@ voice come later. Why it is built this way is in
 | `synthia knowledge remove <folder>` | Stops reading a folder and forgets everything read from it. |
 | `synthia knowledge list` | Shows each folder read: its name, kind (`files` or `vault`), whether it is private, where it is, and what it leaves out. |
 | `synthia knowledge index` | Reads every folder now: new and changed files are read, deleted ones forgotten. Prints the counts in one line and names any folder that could not be listed (what was read from it before is kept). Exits 2 when the pass failed; Ctrl+C stops it and keeps what was read so far. |
-| `synthia knowledge search "<question>"` | Prints the passages that best answer it, each with where it is (`name/path:start-end`), its score, `(private)` when it comes from a private folder, and its first 8 lines, control characters shown escaped. `--limit` (1 to 50, default 6) and `--variant` (`words`, `meaning`, `fused`, `fused:<word weight>`, each optionally followed by `+hop1x<weight>` or `+hop2x<weight>` to follow the links of the best 5 passages one or two steps) change what is found. |
+| `synthia knowledge search "<question>"` | Prints the passages that best answer it, each with where it is (`name/path:start-end`), its score, `(private)` when it comes from a private folder, and its first 8 lines, control characters shown escaped. `--limit` (1 to 50, default 6) and `--variant` (`words`, `meaning`, `fused`, `fused:<word weight>`, each optionally followed by `+hop1x<weight>` or `+hop2x<weight>` to follow the links of the best 5 passages one or two steps) change what is found. `--deep` first has the local model rewrite the question in the words files likely use and draft a passage that answers it, searches for those too, and prints a line with how many it wrote and the seconds spent: about 35 s on a laptop CPU, so it is never the default. |
 
 Each `synthia knowledge` command goes through the daemon, starting it if it
 is not running, so one process writes the index. Without an embedding model
@@ -70,7 +70,7 @@ Messages are JSON-RPC 2.0, one per WebSocket text frame.
 | Method | Params | Result |
 | --- | --- | --- |
 | `hello` | `{}` | `version`, `persona`, `sessions` (conversations open, this one included), `warnings` from start-up |
-| `turn` | `text`, `plan` (bool), `images` (file paths) | the report: `route`, `model`, `prompt_tokens`, `completion_tokens`, `seconds`, `reasoning`, `confined` (true once the conversation holds private text: it stays on this machine until `reset`), `sources` (the citations, `name/path:start-end`, of the passages of the person's files that `search_knowledge` showed in the turn, in the order first shown, each once; `synthia chat` lists them in a dim line under the answer) |
+| `turn` | `text`, `plan` (bool), `deep` (bool: first run one deep `search_knowledge` for `text`, as `/deep` does; a conversation with no knowledge index fails with `-32001`), `images` (file paths) | the report: `route`, `model`, `prompt_tokens`, `completion_tokens`, `seconds`, `reasoning`, `confined` (true once the conversation holds private text: it stays on this machine until `reset`), `sources` (the citations, `name/path:start-end`, of the passages of the person's files that `search_knowledge` showed in the turn, in the order first shown, each once; `synthia chat` lists them in a dim line under the answer) |
 | `think` | `level`: `off`, `low`, `medium`, `high`, `auto`, or null to ask | a reply |
 | `remote` | `on`: true, false, or null to ask | a reply; in a conversation that holds private text, the choice is kept but the reply says remote stays off, with the reason, until `reset` |
 | `private` | `on`: true (stop remembering this conversation), false, or null to ask | a reply |
@@ -88,7 +88,7 @@ Messages are JSON-RPC 2.0, one per WebSocket text frame.
 | `knowledge_remove` | `root` | `removed`: false when no source has that folder |
 | `knowledge_sources` | `{}` | `sources`, each as `knowledge_add` returns it, in the order added |
 | `knowledge_index` | `{}` | after the pass, which does not wait for turns: `added`, `changed`, `unchanged`, `removed`, `unreadable`, `held_back`, `passed_over`, `chunks`, `cut`, `embedded`, `unavailable` (sources whose folder could not be listed), `seconds`, and `error` null; or `error` alone, saying why the pass failed |
-| `knowledge_search` | `query`, `limit` (1 to 50, default 6), `variant` (null for the default) | `passages` best first, each `citation` (`name/path:start-end`), `title`, `header`, `body`, `score`, `private`; and `withheld`. Private folders are searched too: the client is the person's own terminal. |
+| `knowledge_search` | `query`, `limit` (1 to 50, default 6), `variant` (null for the default), `deep` (bool, default false) | `passages` best first, each `citation` (`name/path:start-end`), `title`, `header`, `body`, `score`, `private`; and `withheld`. Private folders are searched too: the client is the person's own terminal. With `deep` also `expansion` (`queries` and `passage`, what the local model wrote), `seconds` (`expand`, `search`) and `note`; a model reply that never parsed gives the plain search with `expansion` null and a `note` saying so, and no local model is `-32001`. |
 | `stop` | `{}` | `{}`, then the daemon stops |
 
 A reply is `{"notes": [...], "errors": [...]}`: lines to show.
@@ -116,7 +116,7 @@ To stop a turn, the client sends `notifications/cancelled` with the turn's
 | --- | --- |
 | `-32601` | No such method. |
 | `-32602` | The params do not fit; the message names the field. |
-| `-32001` | The answer failed; the message says why. |
+| `-32001` | The answer failed, or a deep search's local model could not write its rewrites; the message says why. |
 | `-32002` | An image could not be sent; the message names the file. |
 | `-32003` | `consolidate` on a daemon that learns no facts: it needs a local model and an embedding model. |
 | `-32004` | A `knowledge_` method on a daemon with no knowledge index: it needs an embedding model. |

@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import dataclasses
+import json
 import logging
+import secrets
 import time
 from contextlib import aclosing
 from dataclasses import dataclass, field
@@ -24,10 +27,13 @@ from synthia.agent.loop import (
     ModelChunk,
     ModelTurn,
     ToolFinished,
+    ToolStarted,
+    failure,
 )
 from synthia.agent.plan import PlanAnswerBegun, Planned, Planner, PlanStepBegun
 from synthia.agent.policy import Policy, nobody_approves
-from synthia.agent.tools import Toolbox
+from synthia.agent.quoting import flags, quote
+from synthia.agent.tools import Toolbox, ToolError
 from synthia.agent.trace import utc_now
 from synthia.gateway.confinement import CONFINEMENT, Confinement
 from synthia.gateway.errors import GatewayError, IncompleteResponseError
@@ -39,8 +45,9 @@ from synthia.gateway.types import (
     ImagePart,
     Message,
     Reasoning,
+    ToolCall,
 )
-from synthia.knowledge.tool import CITED
+from synthia.knowledge.tool import CITED, DEEP, SEARCH_KNOWLEDGE
 from synthia.memory.store import ToolUse, Turn
 from synthia.memory.window import ContextWindow, message_chars, tools_chars
 
@@ -50,6 +57,7 @@ if TYPE_CHECKING:
 
     from synthia.agent.plan import PlanEvent
     from synthia.agent.policy import Approver
+    from synthia.agent.tools import Tool
     from synthia.agent.trace import Trace
     from synthia.gateway.protocol import ChatModel
     from synthia.kernel.bus import Event
@@ -77,6 +85,11 @@ DEFAULT_REASONING: Final = Reasoning.AUTO
 # chooses; a long local answer at 2 threads can pass the agent's 5 minutes.
 CHAT_LIMITS: Final = Limits(deadline_s=None)
 PINNED_TOKENS: Final = 1000
+NO_KNOWLEDGE_INDEX: Final = (
+    "this chat has no knowledge index to search deep: it needs an embedding "
+    "model; install one with `synthia models install`"
+)
+DEEP_CALL_ID_BYTES: Final = 8
 
 type PlanMark = Planned | PlanStepBegun | PlanAnswerBegun
 """Where a planned turn is: the plan made, a step begun, the answer begun."""
@@ -86,6 +99,14 @@ type TurnItem = ChatChunk | ToolFinished | PlanMark | TurnReport
 
 class ImageError(ValueError):
     """An image cannot be sent: missing, too large, or not a known type."""
+
+
+class NoKnowledgeError(GatewayError):
+    """A deep turn was asked of a chat that has no knowledge to search.
+
+    A gateway error, so every client shows it as the turn's failure, as it
+    shows a model that cannot answer; no model was asked.
+    """
 
 
 def load_image(path: Path) -> ImagePart:
@@ -346,13 +367,18 @@ class ChatSession:
         return Message.system(prompt)
 
     async def turn(
-        self, text: str, *images: ImagePart, plan: bool = False
+        self, text: str, *images: ImagePart, plan: bool = False, deep: bool = False
     ) -> AsyncGenerator[TurnItem]:
         """Yield the answer as it streams and each tool call as it ends, then a report.
 
         The turn runs as an agent over :attr:`tools`; with none, it is one
         request, as it always was. With ``plan`` it runs as a plan of steps,
         and the plan, each step's start and the answer's start are yielded too.
+        With ``deep`` it first runs ``search_knowledge`` deep for ``text``,
+        through the tool's own code, and puts the call and its result in the
+        request as if the model had made it; the model may search again,
+        plainly. That call has no time limit, as the chat has none: a
+        generation on a laptop CPU took up to 136 s.
         Earlier conversations close to ``text`` go before it in the request,
         never into the history: after the turn the history holds ``text``
         alone, so old reminders do not fill the window, and a server that
@@ -363,18 +389,22 @@ class ChatSession:
         :attr:`turning` is true until the turn ends, however it ends.
 
         Raises:
+            NoKnowledgeError: If ``deep`` and there is no knowledge to search.
             GatewayError: If the answer failed; the history is unchanged.
         """
+        searching = self._deep_search() if deep else None
         self._turns += 1
         try:
-            async with aclosing(self._turn(text, *images, plan=plan)) as items:
+            async with aclosing(
+                self._turn(text, *images, plan=plan, searching=searching)
+            ) as items:
                 async for item in items:
                     yield item
         finally:
             self._turns -= 1
 
     async def _turn(
-        self, text: str, *images: ImagePart, plan: bool
+        self, text: str, *images: ImagePart, plan: bool, searching: Tool | None
     ) -> AsyncGenerator[TurnItem]:
         # A generator's body runs in the context of the task iterating it, so
         # this holds for the whole turn and every request made in it.
@@ -388,7 +418,9 @@ class ChatSession:
         asked_at = utc_now()
         before = len(self.history)
         try:
-            async with aclosing(self._run(request, text, plan=plan)) as steps:
+            async with aclosing(
+                self._run(request, text, plan=plan, searching=searching)
+            ) as steps:
                 async for step in steps:
                     if (shown := taken.take(step)) is not None:
                         yield shown
@@ -403,7 +435,9 @@ class ChatSession:
         self.history[before] = Message.user(text, *images)
         self._starts.append(before)
         report = self._report(request, taken, self._clock() - started)
-        if not plan:
+        # The first model step of a deep turn also read the search's result,
+        # which ``request`` does not hold.
+        if not plan and searching is None:
             self._learn(request, taken.answers)
         self._summarize_leaving()
         await self._remember(
@@ -463,8 +497,19 @@ class ChatSession:
         except GatewayError:
             logger.warning("the turns that left the window were not summarised")
 
+    def _deep_search(self) -> Tool:
+        tool = self.tools.get(SEARCH_KNOWLEDGE)
+        if tool is None:
+            raise NoKnowledgeError(NO_KNOWLEDGE_INDEX)
+        return tool
+
     def _run(
-        self, request: ChatRequest, text: str, *, plan: bool
+        self,
+        request: ChatRequest,
+        text: str,
+        *,
+        plan: bool,
+        searching: Tool | None,
     ) -> AsyncGenerator[PlanEvent]:
         agent = Agent(
             self._model,
@@ -473,13 +518,67 @@ class ChatSession:
             policy=self.policy,
             approver=self._approver,
         )
-        run = Planner(agent).run(request) if plan else agent.run(request)
+
+        def answer(asked: ChatRequest) -> AsyncGenerator[PlanEvent]:
+            return Planner(agent).run(asked) if plan else agent.run(asked)
+
+        run = (
+            answer(request)
+            if searching is None
+            else self._searched_first(searching, request, text, answer)
+        )
         if self._trace is None:
             return run
         self._trace.begin(
             text, self.persona.name, self.reasoning, use_remote=self.may_leave
         )
         return self._trace.watch(run, lambda: self.routes.decision)
+
+    async def _searched_first(
+        self,
+        tool: Tool,
+        request: ChatRequest,
+        question: str,
+        answer: Callable[[ChatRequest], AsyncGenerator[PlanEvent]],
+    ) -> AsyncGenerator[PlanEvent]:
+        """Run ``tool`` deep for ``question``, as if the model had, then ``answer``.
+
+        Any other error of the search becomes its result, as in the agent, and
+        the model answers with it.
+
+        Raises:
+            GatewayError: What the search or the answer raised.
+        """
+        call = ToolCall(
+            f"deep{secrets.token_hex(DEEP_CALL_ID_BYTES)}",
+            tool.spec.name,
+            json.dumps({"query": question}),
+        )
+        yield ToolStarted(call)
+        started = self._clock()
+        deep = DEEP.set(True)
+        try:
+            result, ok = await tool.run(call.arguments), True
+        except GatewayError:
+            raise
+        except ToolError as error:
+            result, ok = str(error), False
+        except Exception as error:
+            logger.exception("tool %s failed", call.name)
+            result, ok = failure(call, error), False
+        finally:
+            DEEP.reset(deep)
+        yield ToolFinished(
+            call, result, ok=ok, seconds=self._clock() - started, flags=flags(result)
+        )
+        searched = (
+            Message.assistant("", call),
+            Message.tool_result(call.id, quote(call.name, result)),
+        )
+        asked = dataclasses.replace(request, messages=(*request.messages, *searched))
+        async with aclosing(answer(asked)) as steps:
+            async for step in steps:
+                yield step
 
     def _report(
         self, request: ChatRequest, taken: _Taken, seconds: float

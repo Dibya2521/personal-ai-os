@@ -25,6 +25,7 @@ from synthia.interfaces.commands import (
     HELP,
     AdjustPersona,
     Command,
+    Deep,
     Exit,
     Forget,
     ForgetAbout,
@@ -350,6 +351,8 @@ class ChatApp[T: Talk]:
                     await self._answer(text)
             case Plan(task=task):
                 await self._answer(task, plan=True)
+            case Deep(question=question):
+                await self._answer(question, deep=True)
             case ShowImage(path=path, text=text):
                 await self._answer(text, images=(path,))
             case ShowBudget():
@@ -430,12 +433,17 @@ class ChatApp[T: Talk]:
         self._note("stopped; that turn is not kept")
 
     async def _answer(
-        self, text: str, *, images: tuple[Path, ...] = (), plan: bool = False
+        self,
+        text: str,
+        *,
+        images: tuple[Path, ...] = (),
+        plan: bool = False,
+        deep: bool = False,
     ) -> None:
         shown = AnswerLines(self.console)
         try:
             with ThinkingLine(self.console, self._clock) as thinking:
-                turn = self.conversation.turn(text, images=images, plan=plan)
+                turn = self.conversation.turn(text, images=images, plan=plan, deep=deep)
                 report = await _shown(turn, thinking, shown)
         except ImageError as error:
             shown.end_line()

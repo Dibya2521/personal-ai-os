@@ -1,6 +1,8 @@
 import asyncio
+import json
 from collections.abc import AsyncGenerator
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -21,9 +23,11 @@ from synthia.interfaces.daemon_client import (
 )
 from synthia.kernel.config import Settings
 from synthia.kernel.jsonrpc import RpcError
+from synthia.knowledge.deep import NO_LOCAL_MODEL, NO_REWRITES
 from synthia.knowledge.model import SourceKind
 from synthia.persona.library import PersonaLibrary
 from synthia.server.api import (
+    ANSWER_FAILED,
     INVALID_PARAMS,
     KNOWLEDGE_REFUSED,
     NO_KNOWLEDGE,
@@ -36,6 +40,7 @@ from tests.agent.scripted import says
 from tests.interfaces.daemons import private_daemon, toy_embedder
 from tests.interfaces.test_chat import KEY
 from tests.knowledge.corpus import NOTES, planted
+from tests.server.test_confinement import Serving
 from tests.server.test_daemon import Local, client, written
 from tests.timing import HANG_TIMEOUT_S
 
@@ -153,6 +158,81 @@ async def test_what_knowledge_or_the_params_refuse_is_an_error_with_its_code(
     assert [(e.code, str(e)) for e in relative] == 2 * [
         (INVALID_PARAMS, "root: Value error, must be an absolute path")
     ]
+
+
+async def indexed_daemon_search(
+    home: Path, notes: Path, model: Local | None, params: dict[str, object]
+) -> dict[str, object]:
+    """Index ``notes`` in a daemon whose local model is ``model``, then search."""
+    local = None if model is None else Serving(model)
+    with private_daemon(keyed(home), local=local, embedder=toy_embedder):
+        await ask_daemon(home, "knowledge_add", {"root": str(notes)})
+        await ask_daemon(home, "knowledge_index", {})
+        result = await ask_daemon(home, "knowledge_search", params)
+    return cast("dict[str, object]", result)
+
+
+async def test_a_deep_search_says_what_the_local_model_added_and_its_seconds(
+    tmp_path: Path, notes: Path
+) -> None:
+    model = Local(says(json.dumps({"queries": ["miso"], "passage": "a cat"})))
+    asked: dict[str, object] = {"query": "kestrel", "variant": "words", "deep": True}
+
+    result = await indexed_daemon_search(tmp_path, notes, model, asked)
+
+    assert result["expansion"] == {"queries": ["miso"], "passage": "a cat"}
+    seconds = cast("dict[str, float]", result["seconds"])
+    assert sorted(seconds) == ["expand", "search"]
+    assert min(seconds.values()) >= 0
+    assert result["note"] is None
+    found = searched_from(result)
+    assert sorted(p.citation for p in found.passages) == [
+        "notes/cat.txt:1",
+        "notes/server.txt:1",
+    ]
+    (request,) = model.requests
+    assert (request.use_remote, request.messages[-1].text) == (False, "kestrel")
+
+
+async def test_a_deep_search_with_no_valid_rewrites_is_the_plain_one_with_a_note(
+    tmp_path: Path, notes: Path
+) -> None:
+    model = Local(says("no"), says("still no"), says("never"))
+    asked: dict[str, object] = {"query": "kestrel", "variant": "words", "deep": True}
+
+    result = await indexed_daemon_search(tmp_path, notes, model, asked)
+
+    assert (result["expansion"], result["note"]) == (None, NO_REWRITES)
+    assert [p.citation for p in searched_from(result).passages] == [
+        "notes/server.txt:1"
+    ]
+    assert len(model.requests) == 3
+
+
+@pytest.mark.parametrize("variant", ["loud", "fused+rerank:ms-marco-minilm-l6-int8@10"])
+async def test_a_bad_variant_is_refused_before_the_local_model_is_asked(
+    tmp_path: Path, variant: str
+) -> None:
+    model = Local()
+    asked: dict[str, object] = {"query": "kestrel", "variant": variant, "deep": True}
+    with private_daemon(keyed(tmp_path), local=Serving(model), embedder=toy_embedder):
+        error = await refused(tmp_path, "knowledge_search", asked)
+
+    assert error.code == INVALID_PARAMS
+    assert str(error).startswith("variant: ")
+    assert model.requests == []
+
+
+async def test_a_deep_search_with_no_local_model_is_refused(
+    tmp_path: Path, notes: Path
+) -> None:
+    with pytest.raises(RpcError) as raised:
+        await indexed_daemon_search(
+            tmp_path, notes, None, {"query": "kestrel", "deep": True}
+        )
+
+    assert raised.value.code == ANSWER_FAILED
+    assert str(raised.value) == f"deep search failed: {NO_LOCAL_MODEL}"
 
 
 async def test_a_daemon_without_an_embedding_model_has_no_knowledge(

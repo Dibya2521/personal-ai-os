@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from synthia.gateway.errors import LocalUnavailableError
+from synthia.gateway.router import Remote, Route, Router, RouteReason
 from synthia.gateway.structured import StructuredOutputError, schema_of
 from synthia.gateway.types import (
     ChatChunk,
@@ -20,14 +22,17 @@ from synthia.knowledge.deep import (
     MAX_PASSAGE_CHARS,
     MAX_QUERIES,
     MAX_QUERY_CHARS,
+    NO_LOCAL_MODEL,
     Expansion,
     Rewrites,
     deep_search,
     expand,
     expansion_request,
 )
-from synthia.knowledge.retrieve import Merge, Side, Variant
+from synthia.knowledge.retrieve import Merge, Side, Variant, VariantError
 from synthia.knowledge.service import Knowledge
+from tests.agent.scripted import Scripted
+from tests.gateway.test_router import Setup
 from tests.knowledge.corpus import NOTES, citations, opened, planted
 
 INFO = ModelInfo("local", 4096, vision=False, tools=True)
@@ -276,3 +281,57 @@ async def test_deep_search_withholds_what_its_rewrites_find_in_private_files(
     assert not any(passage.private for passage in hidden.found.passages)
     assert "diary/pet.txt:1" in citations(shown.found)
     assert shown.found.withheld == 0
+
+
+async def test_deep_search_with_no_valid_rewrites_is_the_plain_search(
+    notes: Knowledge,
+) -> None:
+    model = Local("no", "still no", "never")
+
+    deep = await deep_search(notes, model, "kestrel", private=False)
+
+    assert deep.expansion is None
+    assert deep.found == await notes.search("kestrel", private=False)
+    assert len(model.requests) == 3
+
+
+async def test_a_variant_that_cannot_rank_is_refused_before_the_model_is_asked(
+    notes: Knowledge,
+) -> None:
+    model = Local()
+    unloaded = Variant.parse("fused+rerank:ms-marco-minilm-l6-int8@10")
+
+    with pytest.raises(VariantError, match="needs the reranker"):
+        await deep_search(notes, model, "kestrel", variant=unloaded)
+
+    assert model.requests == []
+
+
+async def test_through_the_router_deep_search_never_asks_the_remote(
+    notes: Knowledge, tmp_path: Path
+) -> None:
+    setup = Setup(tmp_path)
+    local, remote = Local(reply(["pet"])), Scripted()
+    router = Router(local, Remote(remote, setup.health), setup.publish)
+
+    deep = await deep_search(notes, router, "kestrel", private=False)
+
+    assert deep.expansion == Expansion(("pet",), "The kestrel is fed daily.")
+    assert (len(local.requests), remote.requests) == (1, [])
+    assert [route[:2] for route in setup.routes()] == [
+        (Route.LOCAL, RouteReason.LOCAL_FIRST)
+    ]
+
+
+async def test_with_no_local_model_deep_search_is_refused_not_sent_out(
+    notes: Knowledge, tmp_path: Path
+) -> None:
+    setup = Setup(tmp_path)
+    remote = Scripted()
+    router = Router(None, Remote(remote, setup.health), setup.publish)
+
+    with pytest.raises(LocalUnavailableError) as refused:
+        await deep_search(notes, router, "kestrel")
+
+    assert str(refused.value) == NO_LOCAL_MODEL
+    assert remote.requests == []

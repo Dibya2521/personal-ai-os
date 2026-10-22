@@ -5,8 +5,10 @@ import pytest
 from synthia.gateway.types import Reasoning
 from synthia.interfaces.commands import (
     DEFAULT_IMAGE_QUESTION,
+    HELP,
     AdjustPersona,
     Command,
+    Deep,
     Exit,
     Forget,
     ForgetAbout,
@@ -65,6 +67,7 @@ from synthia.interfaces.commands import (
         ("/forget fact 12", ForgetFact(12)),
         ("/forget about  my sister asha ", ForgetAbout("my sister asha")),
         ("/plan find a, then use it ", Plan("find a, then use it")),
+        ("/deep  who feeds the kestrel? ", Deep("who feeds the kestrel?")),
     ],
 )
 def test_each_command_parses(line: str, command: Command) -> None:
@@ -98,6 +101,8 @@ def test_each_command_parses(line: str, command: Command) -> None:
         ("/facts now", "/facts takes no arguments"),
         ("/plan", "/plan needs a task"),
         ("/plan    ", "/plan needs a task"),
+        ("/deep", "/deep needs a question"),
+        ("/deep   ", "/deep needs a question"),
     ],
 )
 def test_mistakes_say_what_is_wrong(line: str, reason: str) -> None:
@@ -105,3 +110,10 @@ def test_mistakes_say_what_is_wrong(line: str, reason: str) -> None:
 
     assert isinstance(result, Invalid)
     assert reason in result.reason
+
+
+def test_help_says_deep_search_is_slow_and_asked_for() -> None:
+    (line,) = [line for line in HELP.splitlines() if line.startswith("/deep ")]
+
+    assert line.index("search") == HELP.splitlines()[0].index("plan the task")
+    assert "35 s" in line

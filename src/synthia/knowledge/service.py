@@ -280,6 +280,14 @@ class Knowledge:
             query, limit=limit, variant=chosen, private=private, also=also, merge=merge
         )
 
+    def check_variant(self, variant: Variant | None) -> None:
+        """Raise if :meth:`search` would refuse ``variant``, None being the default.
+
+        Raises:
+            VariantError: If ``variant`` reranks with a reranker not loaded.
+        """
+        self._ranker.reranker(DEFAULT_VARIANT if variant is None else variant)
+
     async def links(
         self, passages: Iterable[Passage]
     ) -> dict[ChunkId, tuple[LinkTarget, ...]]:

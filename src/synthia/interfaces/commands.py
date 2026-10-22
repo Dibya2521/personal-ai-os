@@ -33,6 +33,13 @@ class Plan:
 
 
 @dataclass(frozen=True, slots=True)
+class Deep:
+    """Search the person's files deep for ``question`` first, then answer it."""
+
+    question: str
+
+
+@dataclass(frozen=True, slots=True)
 class SwitchPersona:
     """Continue as the persona ``key``; an empty key lists the personas."""
 
@@ -139,6 +146,7 @@ class Invalid:
 type Command = (
     Say
     | Plan
+    | Deep
     | SwitchPersona
     | AdjustPersona
     | ShowImage
@@ -162,6 +170,7 @@ DEFAULT_IMAGE_QUESTION: Final = "What is in this image?"
 
 HELP: Final = """\
 /plan <task>               plan the task in steps, do each step, then answer
+/deep <question>           search your files deep first, then answer: about 35 s
 /persona [name]            switch persona, or list them
 /persona set wit=0.3 ...   move sliders: warmth formality wit vigilance verbosity
 /image <path> [question]   send an image; quote a path that has spaces
@@ -271,6 +280,10 @@ def _plan(rest: str) -> Command:
     return Plan(rest) if rest else Invalid("/plan needs a task")
 
 
+def _deep(rest: str) -> Command:
+    return Deep(rest) if rest else Invalid("/deep needs a question")
+
+
 def _forget(rest: str) -> Command:
     if not rest:
         return Forget()
@@ -292,6 +305,7 @@ def _forget(rest: str) -> Command:
 
 _WITH_ARGUMENTS: Final[dict[str, Callable[[str], Command]]] = {
     "plan": _plan,
+    "deep": _deep,
     "persona": _persona,
     "image": _image,
     "think": _think,

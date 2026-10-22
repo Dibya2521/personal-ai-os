@@ -316,6 +316,20 @@ class Ranker:
         self._vectors = vectors
         self._rerankers = dict(rerankers or {})
 
+    def reranker(self, variant: Variant) -> CrossEncoder | None:
+        """Return the loaded reranker ``variant`` reorders with; None if it does not.
+
+        Raises:
+            VariantError: If ``variant`` reranks with a reranker not loaded.
+        """
+        if variant.rerank is None:
+            return None
+        encoder = self._rerankers.get(variant.rerank.model)
+        if encoder is None:
+            message = f"{variant.name()!r} needs the reranker {variant.rerank.model}"
+            raise VariantError(message)
+        return encoder
+
     async def find(  # noqa: PLR0913 - one search's whole request
         self,
         query: str,
@@ -346,14 +360,7 @@ class Ranker:
         Raises:
             VariantError: If ``variant`` reranks with a reranker not loaded.
         """
-        encoder = None
-        if variant.rerank is not None:
-            encoder = self._rerankers.get(variant.rerank.model)
-            if encoder is None:
-                message = (
-                    f"{variant.name()!r} needs the reranker {variant.rerank.model}"
-                )
-                raise VariantError(message)
+        encoder = self.reranker(variant)
         if not match_expression(query):
             return Found((), 0)
         count = max(CANDIDATES, limit)

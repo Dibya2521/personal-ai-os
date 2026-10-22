@@ -12,14 +12,19 @@ import pytest
 
 from synthia.agent.tools import Effect, Reach
 from synthia.gateway.confinement import CONFINEMENT, Confinement
+from synthia.gateway.types import ToolSpec
 from synthia.knowledge.chunk import Chunking
+from synthia.knowledge.deep import NO_REWRITES
 from synthia.knowledge.service import Knowledge
 from synthia.knowledge.tool import (
     CITED,
+    DEEP,
     MAX_BODY_CHARS,
     NOTHING_FOUND,
+    SEARCH_KNOWLEDGE,
     knowledge_tool,
 )
+from tests.agent.scripted import Scripted, says
 from tests.knowledge.corpus import planted
 from tests.retrieval.toy import Network, embedder
 
@@ -71,26 +76,125 @@ def shown(found: str) -> list[str]:
 
 
 async def searched(
-    knowledge: Knowledge, *, can_stay_local: bool = True, query: str = "kestrel"
+    knowledge: Knowledge,
+    *,
+    can_stay_local: bool = True,
+    query: str = "kestrel",
+    model: Scripted | None = None,
 ) -> str:
+    """Search as the model does; a model with no reply fails the test if asked."""
     tool = knowledge_tool(
-        knowledge, can_stay_local=stays_local if can_stay_local else cannot_stay_local
+        knowledge,
+        can_stay_local=stays_local if can_stay_local else cannot_stay_local,
+        model=model or Scripted(),
     )
     return await tool.run(json.dumps({"query": query}))
+
+
+async def deeply(
+    knowledge: Knowledge, model: Scripted, *, can_stay_local: bool = True
+) -> str:
+    """Search deep, as the session does for ``/deep``."""
+    deep = DEEP.set(True)
+    try:
+        return await searched(knowledge, can_stay_local=can_stay_local, model=model)
+    finally:
+        DEEP.reset(deep)
+
+
+def rewritten(*queries: str, passage: str = "") -> Scripted:
+    return Scripted(says(json.dumps({"queries": queries, "passage": passage})))
 
 
 async def test_the_tool_reads_without_asking_and_says_how_to_use_it(
     knowledge: Knowledge,
 ) -> None:
-    tool = knowledge_tool(knowledge, can_stay_local=stays_local)
+    tool = knowledge_tool(knowledge, can_stay_local=stays_local, model=Scripted())
 
     assert (tool.spec.name, tool.reach, tool.effect) == (
-        "search_knowledge",
+        SEARCH_KNOWLEDGE,
         Reach.LOCAL,
         Effect.READ,
     )
     assert "citations you used under your answer" in tool.spec.description
     assert "search for one of those titles" in tool.spec.description
+
+
+async def test_what_the_model_sees_of_the_tool_has_no_way_to_ask_for_deep(
+    knowledge: Knowledge,
+) -> None:
+    tool = knowledge_tool(knowledge, can_stay_local=stays_local, model=Scripted())
+
+    assert tool.spec == ToolSpec(
+        "search_knowledge",
+        "Search the person's own files (notes, documents and code) for passages "
+        "that answer a question about their projects, notes or code. Each passage "
+        "comes under its citation in square brackets: name the citations you used "
+        "under your answer. A passage may end with the titles of documents it "
+        "links to; search for one of those titles to follow the link.",
+        {
+            "additionalProperties": False,
+            "properties": {
+                "query": {
+                    "description": "what to look for, in any words",
+                    "minLength": 1,
+                    "type": "string",
+                }
+            },
+            "required": ["query"],
+            "type": "object",
+        },
+    )
+
+
+async def test_a_deep_search_asks_the_local_model_once_and_shows_what_it_finds(
+    tmp_path: Path,
+) -> None:
+    knowledge = await knowing(tmp_path, private=False)
+    model = rewritten("sister pune", passage="my sister lives in pune city")
+
+    found = await deeply(knowledge, model)
+
+    (request,) = model.requests
+    assert (request.use_remote, request.messages[-1].text) == (False, "kestrel")
+    expected = await knowledge.search(
+        "kestrel", also=("sister pune", "my sister lives in pune city")
+    )
+    assert shown(found) == [passage.citation() for passage in expected.passages]
+
+
+async def test_a_deep_search_over_a_private_file_confines_the_chat(
+    knowledge: Knowledge,
+) -> None:
+    latch = Confinement()
+    CONFINEMENT.set(latch)
+
+    found = await deeply(knowledge, rewritten("door code"))
+
+    assert DOOR in shown(found)
+    assert latch.reason == CONFINED
+
+
+async def test_a_deep_search_in_a_chat_that_cannot_stay_local_withholds_private(
+    knowledge: Knowledge,
+) -> None:
+    latch = Confinement()
+    CONFINEMENT.set(latch)
+
+    found = await deeply(knowledge, rewritten("door code"), can_stay_local=False)
+
+    assert found.endswith(f"\n\n{ONE_WITHHELD}")
+    assert not latch.confined
+
+
+async def test_a_deep_search_with_no_valid_rewrites_says_it_searched_plainly(
+    knowledge: Knowledge,
+) -> None:
+    model = Scripted(says("no"), says("still no"), says("never"))
+
+    found = await deeply(knowledge, model)
+
+    assert found == f"{await searched(knowledge)}\n\n{NO_REWRITES}"
 
 
 async def test_a_chat_that_can_stay_local_reads_private_text_and_is_confined(

@@ -124,7 +124,7 @@ at most make the model ask.
 | `read_file` | local, read | no | inside `SYNTHIA_FILE_ROOTS` only; text only (binary refused); 20,000 characters |
 | `list_files` | local, read | no | inside `SYNTHIA_FILE_ROOTS` only; 50 entries by default, at most 500 |
 | `run_python` | local, change | every call | 30 s, 20,000 characters of code, 20,000 bytes of output |
-| `search_knowledge` | local, read | no | only when the knowledge index is open; the folders added with `synthia knowledge add`; 6 passages, each under its citation, body cut at 2,400 characters; a private passage only in a chat a local model with tools can answer, which then stays on this machine until `/reset` |
+| `search_knowledge` | local, read | no | only when the knowledge index is open; the folders added with `synthia knowledge add`; 6 passages, each under its citation, body cut at 2,400 characters; a private passage only in a chat a local model with tools can answer, which then stays on this machine until `/reset`; deep only for `/deep <question>`, which runs one search for the question before the model's first step, with the local model's rewrites of it and a drafted passage searched too (about 35 s on a laptop CPU), and the model can never ask for it |
 | `fetch_url` | outside, read | every call | http and https only; 2,000,000 bytes, 20 s, 5 redirects; text only |
 | `ask_claude`, `ask_gemini` | outside, change | every call | only when installed; 10 minutes; task 8,000 characters; answer 20,000 bytes |
 | `<server>__<tool>` | outside, change unless `mcp.toml` says otherwise | every call | 60 s per call; result 20,000 characters |

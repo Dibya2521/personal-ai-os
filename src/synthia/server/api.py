@@ -10,11 +10,14 @@ Methods, client to daemon:
 - ``hello`` {} returns the daemon's ``version``, the conversation's ``persona``
   how many ``sessions`` the daemon holds, and the ``warnings`` it had at start
   (an MCP server that did not start, a broken ``mcp.toml``).
-- ``turn`` {``text``, ``plan``, ``images``: paths} returns the turn's report,
-  after notifications ``chunk``, ``tool`` and ``plan``; its ``confined`` says
-  the conversation holds private text, so it stays on this machine until
-  ``reset``. An answer that failed is error ``-32001`` with the reason, an
-  image that cannot be sent ``-32002``.
+- ``turn`` {``text``, ``plan``, ``deep``, ``images``: paths} returns the turn's
+  report, after notifications ``chunk``, ``tool`` and ``plan``; its
+  ``confined`` says the conversation holds private text, so it stays on this
+  machine until ``reset``. With ``deep`` the person's files are first
+  searched deep for ``text``, a ``search_knowledge`` call the model then
+  reads as its own. An answer that failed is error ``-32001`` with the
+  reason (a deep turn with no knowledge index or no local model included),
+  an image that cannot be sent ``-32002``.
 - ``think`` {``level``}, ``remote`` {``on``}, ``private`` {``on``}, ``persona``
   {``key``}, ``adjust`` {``values``}, ``budget``, ``model``, ``tools``,
   ``reset``, ``forget``, ``facts``, ``forget_fact`` {``fact``: its number},
@@ -40,12 +43,18 @@ Methods, client to daemon:
   ``chunks``, ``cut``, ``embedded``), ``unavailable`` sources, ``seconds``
   and ``error`` null; a pass that failed returns ``error`` alone.
 - ``knowledge_search`` {``query``, ``limit``: 1 to 50, default 6,
-  ``variant``} returns ``passages`` best first, each with its ``citation``
-  (``source/path:start-end``), ``title``, ``header``, ``body``, ``score``
-  and ``private``, and ``withheld``. Private sources are searched: the
-  client is the person's own. A daemon with no embedding model has no
-  index and answers each of these with error ``-32004``; a folder knowledge
-  refuses is error ``-32005`` with the reason.
+  ``variant``, ``deep``} returns ``passages`` best first, each with its
+  ``citation`` (``source/path:start-end``), ``title``, ``header``, ``body``,
+  ``score`` and ``private``, and ``withheld``. Private sources are searched:
+  the client is the person's own. With ``deep`` the local model first
+  rewrites the query (:mod:`synthia.knowledge.deep`), and the result also
+  holds ``expansion`` {``queries``, ``passage``}, ``seconds`` {``expand``,
+  ``search``} and ``note``; a model whose reply never parses leaves the
+  plain search, ``expansion`` null and a ``note`` saying so. A variant is
+  checked before the model is asked; a model that cannot answer, none
+  installed included, is error ``-32001``. A daemon with no embedding model
+  has no index and answers each of these with error ``-32004``; a folder
+  knowledge refuses is error ``-32005`` with the reason.
 - ``stop`` {} stops the daemon.
 
 Request, daemon to client: ``approve`` {``tool``, ``arguments``, ``confined``}
@@ -70,6 +79,7 @@ from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
 from synthia.gateway.errors import GatewayError
 from synthia.gateway.types import Reasoning
 from synthia.kernel.jsonrpc import ConnectionClosedError, Peer, RpcError
+from synthia.knowledge.deep import NO_REWRITES, deep_search
 from synthia.knowledge.retrieve import Variant, VariantError
 from synthia.knowledge.service import SEARCH_LIMIT, KnowledgeError
 from synthia.server.host import CURRENT_ROUTES
@@ -81,8 +91,9 @@ if TYPE_CHECKING:
     from synthia.agent.tools import Tool
     from synthia.gateway.types import ChatChunk
     from synthia.kernel.jsonrpc import Method, Params
+    from synthia.knowledge.deep import Deep
     from synthia.knowledge.model import Source
-    from synthia.knowledge.retrieve import Passage
+    from synthia.knowledge.retrieve import Found, Passage
     from synthia.server.conversation import Reply
     from synthia.server.host import Host
     from synthia.server.session import PlanMark
@@ -112,10 +123,11 @@ class _Params(BaseModel):
 
 
 class TurnParams(_Params):
-    """A turn: what was said, whether to plan it, and image files to show."""
+    """A turn: what was said, whether to plan it or search deep first, and images."""
 
     text: str = Field(min_length=1)
     plan: bool = False
+    deep: bool = False
     images: tuple[Path, ...] = ()
 
 
@@ -189,11 +201,12 @@ class RootParams(_Params):
 
 
 class SearchParams(_Params):
-    """A question, how many passages to return, and the ranking by name."""
+    """A question, how many passages to return, the ranking by name, and how deep."""
 
     query: str = Field(min_length=1)
     limit: int = Field(default=SEARCH_LIMIT, ge=1, le=MAX_SEARCH_LIMIT)
     variant: str | None = None
+    deep: bool = False
 
 
 def checked[P: _Params](kind: type[P], params: Params) -> P:
@@ -288,6 +301,27 @@ def passage_of(passage: Passage) -> dict[str, object]:
     }
 
 
+def found_of(found: Found) -> dict[str, object]:
+    """Return the passages a search found, and how many it withheld."""
+    return {
+        "passages": [passage_of(passage) for passage in found.passages],
+        "withheld": found.withheld,
+    }
+
+
+def deep_of(deep: Deep) -> dict[str, object]:
+    """Return a deep search as its result: the passages, what was added, the time."""
+    expansion = deep.expansion
+    return {
+        **found_of(deep.found),
+        "expansion": None
+        if expansion is None
+        else {"queries": list(expansion.queries), "passage": expansion.passage},
+        "seconds": {"expand": deep.expand_s, "search": deep.search_s},
+        "note": NO_REWRITES if expansion is None else None,
+    }
+
+
 def _needed[T](held: T | None) -> T:
     """Return ``held``, the daemon's knowledge or its re-indexing.
 
@@ -320,6 +354,7 @@ class Served:
         self._local_state = host.local_state
         self._learning = host.learning
         self._knowledge = host.knowledge
+        self._gateway_model = host.gateway.model
         self._reindexing = host.reindexing
         self._activity = host.activity
 
@@ -465,15 +500,23 @@ class Served:
         knowledge = _needed(self._knowledge)
         try:
             variant = None if asked.variant is None else Variant.parse(asked.variant)
+            if asked.deep:
+                deep = await deep_search(
+                    knowledge,
+                    self._gateway_model,
+                    asked.query,
+                    limit=asked.limit,
+                    variant=variant,
+                )
+                return deep_of(deep)
             found = await knowledge.search(
                 asked.query, limit=asked.limit, variant=variant, private=True
             )
         except VariantError as error:
             raise RpcError(INVALID_PARAMS, f"variant: {error}") from None
-        return {
-            "passages": [passage_of(passage) for passage in found.passages],
-            "withheld": found.withheld,
-        }
+        except GatewayError as error:
+            raise RpcError(ANSWER_FAILED, f"deep search failed: {error}") from None
+        return found_of(found)
 
     async def _stop(self, params: Params) -> object:
         checked(EmptyParams, params)
@@ -490,7 +533,7 @@ class Served:
         CURRENT_ROUTES.set(self.conversation.session.routes)
         try:
             turn = self.conversation.turn(
-                asked.text, images=asked.images, plan=asked.plan
+                asked.text, images=asked.images, plan=asked.plan, deep=asked.deep
             )
         except ImageError as error:
             raise RpcError(IMAGE_REFUSED, str(error)) from None

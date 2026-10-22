@@ -293,11 +293,31 @@ class FoundPassage:
 
 
 @dataclass(frozen=True, slots=True)
+class Expanded:
+    """What the local model added to a deep search, and where its time went.
+
+    ``written`` is False when its reply never parsed and the search was the
+    plain one, which ``note`` then says.
+    """
+
+    written: bool
+    queries: tuple[str, ...]
+    passage: str | None
+    expand_s: float
+    search_s: float
+    note: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class Searched:
-    """The passages found for a question, best first, and the private ones left out."""
+    """The passages found for a question, best first, and the private ones left out.
+
+    ``deep`` is what a deep search added; None for a plain one.
+    """
 
     passages: tuple[FoundPassage, ...]
     withheld: int
+    deep: Expanded | None = None
 
 
 def source_from(result: object) -> KnownSource:
@@ -367,6 +387,26 @@ def searched_from(result: object) -> Searched:
             for passage in passages
         ),
         int(cast("int", fields["withheld"])),
+        _expanded_from(fields),
+    )
+
+
+def _expanded_from(fields: dict[str, object]) -> Expanded | None:
+    if "seconds" not in fields:
+        return None
+    seconds = cast("dict[str, float]", fields["seconds"])
+    expansion = cast("dict[str, object] | None", fields["expansion"])
+    note = fields["note"]
+    passage = None if expansion is None else expansion["passage"]
+    return Expanded(
+        written=expansion is not None,
+        queries=()
+        if expansion is None
+        else tuple(cast("list[str]", expansion["queries"])),
+        passage=None if passage is None else str(passage),
+        expand_s=float(seconds["expand"]),
+        search_s=float(seconds["search"]),
+        note=None if note is None else str(note),
     )
 
 
@@ -482,7 +522,12 @@ class RemoteConversation:
         self.warnings = tuple(cast("list[str]", fields.get("warnings") or []))
 
     async def turn(
-        self, text: str, *, images: tuple[Path, ...] = (), plan: bool = False
+        self,
+        text: str,
+        *,
+        images: tuple[Path, ...] = (),
+        plan: bool = False,
+        deep: bool = False,
     ) -> AsyncGenerator[TurnItem]:
         """Yield the turn as the daemon streams it, then its report.
 
@@ -495,6 +540,7 @@ class RemoteConversation:
         params: Params = {
             "text": text,
             "plan": plan,
+            "deep": deep,
             "images": [str(p) for p in images],
         }
         request = asyncio.ensure_future(self.peer.request("turn", params))
