@@ -369,12 +369,15 @@ class Unsplit:
         # The event loop keeps only a weak reference to a task.
         self._running.add(task)
         task.add_done_callback(self._running.discard)
+        # wait() never cancels the task; shield() would, from Python 3.14, also
+        # log a failure after the caller's cancellation, which is logged here.
         try:
-            return await asyncio.shield(task)
+            await asyncio.wait([task])
         except asyncio.CancelledError:
             task.add_done_callback(_log_failure)
             await asyncio.wait([task])
             raise
+        return task.result()
 
 
 @dataclass(slots=True)
