@@ -13,9 +13,7 @@ answering model at random, so a re-recording may come from another model.
 from __future__ import annotations
 
 import asyncio
-import struct
 import sys
-import zlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
@@ -45,25 +43,18 @@ if TYPE_CHECKING:
 CASSETTES: Final = Path(__file__).resolve().parent.parent / "tests" / "cassettes"
 OPENROUTER_CASSETTES: Final = CASSETTES / "openrouter"
 TIMEOUT: Final = httpx.Timeout(120.0, connect=10.0)
-IMAGE_SIDE: Final = 16
-RED: Final = b"\xff\x00\x00"
+RED_PNG: Final = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452"
+    "00000010000000100802000000909168"
+    "360000001749444154789c63f8cfc040"  # pragma: allowlist secret
+    "12224df5a886510d434a030090f9ff01"  # pragma: allowlist secret
+    "f9e1fa780000000049454e44ae426082"  # pragma: allowlist secret
+)
+"""A 16 by 16 PNG filled with pure red, as recorded in the image cassette.
 
-
-def solid_png(rgb: bytes, side: int = IMAGE_SIDE) -> bytes:
-    """Return a square PNG of one colour, built without an imaging library."""
-
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        body = kind + data
-        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
-
-    header = struct.pack(">IIBBBBB", side, side, 8, 2, 0, 0, 0)
-    rows = b"".join(b"\x00" + rgb * side for _ in range(side))
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", header)
-        + chunk(b"IDAT", zlib.compress(rows))
-        + chunk(b"IEND", b"")
-    )
+Kept as bytes, not compressed at run time: zlib builds compress the same
+pixels to different bytes (Python 3.14 on Windows ships zlib-ng), which
+would change the request body and miss the recording."""
 
 
 def _ask(*parts: TextPart | ImagePart) -> tuple[Message, ...]:
@@ -98,7 +89,7 @@ SCENARIOS: Final = {
     "image": ChatRequest(
         _ask(
             TextPart("What colour fills this image? Answer with one word."),
-            ImagePart(solid_png(RED), "image/png"),
+            ImagePart(RED_PNG, "image/png"),
         ),
         use_remote=True,
     ),

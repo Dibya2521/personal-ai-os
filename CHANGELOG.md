@@ -160,6 +160,9 @@ All notable changes are recorded here. The format follows
   warnings (an MCP server that did not start) are shown when the chat opens.
   The conversation itself lives in the daemon, so it ends if the daemon
   stops; its remembered turns stay, and `synthia chat --resume` takes it up.
+- Python 3.14 is supported and tested in CI on Linux and Windows, beside 3.12
+  and 3.13. Python 3.15 is not yet: onnxruntime, which every model here runs
+  on, ships no 3.15 wheel (none up to 1.31.0).
 
 ### Fixed
 

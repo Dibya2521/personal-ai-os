@@ -37,4 +37,4 @@ line. When a rule does not fit a case, the exception is written next to the code
 with its reason, so every relaxation is visible.
 
 Development pins Python 3.12, the version the machine learning libraries this
-project will depend on ship wheels for most reliably. CI also runs 3.13.
+project will depend on ship wheels for most reliably. CI also runs 3.13 and 3.14.

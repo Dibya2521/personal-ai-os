@@ -1,11 +1,19 @@
 import json
 import re
+import struct
+import zlib
 from pathlib import Path
 
 import httpx
 import pytest
 from pydantic import SecretStr
-from record_cassettes import OPENROUTER_CASSETTES, SCENARIOS, STRUCTURED, Capital
+from record_cassettes import (
+    OPENROUTER_CASSETTES,
+    RED_PNG,
+    SCENARIOS,
+    STRUCTURED,
+    Capital,
+)
 
 from synthia.gateway.assemble import GATEWAY_DB, build_gateway
 from synthia.gateway.cassette import CassetteTransport
@@ -57,6 +65,17 @@ async def test_an_image_reaches_the_model_as_pixels() -> None:
 
     assert reply.finish_reason is FinishReason.STOP
     assert reply.text.strip().lower().rstrip(".") == "red"
+
+
+def test_the_recorded_image_is_a_red_square() -> None:
+    header = RED_PNG[16:29]
+    (idat_length,) = struct.unpack(">I", RED_PNG[33:37])
+    pixels = zlib.decompress(RED_PNG[41 : 41 + idat_length])
+
+    assert RED_PNG.startswith(b"\x89PNG\r\n\x1a\n")
+    assert struct.unpack(">IIBBBBB", header) == (16, 16, 8, 2, 0, 0, 0)
+    assert RED_PNG[37:41] == b"IDAT"
+    assert pixels == (b"\x00" + b"\xff\x00\x00" * 16) * 16
 
 
 async def test_a_tool_call_arrives_whole_with_its_arguments() -> None:
