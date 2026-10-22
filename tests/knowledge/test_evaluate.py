@@ -91,6 +91,9 @@ def test_covers_needs_file_page_and_a_shared_line(
     found: Passage, gold: Gold, covered: bool
 ) -> None:
     assert covers(found, gold) is covered
+    chunk = found.chunk
+    lines = (found.document.path, chunk.page, chunk.start_line, chunk.end_line)
+    assert gold.overlaps(*lines) is covered
 
 
 def test_ndcg_at_new_hits_at_ranks_one_and_three() -> None:

@@ -64,15 +64,26 @@ class Gold:
             )
             raise ValueError(message)
 
+    def overlaps(
+        self, path: PurePosixPath, page: int | None, start: int, end: int
+    ) -> bool:
+        """Return whether lines ``start`` to ``end`` of ``path`` share one with these.
+
+        Both ranges are inclusive, and the page must be the same.
+        """
+        return (
+            path == self.path
+            and page == self.page
+            and start <= self.end
+            and self.start <= end
+        )
+
 
 def covers(passage: Passage, gold: Gold) -> bool:
     """Return whether ``passage`` is in ``gold``'s file and page and shares a line."""
     chunk = passage.chunk
-    return (
-        passage.document.path == gold.path
-        and chunk.page == gold.page
-        and chunk.start_line <= gold.end
-        and gold.start <= chunk.end_line
+    return gold.overlaps(
+        passage.document.path, chunk.page, chunk.start_line, chunk.end_line
     )
 
 

@@ -51,8 +51,7 @@ from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.retrieval.embed import TextEmbedder
 
 if TYPE_CHECKING:
-    from synthia.gateway.protocol import ChatModel
-    from synthia.models.local import LocalModel
+    from synthia.gateway.protocol import ChatModel, LocalChatModel
     from synthia.models.server import Launch
     from synthia.models.service import LocalService
 
@@ -236,7 +235,7 @@ def installed(threads: int | None) -> LocalService:
     return service
 
 
-async def ready(model: LocalModel) -> None:
+async def ready(model: LocalChatModel) -> None:
     """Wait until ``model``'s server answers."""
     async with asyncio.timeout(LOAD_TIMEOUT_S):
         # The server's state lives on the service's own thread and loop, so
