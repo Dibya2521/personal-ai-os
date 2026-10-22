@@ -15,12 +15,16 @@ every chunk the words found, as memory's search does. Ties go to the lower
 chunk id, so a ranking never depends on the order a set was read in. A
 variant may then follow links from the best chunks one or two hops
 (:mod:`synthia.knowledge.graph`), scoring what they reach the same way.
+
+A search may rank more queries for the same question, such as rewordings of
+it, and :class:`Merge` their rankings into one.
 """
 
 from __future__ import annotations
 
 import math
 import re
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import Enum, auto, unique
 from functools import partial
@@ -32,7 +36,7 @@ from synthia.retrieval.fts import match_expression
 from synthia.retrieval.fusion import fused
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping, Sequence
+    from collections.abc import Collection, Iterable, Mapping, Sequence
 
     from synthia.knowledge.graph import Scorer
     from synthia.knowledge.meaning import ChunkVectors
@@ -53,6 +57,9 @@ header, and in 86.5 % with windows of 40 lines, where it reached 0.461, the
 best of 18 (3 chunkings by 6 variants). Memory measured 0.1 on its own questions
 and keeps it (:mod:`synthia.memory.hybrid`); here that weight is ``fused:0.1``."""
 MAX_HOPS: Final = 2
+RRF_K: Final = 60
+"""Reciprocal rank fusion's constant, the one Cormack, Clarke and Buettcher
+proposed it with (SIGIR 2009): it damps how far a ranking's first places lead."""
 
 
 class VariantError(ValueError):
@@ -198,6 +205,42 @@ class Variant:
 DEFAULT_VARIANT: Final = Variant()
 
 
+def _ranked(scores: Mapping[int, float]) -> list[int]:
+    return sorted(scores, key=lambda chunk: (-scores[chunk], chunk))
+
+
+@unique
+class Merge(Enum):
+    """How the rankings of several queries for one question become one.
+
+    - Best: each chunk keeps its highest score over the queries that found it.
+    - RRF, reciprocal rank fusion: each chunk scores the sum, over the queries
+      that found it, of 1 / (:data:`RRF_K` + rank), rank 1 being a query's
+      best chunk and ties going to the lower chunk id.
+
+    Either way the merged scores do not depend on the order of the rankings.
+    """
+
+    BEST = auto()
+    RRF = auto()
+
+    def of(self, rankings: Iterable[Mapping[int, float]]) -> dict[int, float]:
+        """Return a score for every chunk in any of ``rankings``, merged this way."""
+        if self is Merge.BEST:
+            best: dict[int, float] = {}
+            for scores in rankings:
+                for chunk, score in scores.items():
+                    best[chunk] = max(best.get(chunk, -math.inf), score)
+            return best
+        terms: defaultdict[int, list[float]] = defaultdict(list)
+        for scores in rankings:
+            for rank, chunk in enumerate(_ranked(scores), 1):
+                terms[chunk].append(1 / (RRF_K + rank))
+        # fsum rounds the exact sum once, so the order of the terms cannot
+        # change a score, nor therefore a tie.
+        return {chunk: math.fsum(parts) for chunk, parts in terms.items()}
+
+
 @dataclass(frozen=True, slots=True)
 class Passage:
     """A chunk found for a query, where it is from, and how well it matched.
@@ -273,8 +316,15 @@ class Ranker:
         self._vectors = vectors
         self._rerankers = dict(rerankers or {})
 
-    async def find(
-        self, query: str, *, limit: int, variant: Variant, private: bool
+    async def find(  # noqa: PLR0913 - one search's whole request
+        self,
+        query: str,
+        *,
+        limit: int,
+        variant: Variant,
+        private: bool,
+        also: Sequence[str] = (),
+        merge: Merge = Merge.BEST,
     ) -> Found:
         """Return up to ``limit`` passages for ``query`` as ``variant`` ranks them.
 
@@ -284,6 +334,14 @@ class Ranker:
         counted in :attr:`Found.withheld`. A reranked variant reorders the
         first ``top`` chunks, private ones included, by the reranker's
         scores, which then are their passages' scores.
+
+        Each query in ``also`` is ranked by ``variant`` as ``query`` is, hops
+        included, from as many candidates, and ``merge`` joins every ranking
+        into the passages' scores; with ``also`` empty nothing is merged. A
+        query in ``also`` with no word the full-text index can match still
+        ranks by its meaning, so it adds nothing to words alone; only
+        ``query`` decides whether anything is found. The reranker judges the
+        passages against ``query`` alone.
 
         Raises:
             VariantError: If ``variant`` reranks with a reranker not loaded.
@@ -298,9 +356,12 @@ class Ranker:
                 raise VariantError(message)
         if not match_expression(query):
             return Found((), 0)
-        scores = await self._scores(query, variant, max(CANDIDATES, limit))
-        ranked = sorted(scores, key=lambda chunk: (-scores[chunk], chunk))
-        rows = await self._store.rows([ChunkId(chunk) for chunk in ranked])
+        count = max(CANDIDATES, limit)
+        scores = await self._scores(query, variant, count)
+        if also:
+            more = [await self._scores(other, variant, count) for other in also]
+            scores = merge.of([scores, *more])
+        rows = await self._store.rows([ChunkId(chunk) for chunk in _ranked(scores)])
         if encoder is not None and variant.rerank is not None:
             rows = await _reranked(query, rows, scores, encoder, variant.rerank.top)
         return _shown(rows, scores, limit=limit, private=private)

@@ -20,7 +20,7 @@ from synthia.knowledge.chunk import Chunking
 from synthia.knowledge.index import Indexer, Unsplit
 from synthia.knowledge.meaning import ChunkVectors
 from synthia.knowledge.model import SourceKind
-from synthia.knowledge.retrieve import DEFAULT_VARIANT, Ranker
+from synthia.knowledge.retrieve import DEFAULT_VARIANT, Merge, Ranker
 from synthia.knowledge.store import KnowledgeStore
 
 if TYPE_CHECKING:
@@ -252,18 +252,22 @@ class Knowledge:
                 on_embedded=self._vectors.hold,
             )
 
-    async def search(
+    async def search(  # noqa: PLR0913 - one search's whole request
         self,
         query: str,
         *,
         limit: int = SEARCH_LIMIT,
         variant: Variant | None = None,
         private: bool = True,
+        also: Sequence[str] = (),
+        merge: Merge = Merge.BEST,
     ) -> Found:
         """Return up to ``limit`` passages for ``query``, best first.
 
         ``variant`` None is the default ranking. With ``private`` False,
-        passages of private sources are left out and counted.
+        passages of private sources are left out and counted. The queries in
+        ``also`` are searched too and their rankings joined by ``merge``, as
+        :meth:`Ranker.find` describes.
 
         Raises:
             ValueError: If ``limit`` is below 1.
@@ -273,7 +277,7 @@ class Knowledge:
             raise ValueError(message)
         chosen = DEFAULT_VARIANT if variant is None else variant
         return await self._ranker.find(
-            query, limit=limit, variant=chosen, private=private
+            query, limit=limit, variant=chosen, private=private, also=also, merge=merge
         )
 
     async def links(

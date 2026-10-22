@@ -1,5 +1,10 @@
+import math
+import random
 import re
+from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
+from typing import override
 
 import pytest
 from hypothesis import given
@@ -19,8 +24,10 @@ from synthia.knowledge.model import (
 from synthia.knowledge.retrieve import (
     CANDIDATES,
     DEFAULT_VARIANT,
+    RRF_K,
     WORD_WEIGHT,
     Found,
+    Merge,
     Passage,
     Rerank,
     Side,
@@ -29,7 +36,10 @@ from synthia.knowledge.retrieve import (
 )
 from synthia.knowledge.service import Knowledge
 from synthia.knowledge.store import KnowledgeStore
+from synthia.models.catalogue import RERANKERS
 from synthia.retrieval.fusion import word_scale
+from synthia.retrieval.rerank import CrossEncoder
+from synthia.retrieval.wordpiece import WordPiece
 from tests.knowledge.corpus import (
     CAT,
     HEADLESS,
@@ -48,7 +58,7 @@ from tests.knowledge.corpus import (
     wired,
 )
 from tests.knowledge.test_store import draft, reading
-from tests.retrieval.toy import Judge, Network, embedder, reranker
+from tests.retrieval.toy import VOCABULARY, Judge, Network, embedder, reranker
 
 CAT_AT = "notes/cat.txt:1"
 SERVER_AT = "notes/server.txt:1"
@@ -647,3 +657,175 @@ async def test_a_reranked_search_withholds_private_passages_it_reorders(
     assert citations(everything) == ["diary/bird.txt:1", SERVER_AT]
     assert citations(found) == [SERVER_AT, CAT_AT]
     assert found.withheld == 1
+
+
+@pytest.mark.parametrize(
+    ("merge", "expected"),
+    [
+        # Ranked: first 1, 2, 3 (2 and 3 tie, so 2 first); second 3, 4.
+        (Merge.BEST, {1: 0.9, 2: 0.5, 3: 0.8, 4: 0.1}),
+        (
+            Merge.RRF,
+            {1: 1 / 61, 2: 1 / 62, 3: math.fsum([1 / 63, 1 / 61]), 4: 1 / 62},
+        ),
+    ],
+)
+def test_merge_joins_rankings_with_ties_and_a_chunk_one_query_found(
+    merge: Merge, expected: dict[int, float]
+) -> None:
+    rankings = [{1: 0.9, 3: 0.5, 2: 0.5}, {4: 0.1, 3: 0.8}]
+
+    assert merge.of(rankings) == expected
+    assert merge.of([]) == {}
+
+
+def test_rrf_counts_rank_not_score() -> None:
+    # A weak list's first chunk ties a strong list's first.
+    merged = Merge.RRF.of([{1: 100.0, 2: 99.0}, {3: 0.001}])
+
+    assert merged[1] == merged[3] == 1 / (RRF_K + 1)
+    assert merged[2] == 1 / (RRF_K + 2)
+
+
+# A narrow set of ids and scores, so rankings overlap and tie often.
+RANKINGS = st.lists(
+    st.dictionaries(
+        st.integers(0, 6), st.sampled_from([-0.5, 0.0, 0.1, 0.3, 0.7, 1.0, 2.5])
+    ),
+    max_size=5,
+)
+
+
+@given(RANKINGS, st.randoms())
+def test_merge_does_not_depend_on_the_order_of_the_rankings(
+    rankings: list[dict[int, float]], shuffler: random.Random
+) -> None:
+    shuffled = rankings.copy()
+    shuffler.shuffle(shuffled)
+
+    for merge in Merge:
+        assert merge.of(shuffled) == merge.of(rankings)
+
+
+@given(RANKINGS)
+def test_best_is_at_least_every_query_score_and_one_of_them(
+    rankings: list[dict[int, float]],
+) -> None:
+    merged = Merge.BEST.of(rankings)
+
+    assert merged.keys() == {chunk for scores in rankings for chunk in scores}
+    for chunk, score in merged.items():
+        held = [scores[chunk] for scores in rankings if chunk in scores]
+        assert score == max(held)
+
+
+@pytest.mark.parametrize(
+    "name", ["words", "meaning", "fused", "fused+hop1x0.5", "fused+hop2x0.3"]
+)
+@pytest.mark.parametrize("merge", list(Merge))
+async def test_also_merges_each_querys_own_ranking_hops_included(
+    linked: Knowledge, name: str, merge: Merge
+) -> None:
+    variant = Variant.parse(name)
+    queries = ["kestrel", "pune", "my cat"]
+    alone = [await linked.search(q, limit=10, variant=variant) for q in queries]
+
+    found = await linked.search(
+        "kestrel", limit=10, variant=variant, also=queries[1:], merge=merge
+    )
+
+    rankings = [{int(p.chunk.id): p.score for p in f.passages} for f in alone]
+    merged = merge.of(rankings)
+    order = sorted(merged, key=lambda chunk: (-merged[chunk], chunk))
+    assert [p.chunk.id for p in found.passages] == order
+    assert [p.score for p in found.passages] == [merged[chunk] for chunk in order]
+
+
+@pytest.mark.parametrize("name", ["words", "meaning", "fused", "fused+hop1x0.5"])
+@pytest.mark.parametrize("merge", list(Merge))
+@pytest.mark.parametrize("query", ["pet kestrel", "pune", "?!"])
+async def test_no_other_query_is_the_search_without_also(
+    linked: Knowledge, name: str, merge: Merge, query: str
+) -> None:
+    variant = Variant.parse(name)
+
+    before = await linked.search(query, variant=variant)
+
+    assert await linked.search(query, variant=variant, also=(), merge=merge) == before
+
+
+async def test_another_query_with_no_word_adds_only_its_meaning(
+    notes: Knowledge,
+) -> None:
+    # "?!" is the common axis alone, as "kestrel" is: sister, cat, server.
+    words = Variant(Side.WORDS)
+    meaning = Variant(Side.MEANING)
+
+    by_words = await notes.search("kestrel", variant=words, also=["?!"])
+    by_meaning = await notes.search("pet", variant=meaning, also=["?!"])
+
+    assert by_words == await notes.search("kestrel", variant=words)
+    assert citations(by_meaning) == [CAT_AT, SISTER_AT, SERVER_AT]
+    assert [p.score for p in by_meaning.passages] == pytest.approx(
+        [cosine(PET, CAT), cosine(KESTREL, SISTER), cosine(KESTREL, SERVER)]
+    )
+
+
+@pytest.mark.parametrize("merge", list(Merge))
+async def test_a_question_with_no_word_finds_nothing_whatever_it_is_also(
+    notes: Knowledge, merge: Merge
+) -> None:
+    found = await notes.search("?!", also=["pet", "kestrel"], merge=merge)
+
+    assert found == Found((), 0)
+
+
+@pytest.mark.parametrize("limit", [1, 2, 3, 5])
+async def test_also_withholds_private_passages_among_the_best_merged(
+    with_diary: Knowledge, limit: int
+) -> None:
+    everything = await with_diary.search("kestrel", limit=10, also=["pet"])
+
+    found = await with_diary.search("kestrel", limit=limit, also=["pet"], private=False)
+
+    public = [p for p in everything.passages if not p.private]
+    assert found.passages == tuple(public[:limit])
+    assert found.withheld == sum(p.private for p in everything.passages[:limit])
+    assert everything.passages[0].private
+
+
+class Heard(CrossEncoder):
+    """A reranker that records each question it is asked."""
+
+    def __init__(self, judge: Judge) -> None:
+        super().__init__(
+            replace(RERANKERS[0], max_tokens=32, batch=2), WordPiece(VOCABULARY), judge
+        )
+        self.questions: list[str] = []
+
+    @override
+    async def rank(self, question: str, passages: Sequence[str]) -> list[float]:
+        self.questions.append(question)
+        return await super().rank(question, passages)
+
+
+async def test_a_reranker_judges_against_the_question_not_the_others(
+    tmp_path: Path, db: Path
+) -> None:
+    heard = Heard(Judge("kestrel"))
+    knowledge = await Knowledge.open(
+        db, embedder(Network()), chunking=HEADLESS, rerankers={"judge": heard}
+    )
+    await knowledge.add(planted(tmp_path / "notes", NOTES))
+    await knowledge.index()
+    variant = Variant(rerank=Rerank("judge", 2))
+    merged = await knowledge.search("pet", limit=3, also=["sister pune"])
+
+    found = await knowledge.search(
+        "pet", limit=3, variant=variant, also=["sister pune"]
+    )
+
+    assert heard.questions == ["pet"]
+    assert citations(merged)[:2] == [CAT_AT, SISTER_AT]
+    assert [p.score for p in found.passages][:2] == [0.0, 0.0]
+    assert found.passages[2] == merged.passages[2]

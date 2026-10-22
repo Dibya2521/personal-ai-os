@@ -23,21 +23,30 @@ from pathlib import Path, PurePosixPath
 import pytest
 import rag_eval
 from rag_eval import (
+    DEEP_RERANKED,
+    MAX_EXPANSIONS_BYTES,
     MAX_SET_BYTES,
+    PARTS,
     RERANKED,
     VARIANTS,
+    DeepRun,
     Measured,
+    Parts,
     SetError,
     check_gold,
     chunkings,
+    deep_runs,
     evaluate,
     main,
+    parse_expansions,
     parse_set,
     percentile,
+    read_expansions,
     rows,
 )
 
 from synthia.knowledge.chunk import Chunking
+from synthia.knowledge.deep import Expansion
 from synthia.knowledge.evaluate import (
     Answerable,
     Gold,
@@ -46,7 +55,7 @@ from synthia.knowledge.evaluate import (
     Unanswerable,
 )
 from synthia.knowledge.index import IndexReport
-from synthia.knowledge.retrieve import Variant
+from synthia.knowledge.retrieve import Merge, Variant
 from synthia.models.catalogue import DEFAULT_EMBEDDER, RERANKERS, Embedder
 from synthia.retrieval.embed import TextEmbedder
 from tests.knowledge.corpus import NOTES, planted
@@ -479,3 +488,239 @@ async def test_evaluate_scores_a_reranked_variant_with_the_reranker_given(
     named = measured.report.categories["named"].ranks
     assert named is not None
     assert (named.recall[1], named.ndcg) == (1.0, 1.0)
+
+
+# "kestrel" asked again as "database server" finds server first by meaning;
+# its passage is not drafted, so by the passage alone it is the plain search.
+EXPANSIONS: dict[str, object] = {
+    "model": "local-test",
+    "questions": {
+        "named-01": {
+            "question": "kestrel",
+            "queries": ["database server"],
+            "passage": None,
+            "seconds": 2.0,
+        },
+        "paraphrase-01": {
+            "question": "pet",
+            "queries": [],
+            "passage": "my cat",
+            "seconds": 4.0,
+        },
+        "none-01": {
+            "question": "osprey",
+            "queries": ["bird"],
+            "passage": "an osprey",
+            "seconds": 3.0,
+        },
+    },
+}
+
+
+def expansions_file(tmp_path: Path, data: dict[str, object] = EXPANSIONS) -> Path:
+    path = tmp_path / "expansions.json"
+    path.write_bytes(json.dumps(data).encode())
+    return path
+
+
+def test_read_expansions_reads_each_questions_expansion(tmp_path: Path) -> None:
+    questions = parse_set(encoded(QUESTIONS)).questions
+
+    read = read_expansions(expansions_file(tmp_path), questions)
+
+    assert read.model == "local-test"
+    assert read.by_question["named-01"] == Expansion(("database server",), None)
+    assert read.by_question["none-01"] == Expansion(("bird",), "an osprey")
+    assert read.seconds == {"named-01": 2.0, "paraphrase-01": 4.0, "none-01": 3.0}
+    assert read.texts == {
+        "named-01": "kestrel",
+        "paraphrase-01": "pet",
+        "none-01": "osprey",
+    }
+
+
+def test_read_expansions_refuses_an_expansion_of_another_text(tmp_path: Path) -> None:
+    questions = parse_set(encoded(QUESTIONS)).questions
+    data = json.loads(json.dumps(EXPANSIONS))
+    data["questions"]["paraphrase-01"]["question"] = "dog"
+
+    with pytest.raises(
+        SetError, match=r"expanded another text of the questions \['paraphrase-01'\]"
+    ):
+        read_expansions(expansions_file(tmp_path, data), questions)
+
+
+def expanded_as(question_id: str, /, **fields: object) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "question": question_id,
+        "queries": [],
+        "passage": None,
+        "seconds": 1.0,
+    }
+    entry.update(fields)
+    return {"model": "m", "questions": {question_id: entry}}
+
+
+@pytest.mark.parametrize(
+    ("data", "named"),
+    [
+        (b" " * (MAX_EXPANSIONS_BYTES + 1), "MAX_EXPANSIONS_BYTES"),
+        (b"[]", "not a model and expansions"),
+        (json.dumps({"model": "", "questions": {}}).encode(), "not a model"),
+        (json.dumps(expanded_as("q", seconds=-1.0)).encode(), "not a model"),
+        (json.dumps(expanded_as("q", extra=1)).encode(), "not a model"),
+        (json.dumps(expanded_as("q", question="")).encode(), "not a model"),
+        (json.dumps(expanded_as("q", queries=[" a"])).encode(), "question 'q': ' a'"),
+        (json.dumps(expanded_as("q", passage="")).encode(), "question 'q': '' is"),
+    ],
+    ids=[
+        "too_large",
+        "not_an_object",
+        "no_model",
+        "negative_seconds",
+        "unknown_field",
+        "blank_question",
+        "unclean_query",
+        "blank_passage",
+    ],
+)
+def test_parse_expansions_refuses_what_deep_search_does_not_make(
+    data: bytes, named: str
+) -> None:
+    with pytest.raises(SetError, match=named):
+        parse_expansions(data)
+
+
+def test_read_expansions_refuses_a_question_not_expanded(tmp_path: Path) -> None:
+    questions = parse_set(encoded(QUESTIONS)).questions
+    path = expansions_file(tmp_path, expanded_as("named-01"))
+
+    with pytest.raises(
+        SetError, match=r"does not expand the questions \['paraphrase-01', 'none-01'\]"
+    ):
+        read_expansions(path, questions)
+
+
+@pytest.mark.parametrize(
+    ("parts", "also"),
+    [
+        ("rewrites", ("bird",)),
+        ("hyde", ("an osprey",)),
+        ("both", ("bird", "an osprey")),
+    ],
+)
+def test_a_deep_run_searches_the_parts_it_names(
+    parts: Parts, also: tuple[str, ...]
+) -> None:
+    run = DeepRun(parts, Merge.RRF, Variant(), {"q": Expansion(("bird",), "an osprey")})
+
+    assert run.also("q") == also
+    assert run.label() == f"{parts}/rrf"
+
+
+def test_a_deep_run_without_a_passage_adds_none() -> None:
+    run = DeepRun("hyde", Merge.BEST, Variant(), {"q": Expansion(("bird",), None)})
+
+    assert run.also("q") == ()
+
+
+def test_deep_runs_are_every_part_and_merge_then_both_reranked() -> None:
+    plain = deep_runs({}, [])
+    reranked = deep_runs({}, ["ms-marco-minilm-l6-int8"])
+
+    assert [(r.label(), r.variant.name()) for r in plain] == [
+        (f"{parts}/{merge}", "fused")
+        for parts in ("rewrites", "hyde", "both")
+        for merge in ("best", "rrf")
+    ]
+    assert reranked[:6] == plain
+    assert [(r.label(), r.variant) for r in reranked[6:]] == [
+        ("both/best", DEEP_RERANKED),
+        ("both/rrf", DEEP_RERANKED),
+    ]
+
+
+async def test_evaluate_scores_deep_runs_on_the_first_chunking_only(
+    tmp_path: Path,
+) -> None:
+    corpus = planted(tmp_path / "corpus", NOTES)
+    questions = parse_set(encoded(QUESTIONS)).questions
+    expansions = read_expansions(expansions_file(tmp_path), questions)
+
+    measured = [
+        m
+        async for m in evaluate(
+            corpus,
+            questions,
+            toy(),
+            headless(),
+            [Variant()],
+            deep=deep_runs(expansions.by_question, []),
+        )
+    ]
+
+    labels = [(m.chunking.recipe(), m.deep) for m in measured]
+    first, second = (c.recipe() for c in headless())
+    assert labels == [
+        (first, None),
+        *[(first, f"{p}/{m}") for p in PARTS for m in ("best", "rrf")],
+        (second, None),
+    ]
+    named = {m.deep: m.report.categories["named"].ranks for m in measured[:7]}
+    recall = {deep: ranks.recall[1] for deep, ranks in named.items() if ranks}
+    assert recall == {
+        None: 0.0,
+        "rewrites/best": 1.0,
+        "rewrites/rrf": 1.0,
+        "hyde/best": 0.0,
+        "hyde/rrf": 0.0,
+        "both/best": 1.0,
+        "both/rrf": 1.0,
+    }
+
+
+async def test_main_prints_deep_rows_marked_and_the_expansions_in_the_header(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    repository = planted(tmp_path / "repository", NOTES)
+    commit = committed(repository)
+    question_set = tmp_path / "set.json"
+    question_set.write_bytes(encoded(QUESTIONS, commit=commit))
+    per_question = tmp_path / "per_question.jsonl"
+    argv = ["--set", str(question_set), "--repository", str(repository)]
+    argv += ["--chunking", "lines/32/40/r1", "--variant", "words"]
+    argv += ["--expansions", str(expansions_file(tmp_path))]
+    argv += ["--per-question", str(per_question)]
+
+    assert await main(argv, load=toy, load_rerankers=dict) == 0
+
+    header, _, *printed = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+    ]
+    assert header["expansions"] == {
+        "model": "local-test",
+        "s_median": 3.0,
+        "s_p95": 4.0,
+    }
+    marked = [(row["variant"], row.get("deep")) for row in printed]
+    assert marked == [("words", None)] * 4 + [
+        ("fused", f"{p}/{m}") for p in PARTS for m in ("best", "rrf") for _ in range(4)
+    ]
+    assert list(printed[4])[-1] == "deep"
+    each = [json.loads(line) for line in per_question.read_text("utf-8").splitlines()]
+    assert [e.get("deep") for e in each[:4]] == [None, None, None, "rewrites/best"]
+
+
+async def test_main_refuses_expansions_without_the_default_chunking(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    question_set = tmp_path / "set.json"
+    question_set.write_bytes(encoded(QUESTIONS))
+    argv = ["--set", str(question_set), "--chunking", "structure/32/40/r1"]
+    argv += ["--expansions", str(expansions_file(tmp_path))]
+
+    with pytest.raises(SystemExit) as stopped:
+        await main(argv, load=toy, load_rerankers=dict)
+
+    assert stopped.value.code == 2
+    assert "scores the default chunking lines/32/40/r1" in capsys.readouterr().err
