@@ -174,6 +174,7 @@ def _formats() -> Mapping[str, Format]:
     # The readers import this module, so the table is built on first use.
     from synthia.knowledge.code import read_python  # noqa: PLC0415
     from synthia.knowledge.markdown import read_markdown  # noqa: PLC0415
+    from synthia.knowledge.pdf import pdf_text, read_pdf  # noqa: PLC0415
 
     markdown = Format(DocumentKind.MARKDOWN, Text.of_bytes, read_markdown)
     python = Format(DocumentKind.PYTHON, Text.of_bytes, read_python)
@@ -182,6 +183,7 @@ def _formats() -> Mapping[str, Format]:
         **dict.fromkeys(NOTE_SUFFIXES, markdown),
         **dict.fromkeys(PYTHON_SUFFIXES, python),
         **dict.fromkeys(PLAIN_SUFFIXES, plain),
+        ".pdf": Format(DocumentKind.PDF, pdf_text, read_pdf),
     }
 
 

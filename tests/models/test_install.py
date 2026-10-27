@@ -1,5 +1,7 @@
+import shutil
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -175,8 +177,20 @@ async def test_remove_deletes_everything_and_reports_the_bytes(
     assert models.of.remove(MODEL) == 0
 
 
-def test_free_bytes_measures_the_nearest_existing_folder(tmp_path: Path) -> None:
-    assert free_bytes(tmp_path / "not" / "yet") == free_bytes(tmp_path) > 0
+def test_free_bytes_measures_the_nearest_existing_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    measured: list[Path] = []
+
+    def disk_usage(path: Path) -> SimpleNamespace:
+        measured.append(path)
+        return SimpleNamespace(free=42)
+
+    monkeypatch.setattr(shutil, "disk_usage", disk_usage)
+
+    assert free_bytes(tmp_path / "not" / "yet") == 42
+    assert free_bytes(tmp_path) == 42
+    assert measured == [tmp_path, tmp_path]
 
 
 def test_sizes_are_binary_like_the_doctor_and_small_ones_in_megabytes() -> None:

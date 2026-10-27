@@ -8,6 +8,11 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- PDF files in a knowledge source are indexed and searched like any other
+  file, each passage cited by its page and lines (`notes/report.pdf:p.2:4-9`).
+  Text is read with pypdf 6.20.1 (BSD-3-Clause); an encrypted or unparsable
+  PDF is noted as not read, and pages with no text (scanned or images only)
+  are named in the document's note, since no text is read from an image.
 - Deep search, only when the person asks for it: `synthia knowledge search
   "<question>" --deep` and `/deep <question>` in `synthia chat`. The local
   model rewrites the question as up to 3 search queries in the words files
