@@ -24,14 +24,16 @@ peripherals, and a kernel schedules, supervises and guards all of it.
 
 ## Status
 
-**Phase 4 of 13: memory.** SYNTHIA can think and act: `synthia chat` talks
+**Phase 5 of 13: knowledge.** SYNTHIA can think and act: `synthia chat` talks
 through a model gateway that answers from a local model, and from a free
 remote model, under a daily budget, only when asked, and it uses tools, each
 call that changes something or leaves the machine asked for first. It is
 always there: one daemon holds the models and the tools, and the chat is its
-client. It now remembers: every chat is kept on the machine, found again by
+client. It remembers: every chat is kept on the machine, found again by
 its words or its meaning, and what the person says about themselves is
-learned and carried into the next chat. The rest is built
+learned and carried into the next chat. It now reads the folders the person
+adds, notes, code, plain text and PDFs, and answers from them with the file
+and lines of each passage listed under the answer. The rest is built
 phase by phase, and released when a capability works end to end.
 [`docs/architecture.md`](docs/architecture.md) describes the whole design and
 the order it is built in.
@@ -220,6 +222,32 @@ measures it, and why in [decision record 0012](docs/adr/0012-memory.md).
   ten nearest neighbours among 50,000 vectors, weighing 40 candidates a query.
   Exact search over 50,000 took 6.1 ms, about what embedding a text costs,
   and is always right, so memory searches exactly.
+
+**Knowledge.** How SYNTHIA reads the person's files is described in
+[`docs/knowledge.md`](docs/knowledge.md), with every number and the command
+that measures it, and why in
+[decision record 0013](docs/adr/0013-knowledge.md).
+
+- **Folders, kept in step.** `synthia knowledge add <folder>` adds a folder
+  or an Obsidian vault, private or not, with folders inside it left out.
+  Markdown, Python, plain text and PDF files are read; files that look like
+  they hold a secret are held back. After 10 minutes without a turn, at most
+  once an hour, the daemon reads again only what changed, and it keeps what
+  it read from a folder it cannot list.
+- **Found with citations.** Every passage is exactly a file's lines, cited
+  as `name/path:start-end`. Search fuses words and meaning over 40-line
+  windows, the best of 18 rankings measured on 61 questions about this
+  repository (nDCG@10 0.461, against 0.390 for the first design).
+- **In the chat.** A `search_knowledge` tool finds passages, and the chat
+  lists the sources under the answer. `/deep` first has the local model
+  rewrite the question and draft an answer to search for too, about 35 s on
+  a laptop CPU, so only when asked.
+- **Private stays local.** A passage from a private folder is shown only to
+  a chat with a local model that takes tools, and that chat then stays on
+  the machine until `/reset`, whatever `/remote` says.
+- **Measured before it is the default.** Following links between notes, a
+  cross-encoder reranker and deep search were each built and measured on the
+  same questions; none ranked reliably better, so none is the default.
 
 **Repository.** Every commit passes ruff with every rule enabled, pyright in
 strict mode, an import check that keeps each package from importing the ones

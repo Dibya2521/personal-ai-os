@@ -1,7 +1,8 @@
 # The daemon
 
 `synthia serve` runs SYNTHIA as one long-lived process: the gateway, the local
-model's server, the MCP servers and the personas, started once. Every
+model's server, the MCP servers, the personas, memory and the knowledge
+index, started once. Every
 interface is a client of it. `synthia chat` is the first; a web page and
 voice come later. Why it is built this way is in
 [ADR 0011](adr/0011-daemon.md); this page is how it works.
@@ -25,6 +26,8 @@ voice come later. Why it is built this way is in
 Each `synthia knowledge` command goes through the daemon, starting it if it
 is not running, so one process writes the index. Without an embedding model
 there is no index, and each exits 2 saying to run `synthia models install`.
+The daemon loads no reranker, so a `--variant` that names one is refused.
+[`knowledge.md`](knowledge.md) describes what is read and how it is found.
 
 The local model's state is `ready` (answering), `starting` (loading, or
 waiting to be restarted), `stopped` (stopped, or given up after too many
@@ -88,7 +91,7 @@ Messages are JSON-RPC 2.0, one per WebSocket text frame.
 | `knowledge_remove` | `root` | `removed`: false when no source has that folder |
 | `knowledge_sources` | `{}` | `sources`, each as `knowledge_add` returns it, in the order added |
 | `knowledge_index` | `{}` | after the pass, which does not wait for turns: `added`, `changed`, `unchanged`, `removed`, `unreadable`, `held_back`, `passed_over`, `chunks`, `cut`, `embedded`, `unavailable` (sources whose folder could not be listed), `seconds`, and `error` null; or `error` alone, saying why the pass failed |
-| `knowledge_search` | `query`, `limit` (1 to 50, default 6), `variant` (null for the default), `deep` (bool, default false) | `passages` best first, each `citation` (`name/path:start-end`), `title`, `header`, `body`, `score`, `private`; and `withheld`. Private folders are searched too: the client is the person's own terminal. With `deep` also `expansion` (`queries` and `passage`, what the local model wrote), `seconds` (`expand`, `search`) and `note`; a model reply that never parsed gives the plain search with `expansion` null and a `note` saying so, and no local model is `-32001`. |
+| `knowledge_search` | `query`, `limit` (1 to 50, default 6), `variant` (null for the default), `deep` (bool, default false) | `passages` best first, each `citation` (`name/path:start-end`), `title`, `header`, `body`, `score`, `private`; and `withheld`. Private folders are searched too: the client is the person's own terminal. With `deep` also `expansion` (`queries` and `passage`, what the local model wrote), `seconds` (`expand`, `search`) and `note`; a model reply that never parsed gives the plain search with `expansion` null and a `note` saying so, and no local model is `-32001`. A variant that does not parse, or names a reranker (the daemon loads none), is `-32602`. |
 | `stop` | `{}` | `{}`, then the daemon stops |
 
 A reply is `{"notes": [...], "errors": [...]}`: lines to show.
@@ -155,9 +158,10 @@ waits for it; [`memory.md`](memory.md) describes it.
 By the same rule, 10 minutes without a turn and at most once an hour after
 the last pass ended, it reads the folders added with `synthia knowledge add`
 again, so the index follows files that changed. That pass stops before its
-next file when a turn starts or another `synthia knowledge` command needs to
-change the index, so neither waits for it; what it read is kept, and the
-next 10 idle minutes go on from there. A pass asked for with
+next file, or its next round of embedding, when a turn starts or another
+`synthia knowledge` command needs to change the index, so neither waits for
+it; what it read is kept, and the next 10 idle minutes go on from there
+([`knowledge.md`](knowledge.md#keeping-in-step) describes a pass). A pass asked for with
 `synthia knowledge index` runs through, since the person is waiting for it.
 Every pass, asked or not, stopped, failed or cancelled, is a record in the
 daemon's trace.

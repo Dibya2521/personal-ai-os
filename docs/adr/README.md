@@ -18,3 +18,4 @@ supersedes the old one.
 | [0010](0010-tool-calling-and-permissions.md) | tool calling: the model asks, code decides from reach and effect; output is quoted data | accepted |
 | [0011](0011-daemon.md) | one daemon holds SYNTHIA; interfaces speak JSON-RPC 2.0 to it over a local, token-guarded WebSocket | accepted |
 | [0012](0012-memory.md) | memory in one SQLite file, found by words and meaning together, facts written on this machine | accepted |
+| [0013](0013-knowledge.md) | knowledge in its own SQLite file, kept in step by idle passes, found by fused words and meaning over 40-line windows, private passages kept on this machine | accepted |
