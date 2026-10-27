@@ -129,7 +129,7 @@ To stop a turn, the client sends `notifications/cancelled` with the turn's
 
 ```text
 -> {"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {}}
-<- {"jsonrpc": "2.0", "id": 1, "result": {"version": "0.2.0", "persona": "SYNTHIA", "sessions": 1, "warnings": []}}
+<- {"jsonrpc": "2.0", "id": 1, "result": {"version": "0.3.0", "persona": "SYNTHIA", "sessions": 1, "warnings": []}}
 -> {"jsonrpc": "2.0", "id": 2, "method": "turn", "params": {"text": "what time is it?"}}
 <- {"jsonrpc": "2.0", "method": "chunk", "params": {"text": "", "reasoning": "", "tool_calls": true, "progress": null}}
 <- {"jsonrpc": "2.0", "method": "tool", "params": {"name": "current_time", "arguments": "{}", "result": "...", "ok": true, "seconds": 0.0, "flags": []}}

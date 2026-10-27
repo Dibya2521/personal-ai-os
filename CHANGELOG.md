@@ -4,7 +4,16 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-10-27
+
+SYNTHIA is always there, remembers, and reads the person's files. One daemon
+on the machine holds the models and the tools, and `synthia chat` is its
+client. Every chat is kept on the machine, found again by its words or its
+meaning, and what the person says about themselves is learned and carried
+into the next chat. Folders the person adds (notes, an Obsidian vault, code,
+plain text, PDFs) are indexed and searched, and an answer lists the file and
+lines of each passage it used; a chat that has read a private passage stays
+on the machine.
 
 ### Added
 
@@ -387,6 +396,6 @@ that guards itself.
   pyright strict, pytest, secret scanning and a file-size limit.
 - Architecture overview and decision records 0001 to 0004.
 
-[Unreleased]: https://github.com/Dibya2521/personal-ai-os/compare/v0.2.0...HEAD
+[0.3.0]: https://github.com/Dibya2521/personal-ai-os/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Dibya2521/personal-ai-os/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Dibya2521/personal-ai-os/releases/tag/v0.1.0
