@@ -2,6 +2,7 @@
 
     uv run python benchmarks/answer_eval.py --answers PATH --verdicts PATH
         [--calibration [PATH]] [--threads N] [--resume]
+    uv run python benchmarks/answer_eval.py --answers PATH --no-judge
 
 ``--answers`` is the file ``benchmarks/chat_answers.py`` wrote for the
 question set (``benchmarks/data/knowledge_set.json``); it must answer every
@@ -66,6 +67,13 @@ question has no gold span, so its recall is null. With
 Cohen's kappa, and one line follows per group (overall, then each origin):
 agreement, unsupported answers caught, false alarms and kappa. It reaches
 no outside service and spends no budget.
+
+``--no-judge`` scores from the answers file alone, in seconds: no model is
+started and no verdicts file is read or written, so ``supported`` and
+``judge_errors`` are null on every row while the other columns are as
+above. A judge's rate means little until it is checked against a person's
+labels, and the searched and recall columns need no judge. It refuses
+``--calibration``, ``--resume`` and ``--threads``, which only the judge uses.
 """
 
 from __future__ import annotations
@@ -418,7 +426,7 @@ class Outcome:
     judged and whose sources were never reported: ``shown``, ``cited`` and
     ``supported`` are None for it, so it leaves every rate but
     ``searched``. ``supported`` is also None when the judge gave no valid
-    verdict.
+    verdict, and when no judge ran.
     """
 
     category: Category
@@ -433,9 +441,9 @@ class Outcome:
 def outcome(question: Question, answered: Answered, judged: Judged | None) -> Outcome:
     """Return what the answer to ``question`` did, by the judge's verdict.
 
-    ``judged`` is None for an answer whose turn ended in an error, whose
-    recall is not scored: such a turn reports no sources, so it would count
-    as a miss even when its searches showed gold.
+    ``judged`` is None when no judge ran, and for an answer whose turn ended
+    in an error, whose recall is not scored: such a turn reports no sources,
+    so it would count as a miss even when its searches showed gold.
     """
     found = [s for s in answered["sources"] if overlaps_gold(s, question.gold)]
     chat_error = answered["error"] is not None
@@ -467,7 +475,7 @@ class Row(TypedDict):
     shown_recall: float | None
     cited_recall: float | None
     supported: float | None
-    judge_errors: int
+    judge_errors: int | None
     chat_errors: int
     s_median: float
     s_p95: float
@@ -540,8 +548,15 @@ def agreement(pairs: Iterable[tuple[bool | None, bool]]) -> Agreement:
     )
 
 
-def _row(category: str, outcomes: Sequence[Outcome], judged: Agreement | None) -> Row:
+def _row(
+    category: str,
+    outcomes: Sequence[Outcome],
+    judged: Agreement | None,
+    *,
+    judging: bool,
+) -> Row:
     seconds = [o.seconds for o in outcomes]
+    judge_errors = sum(o.supported is None and not o.chat_error for o in outcomes)
     row: Row = {
         "category": category,
         "n": len(outcomes),
@@ -549,7 +564,7 @@ def _row(category: str, outcomes: Sequence[Outcome], judged: Agreement | None) -
         "shown_recall": rate(o.shown for o in outcomes),
         "cited_recall": rate(o.cited for o in outcomes),
         "supported": rate(o.supported for o in outcomes),
-        "judge_errors": sum(o.supported is None and not o.chat_error for o in outcomes),
+        "judge_errors": judge_errors if judging else None,
         "chat_errors": sum(o.chat_error for o in outcomes),
         "s_median": round(statistics.median(seconds), DIGITS),
         "s_p95": round(percentile(seconds, PERCENTILE), DIGITS),
@@ -560,17 +575,23 @@ def _row(category: str, outcomes: Sequence[Outcome], judged: Agreement | None) -
     return row
 
 
-def rows(outcomes: Sequence[Outcome], judged: Agreement | None = None) -> list[Row]:
+def rows(
+    outcomes: Sequence[Outcome],
+    judged: Agreement | None = None,
+    *,
+    judging: bool = True,
+) -> list[Row]:
     """Return one row per category, in the order first asked, then the overall row.
 
     ``judged`` is the judge's agreement with the labels, carried by every row.
+    Without ``judging`` no judge ran, so ``judge_errors`` is None, not 0.
     """
     by_category: defaultdict[str, list[Outcome]] = defaultdict(list)
     for o in outcomes:
         by_category[o.category].append(o)
     return [
-        *(_row(c, group, judged) for c, group in by_category.items()),
-        _row(OVERALL, outcomes, judged),
+        *(_row(c, group, judged, judging=judging) for c, group in by_category.items()),
+        _row(OVERALL, outcomes, judged, judging=judging),
     ]
 
 
@@ -707,7 +728,13 @@ def calibration_line(group: str, judged: Agreement) -> dict[str, object]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=DESCRIPTION)
     parser.add_argument("--answers", type=Path, required=True)
-    parser.add_argument("--verdicts", type=Path, required=True)
+    judge = parser.add_mutually_exclusive_group(required=True)
+    judge.add_argument("--verdicts", type=Path)
+    judge.add_argument(
+        "--no-judge",
+        action="store_true",
+        help="score without a judge: no model, no verdicts file, supported null",
+    )
     parser.add_argument("--set", type=Path, default=KNOWLEDGE_SET)
     parser.add_argument(
         "--calibration",
@@ -754,6 +781,37 @@ async def _judged(
     return judged
 
 
+def _refuse_judge_options(
+    parser: argparse.ArgumentParser, arguments: argparse.Namespace
+) -> None:
+    """Exit through ``parser`` if ``--no-judge`` came with a judge's option."""
+    judge_only = {
+        "--calibration": arguments.calibration is not None,
+        "--resume": arguments.resume,
+        "--threads": arguments.threads is not None,
+    }
+    refused = [flag for flag, given in judge_only.items() if given]
+    if refused:
+        parser.error(f"--no-judge starts no judge, so {', '.join(refused)} has no use")
+
+
+async def _answered(
+    set_path: Path, answers_path: Path
+) -> tuple[Sequence[Question], list[Answered]]:
+    """Return the set's questions and the answer to each, in the set's order."""
+    question_set = await asyncio.to_thread(read_set, set_path)
+    questions = question_set.questions
+    answers = await asyncio.to_thread(
+        read_answers, answers_path, question_set.commit, questions
+    )
+    return questions, [answers.by_question[q.id] for q in questions]
+
+
+def _print(lines: Iterable[Mapping[str, object]]) -> None:
+    for line in lines:
+        print(json.dumps(line, allow_nan=False), flush=True)
+
+
 async def _labelled(
     parser: argparse.ArgumentParser, path: Path | None
 ) -> tuple[Labelled, ...]:
@@ -781,17 +839,20 @@ async def main(
     """
     parser = _parser()
     arguments = parser.parse_args(argv)
-    out: Path = arguments.verdicts
-    exists = await asyncio.to_thread(out.exists)
+    out: Path | None = arguments.verdicts
+    if out is None:
+        _refuse_judge_options(parser, arguments)
+    exists = out is not None and await asyncio.to_thread(out.exists)
     if exists and not arguments.resume:
         parser.error(f"{out} exists: pass --resume to keep it, or remove it")
-    question_set = await asyncio.to_thread(read_set, arguments.set)
-    questions = question_set.questions
-    answers = await asyncio.to_thread(
-        read_answers, arguments.answers, question_set.commit, questions
-    )
+    questions, answered = await _answered(arguments.set, arguments.answers)
+    if out is None:
+        unjudged = [
+            outcome(q, a, None) for q, a in zip(questions, answered, strict=True)
+        ]
+        _print(rows(unjudged, judging=False))
+        return 0
     labelled = await _labelled(parser, arguments.calibration)
-    answered = [answers.by_question[q.id] for q in questions]
     chats = [to_judge(a) for a in answered]
     asked = [item for item in chats if item is not None]
     asked += [i.asked() for i in labelled]
@@ -802,10 +863,8 @@ async def main(
         outcome(q, a, None if item is None else judged[item.key])
         for q, a, item in zip(questions, answered, chats, strict=True)
     ]
-    for row in rows(outcomes, overall):
-        print(json.dumps(row, allow_nan=False), flush=True)
-    for group, judged_group in agreements:
-        print(json.dumps(calibration_line(group, judged_group), allow_nan=False))
+    _print(rows(outcomes, overall))
+    _print(calibration_line(group, judged_group) for group, judged_group in agreements)
     return 0
 
 

@@ -923,3 +923,77 @@ async def test_main_refuses_to_overwrite_without_resume(
 
     assert stopped.value.code == 2
     assert "pass --resume to keep it" in capsys.readouterr().err
+
+
+def no_service(_: int | None) -> Service:
+    pytest.fail("--no-judge opened the judge's service")
+
+
+async def test_main_without_a_judge_scores_from_the_answers_alone(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    answers = tmp_path / "answers.json"
+    answers_file(answers, paraphrase_error=CUT_OFF)
+    question_set = tmp_path / "set.json"
+    question_set.write_bytes(encoded(QUESTIONS, commit=COMMIT))
+    argv = ["--answers", str(answers), "--no-judge", "--set", str(question_set)]
+
+    assert await main(argv, service=no_service) == 0
+
+    printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [(r["category"], r["supported"], r["judge_errors"]) for r in printed] == [
+        ("named", None, None),
+        ("paraphrase", None, None),
+        ("none", None, None),
+        ("overall", None, None),
+    ]
+    assert printed[3] == {
+        "category": "overall",
+        "n": 3,
+        "searched": 0.667,
+        "shown_recall": 1.0,
+        "cited_recall": 1.0,
+        "supported": None,
+        "judge_errors": None,
+        "chat_errors": 1,
+        "s_median": 4.0,
+        "s_p95": 6.0,
+    }
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["answers.json", "set.json"]
+
+
+@pytest.mark.parametrize(
+    ("extra", "named"),
+    [
+        (["--calibration"], "--calibration"),
+        (["--resume"], "--resume"),
+        (["--threads", "0"], "--threads"),
+        (["--calibration", "x.json", "--resume"], "--calibration, --resume"),
+    ],
+    ids=["calibration", "resume", "threads", "two"],
+)
+async def test_main_without_a_judge_refuses_what_only_the_judge_uses(
+    extra: list[str], named: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        await main(["--answers", "a.json", "--no-judge", *extra], service=no_service)
+
+    assert stopped.value.code == 2
+    assert f"--no-judge starts no judge, so {named} has no use" in (
+        capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    "judge",
+    [[], ["--verdicts", "v.json", "--no-judge"]],
+    ids=["neither", "both"],
+)
+async def test_main_takes_exactly_one_of_verdicts_and_no_judge(
+    judge: list[str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as stopped:
+        await main(["--answers", "a.json", *judge], service=no_service)
+
+    assert stopped.value.code == 2
+    assert "--verdicts" in capsys.readouterr().err
