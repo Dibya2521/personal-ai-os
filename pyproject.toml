@@ -47,6 +47,8 @@ synthia = "synthia.interfaces.cli:app"
 dev = [
   "hypothesis>=6.120",
   "import-linter>=2.15",
+  "moonshine-voice==0.1.5",
+  "onnx-asr==0.12.0",
   "pre-commit>=4.0",
   "pre-commit-uv>=4.3.0",
   "pyright>=1.1.390",

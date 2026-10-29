@@ -1,0 +1,20 @@
+what time is it
+remind me to call the bank at four thirty tomorrow
+search my notes for the knowledge base design
+what did we decide about the echo canceller
+open the file called progress dot md
+summarise the last chat in three sentences
+how much free disk space do I have
+read me the first passage about Python decorators
+stop
+what is twenty seven times forty eight
+add milk and coffee to my shopping list
+explain how a ring buffer works in simple words
+what's the weather like in Edinburgh today
+start a new chat
+which model are you running on right now
+find the pdf about the quarterly report and cite the page
+cancel that
+translate good morning into Hindi
+what were my last three questions
+thank you SYNTHIA that's all for now
