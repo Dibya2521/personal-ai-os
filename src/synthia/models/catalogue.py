@@ -2,7 +2,9 @@
 
 A download is trusted only if it matches the digest recorded here, so the digest
 must come from somewhere other than the download itself: the GitHub release API
-for llama.cpp, the Hugging Face tree API for the model. Model files are fetched
+for llama.cpp, the Hugging Face tree API for the model, and for a file kept in a
+GitHub repository, its git blob id in the repository's tree, matched by the
+bytes before they were hashed. Model files are fetched
 from a pinned revision, because a branch such as ``main`` can move under a
 recorded hash.
 """
@@ -185,7 +187,28 @@ class Reranker:
         return sum(file.size for file in self.files)
 
 
-type Item = Runtime | Model | Embedder | Reranker
+@dataclass(frozen=True, slots=True)
+class SpeechModel:
+    """An ONNX network of SYNTHIA's voice: one file, run by ``synthia.voice``."""
+
+    id: str
+    repo: str
+    revision: str
+    licence: str
+    model: Download
+
+    @property
+    def files(self) -> tuple[Download, ...]:
+        """Every file of the model."""
+        return (self.model,)
+
+    @property
+    def size(self) -> int:
+        """Bytes to download."""
+        return self.model.size
+
+
+type Item = Runtime | Model | Embedder | Reranker | SpeechModel
 """Anything ``synthia models`` can install."""
 
 
@@ -489,7 +512,35 @@ RERANKERS: Final = (
         batch=16,
     ),
 )
-ITEMS: Final[tuple[Item, ...]] = (*RUNTIMES, *MODELS, *EMBEDDERS, *RERANKERS)
+_SILERO_REPO: Final = "snakers4/silero-vad"
+_SILERO_REVISION: Final = (
+    # pragma: allowlist nextline secret
+    "5cd7945676eb32225748052e2e6a0580e4686a08"
+)
+# Silero VAD at its v6.2.3 tag: speech probability per 32 ms frame at 16 kHz.
+# Hashed after its bytes matched the git blob id GitHub's tree gives.
+SILERO_VAD: Final = SpeechModel(
+    "silero-vad",
+    _SILERO_REPO,
+    _SILERO_REVISION,
+    "mit",
+    Download(
+        "silero_vad.onnx",
+        f"https://raw.githubusercontent.com/{_SILERO_REPO}/{_SILERO_REVISION}"
+        "/src/silero_vad/data/silero_vad.onnx",
+        2_327_524,
+        # pragma: allowlist nextline secret
+        "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+    ),
+)
+SPEECH_MODELS: Final = (SILERO_VAD,)
+ITEMS: Final[tuple[Item, ...]] = (
+    *RUNTIMES,
+    *MODELS,
+    *EMBEDDERS,
+    *RERANKERS,
+    *SPEECH_MODELS,
+)
 """Everything the catalogue holds, in the order ``synthia models list`` shows it."""
 _SYSTEMS: Final = {"windows": "windows", "linux": "linux", "darwin": "macos"}
 _MACHINES: Final = {
@@ -529,7 +580,7 @@ def recommended(target: Target, *, nvidia: bool) -> tuple[Runtime, ...]:
 
 
 def find(name: str) -> Item:
-    """Return the runtime, model, embedding model or reranker called ``name``.
+    """Return the catalogued item called ``name``.
 
     Raises:
         KeyError: If nothing in the catalogue has that name.

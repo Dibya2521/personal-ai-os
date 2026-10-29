@@ -9,6 +9,7 @@ from synthia.models.catalogue import (
     MODELS,
     RERANKERS,
     RUNTIMES,
+    SPEECH_MODELS,
     Backend,
     Download,
     Embedder,
@@ -69,6 +70,16 @@ def test_model_files_come_from_the_pinned_revision() -> None:
         ["onnx", "model_qint8_avx512.onnx"],
     ]
     assert all(e.tokenizer.url.endswith("/tokenizer.json") for e in EMBEDDERS)
+
+
+def test_speech_models_come_from_the_pinned_commit_and_install_by_name() -> None:
+    for model in SPEECH_MODELS:
+        assert model.model.url.startswith(
+            f"https://raw.githubusercontent.com/{model.repo}/{model.revision}/"
+        )
+        assert find(model.id) is model
+        assert model.files == (model.model,)
+        assert model.size == model.model.size
 
 
 def test_an_embedder_is_its_network_and_its_tokenizer() -> None:

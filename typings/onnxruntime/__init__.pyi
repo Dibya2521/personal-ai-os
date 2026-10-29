@@ -7,6 +7,7 @@ from numpy.typing import NDArray
 
 class SessionOptions:
     intra_op_num_threads: int
+    inter_op_num_threads: int
 
 class NodeArg:
     @property
@@ -23,5 +24,5 @@ class InferenceSession:
     def run(
         self,
         output_names: Sequence[str] | None,
-        input_feed: Mapping[str, NDArray[np.int64]],
+        input_feed: Mapping[str, NDArray[np.int64] | NDArray[np.float32]],
     ) -> list[NDArray[np.float32]]: ...
