@@ -208,7 +208,28 @@ class SpeechModel:
         return self.model.size
 
 
-type Item = Runtime | Model | Embedder | Reranker | SpeechModel
+@dataclass(frozen=True, slots=True)
+class Lexicon:
+    """A pronouncing dictionary of SYNTHIA's voice, read by ``synthia.voice``."""
+
+    id: str
+    repo: str
+    revision: str
+    licence: str
+    dictionary: Download
+
+    @property
+    def files(self) -> tuple[Download, ...]:
+        """Every file of the dictionary."""
+        return (self.dictionary,)
+
+    @property
+    def size(self) -> int:
+        """Bytes to download."""
+        return self.dictionary.size
+
+
+type Item = Runtime | Model | Embedder | Reranker | SpeechModel | Lexicon
 """Anything ``synthia models`` can install."""
 
 
@@ -534,12 +555,35 @@ SILERO_VAD: Final = SpeechModel(
     ),
 )
 SPEECH_MODELS: Final = (SILERO_VAD,)
+_CMUDICT_REPO: Final = "cmusphinx/cmudict"
+_CMUDICT_REVISION: Final = (
+    # pragma: allowlist nextline secret
+    "74790861f652b15e4ac49015a90074ad62a27690"
+)
+# The CMU Pronouncing Dictionary: English words in ARPAbet, a stress digit on
+# every vowel. Hashed after its bytes matched the git blob id GitHub's tree gives.
+CMUDICT: Final = Lexicon(
+    "cmudict",
+    _CMUDICT_REPO,
+    _CMUDICT_REVISION,
+    "bsd-2-clause",
+    Download(
+        "cmudict.dict",
+        f"https://raw.githubusercontent.com/{_CMUDICT_REPO}/{_CMUDICT_REVISION}"
+        "/cmudict.dict",
+        3_618_488,
+        # pragma: allowlist nextline secret
+        "81917843c7f44ce2b094ac63873c2c7a4cf802040792c455ba3ca406891c3d22",
+    ),
+)
+LEXICONS: Final = (CMUDICT,)
 ITEMS: Final[tuple[Item, ...]] = (
     *RUNTIMES,
     *MODELS,
     *EMBEDDERS,
     *RERANKERS,
     *SPEECH_MODELS,
+    *LEXICONS,
 )
 """Everything the catalogue holds, in the order ``synthia models list`` shows it."""
 _SYSTEMS: Final = {"windows": "windows", "linux": "linux", "darwin": "macos"}

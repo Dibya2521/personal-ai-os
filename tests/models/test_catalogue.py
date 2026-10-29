@@ -5,6 +5,7 @@ from synthia.models.catalogue import (
     DEFAULT_EMBEDDER,
     EMBEDDERS,
     ITEMS,
+    LEXICONS,
     LLAMA_CPP_BUILD,
     MODELS,
     RERANKERS,
@@ -80,6 +81,16 @@ def test_speech_models_come_from_the_pinned_commit_and_install_by_name() -> None
         assert find(model.id) is model
         assert model.files == (model.model,)
         assert model.size == model.model.size
+
+
+def test_lexicons_come_from_the_pinned_commit_and_install_by_name() -> None:
+    for lexicon in LEXICONS:
+        assert lexicon.dictionary.url.startswith(
+            f"https://raw.githubusercontent.com/{lexicon.repo}/{lexicon.revision}/"
+        )
+        assert find(lexicon.id) is lexicon
+        assert lexicon.files == (lexicon.dictionary,)
+        assert lexicon.size == lexicon.dictionary.size
 
 
 def test_an_embedder_is_its_network_and_its_tokenizer() -> None:
