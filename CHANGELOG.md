@@ -4,6 +4,15 @@ All notable changes are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `synthia doctor` names the microphone and speaker SYNTHIA would use and the
+  sound system they belong to (MME, DirectSound or WASAPI on Windows), and
+  warns when PortAudio cannot be loaded or there is no microphone. Voice is
+  optional, so a missing microphone is a warning, never a failure.
+
 ## [0.3.0] - 2026-10-27
 
 SYNTHIA is always there, remembers, and reads the person's files. One daemon

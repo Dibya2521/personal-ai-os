@@ -20,6 +20,7 @@ import psutil
 from synthia.interfaces.model_commands import configured, this_machine
 from synthia.kernel.config import LocalBackend
 from synthia.models.service import installed_builds
+from synthia.voice.audio import AudioUnavailableError, Devices, devices
 
 if TYPE_CHECKING:
     from synthia.kernel.config import Settings
@@ -74,6 +75,8 @@ class Facts:
     home_exists: bool
     disk_free_gb: float
     local: LocalFacts
+    audio: Devices | str
+    """The sound devices, or why PortAudio could not list them."""
 
 
 def _nearest_existing(path: Path) -> Path:
@@ -98,7 +101,15 @@ def gather_facts(settings: Settings, installer: Installer) -> Facts:
         home_exists=home.is_dir(),
         disk_free_gb=shutil.disk_usage(_nearest_existing(home)).free / BYTES_PER_GB,
         local=_local_facts(settings, installer, machine.target),
+        audio=_audio_facts(),
     )
+
+
+def _audio_facts() -> Devices | str:
+    try:
+        return devices()
+    except AudioUnavailableError as error:
+        return str(error)
 
 
 def _local_facts(
@@ -128,6 +139,7 @@ def evaluate(settings: Settings, facts: Facts) -> list[Check]:
         _local(settings, facts),
         _home(settings, facts),
         _disk(settings, facts),
+        _audio(facts),
         _openrouter(settings),
     ]
 
@@ -204,6 +216,17 @@ def _disk(settings: Settings, facts: Facts) -> Check:
     if facts.disk_free_gb < budget:
         return Check("disk", Status.WARN, f"{detail}, less free space than the budget")
     return Check("disk", Status.OK, detail)
+
+
+def _audio(facts: Facts) -> Check:
+    audio = facts.audio
+    if isinstance(audio, str):
+        return Check("audio", Status.WARN, f"{audio}; SYNTHIA cannot listen or speak")
+    if audio.default_input is None:
+        return Check("audio", Status.WARN, "no microphone, so SYNTHIA cannot listen")
+    speaker = audio.default_output or "no speaker"
+    detail = f"listens on {audio.default_input}, speaks on {speaker} ({audio.host_api})"
+    return Check("audio", Status.OK, detail)
 
 
 def _openrouter(settings: Settings) -> Check:

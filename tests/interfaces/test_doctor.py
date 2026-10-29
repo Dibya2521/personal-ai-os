@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from synthia.interfaces import doctor
 from synthia.interfaces.doctor import (
     LOCAL_MODEL,
     Check,
@@ -17,7 +18,15 @@ from synthia.interfaces.doctor import (
 from synthia.kernel.config import LocalBackend, Settings
 from synthia.models.catalogue import Backend, Target
 from synthia.models.install import BYTES_PER_GB, Installer
+from synthia.voice.audio import AudioUnavailableError, Devices
 
+SOUND = Devices(
+    host_api="MME",
+    inputs=("Microphone Array",),
+    outputs=("Speakers",),
+    default_input="Microphone Array",
+    default_output="Speakers",
+)
 INSTALLED = LocalFacts(
     Target.LINUX_X64,
     model_known=True,
@@ -34,6 +43,7 @@ HEALTHY = Facts(
     home_exists=True,
     disk_free_gb=120.0,
     local=INSTALLED,
+    audio=SOUND,
 )
 
 
@@ -68,6 +78,7 @@ def test_a_healthy_machine_passes_everything(tmp_path: Path) -> None:
         LOCAL_MODEL,
         "home",
         "disk",
+        "audio",
         "openrouter",
     ]
 
@@ -81,6 +92,9 @@ def test_a_healthy_machine_passes_everything(tmp_path: Path) -> None:
         ({"disk_free_gb": 5.0}, "disk", Status.WARN),
         ({"cuda_driver": True}, "accelerator", Status.OK),
         ({"home_exists": False}, "home", Status.OK),
+        ({"audio": "PortAudio could not be loaded"}, "audio", Status.WARN),
+        ({"audio": replace(SOUND, default_input=None)}, "audio", Status.WARN),
+        ({"audio": replace(SOUND, default_output=None)}, "audio", Status.OK),
     ],
 )
 def test_each_fact_moves_its_own_check(
@@ -181,6 +195,19 @@ def test_gather_facts_reads_this_machine(tmp_path: Path) -> None:
     assert facts.local.model_known
     assert not facts.local.model_installed
     assert facts.local.builds == ()
+
+
+def test_gather_facts_keeps_why_sound_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_portaudio() -> Devices:
+        message = "PortAudio could not be loaded: not found"
+        raise AudioUnavailableError(message)
+
+    monkeypatch.setattr(doctor, "devices", no_portaudio)
+    facts = gather_facts(settings(tmp_path), Installer(tmp_path, BYTES_PER_GB))
+
+    assert facts.audio == "PortAudio could not be loaded: not found"
 
 
 def test_gather_facts_notes_an_unknown_local_model(tmp_path: Path) -> None:
