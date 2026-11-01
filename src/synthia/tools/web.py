@@ -4,11 +4,19 @@ Each call uses a new HTTP client, so no cookie or connection is kept between
 calls or shared with model traffic, and it carries no key. Only http and
 https are fetched, only text comes back (HTML is reduced to its visible
 text), and both the bytes read and the time taken are capped.
+
+The person approves the address they see. A redirect to another origin
+(scheme, host and port) is followed only when every address its host
+resolves to is public, so an approved page cannot send the call on to this
+machine, the local network or a cloud metadata service such as
+169.254.169.254.
 """
 
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+from collections.abc import Awaitable, Callable, Sequence
 from html.parser import HTMLParser
 from typing import Annotated, Final, override
 
@@ -29,6 +37,11 @@ _TEXT_TYPES: Final = frozenset(
     {"application/json", "application/xml", "application/javascript"}
 )
 _HIDDEN: Final = frozenset({"script", "style", "noscript", "template", "svg"})
+
+# Azure's wireserver serves VM metadata and keys from a public-range address.
+_GLOBAL_METADATA: Final = frozenset({ipaddress.ip_address("168.63.129.16")})
+
+type Resolver = Callable[[str], Awaitable[Sequence[str]]]
 _BLOCKS: Final = frozenset(
     {
         "p",
@@ -106,12 +119,19 @@ def is_text(content_type: str) -> bool:
     )
 
 
+async def host_addresses(host: str) -> list[str]:
+    """Return every IP address ``host`` resolves to."""
+    infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+    return [str(info[4][0]) for info in infos]
+
+
 def fetch_tool(
     transport: httpx.AsyncBaseTransport | None = None,
     *,
     timeout_s: float = FETCH_TIMEOUT_S,
+    resolve: Resolver = host_addresses,
 ) -> FunctionTool:
-    """Return the tool that fetches a page; ``transport`` is for tests."""
+    """Return the tool that fetches a page; ``transport`` and ``resolve`` are fakes."""
 
     async def fetch_url(
         url: Annotated[
@@ -127,14 +147,12 @@ def fetch_tool(
         address = _checked(url)
         async with httpx.AsyncClient(
             transport=transport,
-            follow_redirects=True,
-            max_redirects=MAX_REDIRECTS,
             timeout=timeout_s,
             headers={"User-Agent": f"SYNTHIA/{__version__}"},
         ) as client:
             try:
                 async with asyncio.timeout(timeout_s):
-                    body, response = await _read(client, address)
+                    body, response = await _read(client, address, resolve)
             except TimeoutError as error:
                 message = f"no complete answer within {timeout_s:g} s"
                 raise ToolError(message) from error
@@ -159,22 +177,61 @@ def _checked(url: str) -> httpx.URL:
 
 
 async def _read(
-    client: httpx.AsyncClient, address: httpx.URL
+    client: httpx.AsyncClient, address: httpx.URL, resolve: Resolver
 ) -> tuple[bytes, httpx.Response]:
-    async with client.stream("GET", address) as response:
-        content_type = response.headers.get("content-type", "")
-        if response.is_success and not is_text(content_type):
-            message = (
-                f"{response.url} is {content_type or 'of no stated type'}, not text"
-            )
-            raise ToolError(message)
-        body = bytearray()
-        async for chunk in response.aiter_bytes():
-            body.extend(chunk)
-            # Read past the limit, so a page of exactly the limit counts as whole.
-            if len(body) > MAX_FETCH_BYTES:
-                break
-        return bytes(body), response
+    request = client.build_request("GET", address)
+    for _ in range(MAX_REDIRECTS + 1):
+        response = await client.send(request, stream=True)
+        try:
+            follow = response.next_request
+            if follow is None:
+                return await _body(response), response
+        finally:
+            await response.aclose()
+        hop = _checked(str(follow.url))
+        if _origin(hop) != _origin(address):
+            await _refuse_inner(hop, resolve)
+        request = follow
+    message = f"more than {MAX_REDIRECTS} redirects from {address}"
+    raise ToolError(message)
+
+
+def _origin(url: httpx.URL) -> tuple[str, str, int | None]:
+    return url.scheme, url.host, url.port
+
+
+def _is_inner(address: str) -> bool:
+    ip = ipaddress.ip_address(address)
+    return not ip.is_global or ip in _GLOBAL_METADATA
+
+
+async def _refuse_inner(url: httpx.URL, resolve: Resolver) -> None:
+    try:
+        found = await resolve(url.host)
+    except OSError as error:
+        message = f"could not resolve {url.host} to follow a redirect: {error}"
+        raise ToolError(message) from error
+    inner = sorted({a for a in found if _is_inner(a)})
+    if inner:
+        message = (
+            f"refused a redirect to {url}: {url.host} is a local or private "
+            f"address ({', '.join(inner)})"
+        )
+        raise ToolError(message)
+
+
+async def _body(response: httpx.Response) -> bytes:
+    content_type = response.headers.get("content-type", "")
+    if response.is_success and not is_text(content_type):
+        message = f"{response.url} is {content_type or 'of no stated type'}, not text"
+        raise ToolError(message)
+    body = bytearray()
+    async for chunk in response.aiter_bytes():
+        body.extend(chunk)
+        # Read past the limit, so a page of exactly the limit counts as whole.
+        if len(body) > MAX_FETCH_BYTES:
+            break
+    return bytes(body)
 
 
 def _describe(response: httpx.Response, body: bytes) -> str:

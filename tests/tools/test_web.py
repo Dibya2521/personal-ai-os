@@ -8,8 +8,11 @@ from synthia import __version__
 from synthia.agent.tools import Effect, Reach, ToolError
 from synthia.tools.web import (
     MAX_FETCH_BYTES,
+    MAX_REDIRECTS,
     MAX_TEXT_CHARS,
+    Resolver,
     fetch_tool,
+    host_addresses,
     is_text,
     visible_text,
 )
@@ -23,10 +26,31 @@ PAGE = (
 
 
 async def fetched(
-    handler: object, url: str = "https://example.org/kettle", **options: float
+    handler: object,
+    url: str = "https://example.org/kettle",
+    resolve: Resolver = host_addresses,
+    **options: float,
 ) -> str:
-    tool = fetch_tool(httpx.MockTransport(handler), **options)  # type: ignore[arg-type]
+    tool = fetch_tool(httpx.MockTransport(handler), resolve=resolve, **options)  # type: ignore[arg-type]
     return await tool.run(json.dumps({"url": url}))
+
+
+def resolving_to(*addresses: str) -> Resolver:
+    async def resolve(host: str) -> list[str]:
+        del host
+        return list(addresses)
+
+    return resolve
+
+
+def redirecting_to(location: str, sent: list[str]) -> object:
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(str(request.url))
+        if request.url.host == "example.org":
+            return httpx.Response(302, headers={"location": location})
+        return httpx.Response(200, text="inner secret")
+
+    return handler
 
 
 def test_visible_text_keeps_what_a_reader_sees() -> None:
@@ -87,6 +111,107 @@ async def test_redirects_are_followed_and_the_final_address_named() -> None:
     assert (await fetched(handler, "https://example.org/old")).startswith(
         "https://example.org/new (200, text/plain; charset=utf-8)\n\nmoved here"
     )
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "http://169.254.169.254/latest/meta-data/",
+        "http://127.0.0.1:11434/api/tags",
+        "http://[::1]/",
+        "http://10.0.0.5/admin",
+        "http://192.168.1.1/",
+        "http://[::ffff:127.0.0.1]/",
+        "http://168.63.129.16/metadata/",
+    ],
+)
+async def test_a_redirect_to_a_local_or_private_address_is_refused(
+    location: str,
+) -> None:
+    sent: list[str] = []
+
+    with pytest.raises(ToolError, match=r"^refused a redirect to .+ local or private"):
+        await fetched(redirecting_to(location, sent))
+
+    assert sent == ["https://example.org/kettle"]
+
+
+async def test_a_redirect_to_a_name_that_resolves_locally_is_refused() -> None:
+    sent: list[str] = []
+
+    with pytest.raises(ToolError, match=r"localtest\.me is a local .+\(127\.0\.0\.1\)"):
+        await fetched(
+            redirecting_to("http://localtest.me/", sent),
+            resolve=resolving_to("93.184.215.14", "127.0.0.1"),
+        )
+
+    assert sent == ["https://example.org/kettle"]
+
+
+async def test_a_redirect_to_a_public_host_is_followed() -> None:
+    sent: list[str] = []
+
+    result = await fetched(
+        redirecting_to("https://www.example.com/", sent),
+        resolve=resolving_to("93.184.215.14"),
+    )
+
+    assert result.startswith("https://www.example.com/ (200")
+    assert sent == ["https://example.org/kettle", "https://www.example.com/"]
+
+
+async def test_a_redirect_within_an_approved_local_host_is_followed() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/":
+            return httpx.Response(302, headers={"location": "/login"})
+        return httpx.Response(200, text="dev server")
+
+    result = await fetched(handler, "http://127.0.0.1:8000/")
+
+    assert result.startswith("http://127.0.0.1:8000/login (200")
+
+
+async def test_a_redirect_to_another_port_of_an_approved_local_host_is_refused() -> (
+    None
+):
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(str(request.url))
+        return httpx.Response(302, headers={"location": "http://127.0.0.1:11434/"})
+
+    with pytest.raises(
+        ToolError, match=r"^refused a redirect to http://127\.0\.0\.1:11434"
+    ):
+        await fetched(handler, "http://127.0.0.1:8000/")
+
+    assert sent == ["http://127.0.0.1:8000/"]
+
+
+async def test_a_redirect_host_that_cannot_be_resolved_is_a_tool_error() -> None:
+    async def fail(host: str) -> list[str]:
+        raise OSError(host)
+
+    with pytest.raises(ToolError, match=r"^could not resolve nowhere\.test"):
+        await fetched(redirecting_to("http://nowhere.test/", []), resolve=fail)
+
+
+async def test_a_redirect_to_another_scheme_is_refused() -> None:
+    with pytest.raises(ToolError, match=r"^only http and https"):
+        await fetched(redirecting_to("ftp://example.com/file", []))
+
+
+async def test_too_many_redirects_is_a_tool_error() -> None:
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(str(request.url))
+        return httpx.Response(302, headers={"location": f"/{len(sent)}"})
+
+    with pytest.raises(ToolError, match=rf"^more than {MAX_REDIRECTS} redirects"):
+        await fetched(handler)
+
+    assert len(sent) == MAX_REDIRECTS + 1
 
 
 async def test_a_binary_answer_is_refused() -> None:
