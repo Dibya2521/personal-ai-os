@@ -5,16 +5,28 @@ instructions"). Quoting marks where such text begins and ends, and defuses
 the markup that could end the quote or open a turn of its own. It lowers how
 often a model follows injected text; the permission policy, which no text can
 change, is what guarantees a refused tool still never runs.
+
+Characters a person cannot see but a model reads (zero-width spaces and
+joiners, bidi controls, U+FEFF, variation selectors) can split a closing tag
+or an instruction so a plain pattern misses it. They also carry meaning in
+real text (Odia, Devanagari and Persian need ZWJ and ZWNJ, emoji need ZWJ and
+U+FE0F), so they are kept, and the patterns look through them instead. Only
+the Unicode tag block is removed: it renders as nothing and can spell a whole
+hidden prompt.
 """
 
 from __future__ import annotations
 
+import functools
 import html
 import re
+import sys
+import unicodedata
 from typing import Final
 
 CLOSE: Final = "</tool_result>"
-_CLOSING: Final = re.compile(r"</(\s*tool_result)", re.IGNORECASE)
+_TAG_BLOCK: Final = re.compile(r"[\U000e0000-\U000e007f]")
+_VARIATION_SELECTORS: Final = (range(0xFE00, 0xFE10), range(0xE0100, 0xE01F0))
 # Chat templates mark turns with <|...|> tokens; text spelled the same way
 # could be read as one and start a turn of its own.
 _CONTROL: Final = re.compile(r"<\|")
@@ -28,7 +40,7 @@ _FLAGS: Final = (
     ),
     (
         "tries to change the role",
-        re.compile(r"\byou are now\b|\bnew instructions\b", re.IGNORECASE),
+        re.compile(r"\byou\s+are\s+now\b|\bnew\s+instructions\b", re.IGNORECASE),
     ),
     (
         "speaks as a role",
@@ -42,10 +54,55 @@ _FLAGS: Final = (
 
 def quote(name: str, result: str) -> str:
     """Return ``result`` wrapped as the untrusted output of the tool ``name``."""
-    safe = _CONTROL.sub("< |", _CLOSING.sub(r"<\\/\1", result))
+    shown = _TAG_BLOCK.sub("", result)
+    safe = _CONTROL.sub("< |", _closing().sub(r"<\\/\1", shown))
     return f'<tool_result name="{html.escape(name)}" trusted="false">\n{safe}\n{CLOSE}'
 
 
 def flags(result: str) -> tuple[str, ...]:
     """Return what in ``result`` is shaped like an instruction to the model."""
-    return tuple(label for label, pattern in _FLAGS if pattern.search(result))
+    if result.isascii():
+        views = (result,)
+    else:
+        hidden = _hidden()
+        # Removed, a hidden character inside a word joins the word back;
+        # spaced, one between two words keeps them apart.
+        views = (hidden.sub("", result), hidden.sub(" ", result))
+    return tuple(
+        label
+        for label, pattern in _FLAGS
+        if any(pattern.search(view) for view in views)
+    )
+
+
+@functools.cache
+def _hidden_class() -> str:
+    points = [
+        point
+        for point in range(sys.maxunicode + 1)
+        if unicodedata.category(chr(point)) == "Cf"
+    ]
+    points.extend(point for block in _VARIATION_SELECTORS for point in block)
+    # As ranges: the same class written as single characters made each pass
+    # about 10 times slower.
+    runs: list[tuple[int, int]] = []
+    for point in sorted(points):
+        if runs and point == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], point)
+        else:
+            runs.append((point, point))
+    return "".join(
+        f"{re.escape(chr(low))}-{re.escape(chr(high))}" for low, high in runs
+    )
+
+
+@functools.cache
+def _hidden() -> re.Pattern[str]:
+    return re.compile(f"[{_hidden_class()}]+")
+
+
+@functools.cache
+def _closing() -> re.Pattern[str]:
+    gap = f"[\\s{_hidden_class()}]*"
+    name = f"[{_hidden_class()}]*".join("tool_result")
+    return re.compile(f"<{gap}/({gap}{name})", re.IGNORECASE)
