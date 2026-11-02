@@ -48,7 +48,8 @@ class Gateway:
     ``model`` is the router with accounting on top; ``router`` is exposed for
     its decisions, capabilities and remote guards. ``learn_daily_cap`` asks
     the remote for the key's daily cap and stores it (see
-    :func:`learn_daily_cap`); without a remote it returns ``None``.
+    :func:`learn_daily_cap`); without a remote, or with one that does not
+    report its cap, it returns ``None``.
     """
 
     model: ChatModel
@@ -127,7 +128,8 @@ def build_gateway(
             client=client, endpoint=remote.endpoint(key), info=remote.model
         )
         guarded = Remote(guard_remote(adapter, health), health)
-        learn = partial(learn_daily_cap, ledger, client, key, remote)
+        if remote.reports_daily_cap:
+            learn = partial(learn_daily_cap, ledger, client, key, remote)
     local_ids = frozenset[str]() if local is None else frozenset({local.info.id})
 
     async def remote_speed() -> float | None:

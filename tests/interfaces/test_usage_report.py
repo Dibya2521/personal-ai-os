@@ -123,6 +123,23 @@ async def test_the_check_asks_the_provider_it_is_given(tmp_path: Path) -> None:
     assert asked == ["https://proxy.example/api/v1/key"]
 
 
+async def test_a_provider_that_does_not_report_its_count_is_not_asked(
+    tmp_path: Path,
+) -> None:
+    asked: list[httpx.Request] = []
+
+    report = await budget_report(
+        Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY)),
+        check=True,
+        transport=httpx.MockTransport(lambda r: asked.append(r) or httpx.Response(500)),
+        remote=replace(OPENROUTER_FREE, reports_daily_cap=False),
+    )
+
+    assert report.lines[-1] == "openrouter does not report its own count to compare"
+    assert not report.complete
+    assert asked == []
+
+
 async def test_a_check_without_a_key_or_an_answer_is_incomplete(tmp_path: Path) -> None:
     refused = httpx.MockTransport(
         lambda _: httpx.Response(401, json={"error": {"message": "User not found."}})

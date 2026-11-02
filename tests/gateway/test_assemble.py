@@ -9,6 +9,7 @@ from pydantic import SecretStr
 from synthia.gateway.assemble import GATEWAY_DB, build_gateway
 from synthia.gateway.budget import BudgetLedger
 from synthia.gateway.errors import RemoteUnavailableError
+from synthia.gateway.openai_compat import Dialect
 from synthia.gateway.protocol import collect
 from synthia.gateway.providers import APP_TITLE, APP_URL, OPENROUTER, OPENROUTER_FREE
 from synthia.gateway.router import Route, RouteDecided, RouteReason
@@ -38,6 +39,7 @@ def test_the_openrouter_endpoint_sends_the_attribution_headers() -> None:
     assert endpoint.model == "openrouter/free"
     assert endpoint.api_key == SecretStr(KEY)
     assert dict(endpoint.headers) == {"HTTP-Referer": APP_URL, "X-Title": APP_TITLE}
+    assert endpoint.dialect is Dialect.OPENROUTER
 
 
 def test_the_free_router_is_described_once_with_its_limits() -> None:
@@ -94,6 +96,45 @@ async def test_a_key_record_that_cannot_be_read_keeps_the_cap(
     assert (learned, status.cap) == (None, 50)
     assert "could not learn the openrouter daily cap: HTTP 401" in caplog.text
     assert KEY not in caplog.text
+
+
+async def test_a_provider_that_does_not_report_its_cap_is_never_asked(
+    tmp_path: Path,
+) -> None:
+    sent: list[httpx.Request] = []
+    silent = replace(OPENROUTER_FREE, reports_daily_cap=False)
+    settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: sent.append(r) or answer(r))
+    ) as client:
+        gateway = build_gateway(settings, client, _ignore, remote=silent)
+
+        learned = await gateway.learn_daily_cap()
+        assert gateway.health is not None
+        status = await gateway.health.ledger.status(OPENROUTER)
+
+    assert (learned, status.cap, sent) == (None, 50, [])
+
+
+async def test_a_request_takes_the_shape_of_the_providers_dialect(
+    tmp_path: Path,
+) -> None:
+    sent: list[httpx.Request] = []
+    llama_shaped = replace(OPENROUTER_FREE, dialect=Dialect.LLAMA_CPP)
+    settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
+    quiet = replace(HELLO, reasoning=Reasoning.OFF)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: sent.append(r) or answer(r))
+    ) as client:
+        gateway = build_gateway(settings, client, _ignore, remote=llama_shaped)
+        await collect(gateway.model.stream(quiet))
+        openrouter = build_gateway(settings, client, _ignore)
+        await collect(openrouter.model.stream(quiet))
+
+    llama_body, openrouter_body = (json.loads(r.content) for r in sent)
+    assert llama_body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "reasoning" not in llama_body
+    assert openrouter_body["reasoning"] == {"effort": "none"}
 
 
 async def test_without_a_key_or_a_local_model_there_is_no_gateway(

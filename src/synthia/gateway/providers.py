@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from synthia.gateway.openai_compat import Endpoint
+from synthia.gateway.openai_compat import Dialect, Endpoint
 from synthia.gateway.types import ModelInfo
 
 if TYPE_CHECKING:
@@ -25,7 +25,9 @@ class RemoteProvider:
     """A remote provider: where it is, the model asked for, and its limits.
 
     ``name`` is the key the daily budget is counted under. ``daily_cap`` is
-    used until the provider has reported the cap of the key in use.
+    used until the provider has reported the cap of the key in use, which
+    only a provider with ``reports_daily_cap`` can do. ``dialect`` says how
+    the provider takes what the OpenAI chat API has no field for.
     """
 
     name: str
@@ -34,10 +36,18 @@ class RemoteProvider:
     requests_per_minute: int
     daily_cap: int
     headers: Mapping[str, str]
+    dialect: Dialect
+    reports_daily_cap: bool
 
     def endpoint(self, api_key: SecretStr) -> Endpoint:
         """Return the endpoint that sends ``api_key`` and the headers to this model."""
-        return Endpoint(self.base_url, self.model.id, api_key, dict(self.headers))
+        return Endpoint(
+            self.base_url,
+            self.model.id,
+            api_key,
+            dict(self.headers),
+            dialect=self.dialect,
+        )
 
 
 OPENROUTER_FREE: Final = RemoteProvider(
@@ -54,4 +64,7 @@ OPENROUTER_FREE: Final = RemoteProvider(
     # bought; 1000 once 10 are bought, which the key's own record reports.
     daily_cap=50,
     headers=MappingProxyType({"HTTP-Referer": APP_URL, "X-Title": APP_TITLE}),
+    dialect=Dialect.OPENROUTER,
+    # OpenRouter's GET /key returns the key's free-model count and limit.
+    reports_daily_cap=True,
 )

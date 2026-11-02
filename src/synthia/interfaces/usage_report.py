@@ -66,6 +66,10 @@ async def _check(
     transport: httpx.AsyncBaseTransport | None,
     remote: RemoteProvider,
 ) -> None:
+    if not remote.reports_daily_cap:
+        report.lines.append(f"{remote.name} does not report its own count to compare")
+        report.complete = False
+        return
     key = settings.openrouter_api_key
     if key is None:
         report.lines.append("set SYNTHIA_OPENROUTER_API_KEY to compare with OpenRouter")
