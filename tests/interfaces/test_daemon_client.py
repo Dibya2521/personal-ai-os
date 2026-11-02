@@ -17,6 +17,8 @@ from synthia.gateway.types import ChatChunk, ChatRequest, PromptProgress
 from synthia.interfaces import cli, daemon_client, doctor
 from synthia.interfaces.cli import app
 from synthia.interfaces.daemon_client import (
+    DAEMON_STDERR,
+    PREVIOUS_STDERR,
     STOPPED_AT_START,
     DaemonError,
     conversation,
@@ -72,7 +74,7 @@ def free_port() -> int:
 
 
 async def test_a_running_daemon_is_found_and_none_is_started(tmp_path: Path) -> None:
-    def start() -> Process:
+    def start(_home: Path) -> Process:
         pytest.fail("a running daemon must not be started again")
 
     with private_daemon(keyed(tmp_path)) as info:
@@ -85,8 +87,8 @@ async def test_a_missing_daemon_is_started_and_waited_for(tmp_path: Path) -> Non
     with contextlib.ExitStack() as stack:
         started: list[DaemonInfo] = []
 
-        def start() -> Process:
-            started.append(stack.enter_context(private_daemon(keyed(tmp_path))))
+        def start(home: Path) -> Process:
+            started.append(stack.enter_context(private_daemon(keyed(home))))
             return Process()
 
         found = await find_or_start(tmp_path, start=start)  # type: ignore[arg-type]
@@ -106,7 +108,32 @@ async def test_a_daemon_that_never_serves_is_reported(
     tmp_path: Path, process: Process, timeout_s: float, problem: str
 ) -> None:
     with pytest.raises(DaemonError, match=problem):
-        await find_or_start(tmp_path, start=lambda: process, timeout_s=timeout_s)  # type: ignore[arg-type,return-value]
+        await find_or_start(tmp_path, start=lambda _home: process, timeout_s=timeout_s)  # type: ignore[arg-type,return-value]
+
+
+async def test_a_daemon_that_dies_at_start_leaves_its_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.delenv("SYNTHIA_OPENROUTER_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / DAEMON_STDERR).parent.mkdir()
+    (tmp_path / DAEMON_STDERR).write_text("a daemon still stopping\n")
+
+    with (
+        (tmp_path / DAEMON_STDERR).open("ab"),
+        pytest.raises(DaemonError, match=re.escape(STOPPED_AT_START)),
+    ):
+        await find_or_start(tmp_path, timeout_s=HANG_TIMEOUT_S)
+
+    written = "".join(
+        path.read_text()
+        for path in (tmp_path / PREVIOUS_STDERR, tmp_path / DAEMON_STDERR)
+        if path.exists()
+    )
+    assert "a daemon still stopping" in written
+    assert "no model is available" in (tmp_path / DAEMON_STDERR).read_text()
 
 
 async def test_a_file_whose_port_is_closed_is_no_daemon(tmp_path: Path) -> None:
@@ -135,8 +162,8 @@ async def test_an_idle_daemon_of_another_version_is_restarted(
         old = stack.enter_context(private_daemon(keyed(tmp_path)))
         new: list[DaemonInfo] = []
 
-        def start() -> Process:
-            new.append(stack.enter_context(private_daemon(keyed(tmp_path))))
+        def start(home: Path) -> Process:
+            new.append(stack.enter_context(private_daemon(keyed(home))))
             return Process()
 
         found = await current_daemon(tmp_path, start=start)  # type: ignore[arg-type]
@@ -344,11 +371,17 @@ async def test_the_real_command_starts_a_daemon_in_the_background(
     monkeypatch.setenv("SYNTHIA_OPENROUTER_API_KEY", KEY)
     monkeypatch.chdir(tmp_path)
 
-    process = start_daemon()
+    (tmp_path / DAEMON_STDERR).parent.mkdir()
+    (tmp_path / DAEMON_STDERR).write_text("the start before\n")
+
+    process = start_daemon(tmp_path)
     try:
         async with asyncio.timeout(HANG_TIMEOUT_S):
             while (info := await running_daemon(tmp_path)) is None:
-                assert process.poll() is None, "the daemon stopped while starting"
+                assert process.poll() is None, (
+                    f"the daemon stopped while starting with {process.poll()}; "
+                    f"its stderr: {(tmp_path / DAEMON_STDERR).read_text()!r}"
+                )
                 await asyncio.sleep(0.1)
         async with conversation(info, refuse) as talk:
             await talk.stop_daemon()
@@ -361,3 +394,5 @@ async def test_the_real_command_starts_a_daemon_in_the_background(
     assert info.version == __version__
     assert not (tmp_path / DAEMON_FILE).exists()
     assert not await healthy(info)
+    assert (tmp_path / PREVIOUS_STDERR).read_text() == "the start before\n"
+    assert (tmp_path / DAEMON_STDERR).exists()

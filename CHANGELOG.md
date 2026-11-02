@@ -12,6 +12,10 @@ All notable changes are recorded here. The format follows
   sound system they belong to (MME, DirectSound or WASAPI on Windows), and
   warns when PortAudio cannot be loaded or there is no microphone. Voice is
   optional, so a missing microphone is a warning, never a failure.
+- A daemon that stops while starting now leaves its reason in
+  `SYNTHIA_HOME/logs/daemon-stderr.log` (the start before is kept as
+  `daemon-stderr.1.log`), with Python's faulthandler on, so even a crash in
+  native code shows where it happened. Before, that output was discarded.
 
 ## [0.3.0] - 2026-10-27
 

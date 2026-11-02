@@ -44,6 +44,7 @@ All under `SYNTHIA_HOME`.
 | `memory.db` | Every finished turn of every conversation unless it is private, and the facts learned about the person (SQLite; [`memory.md`](memory.md)). |
 | `knowledge.db` | The folders added with `synthia knowledge add`, and every passage read from them with its vector (SQLite). Opened only when an embedding model is installed. |
 | `logs/synthia.log` | The daemon's log, shared with the CLI. |
+| `logs/daemon-stderr.log` | What the daemon wrote to stderr since it was last started by a client, with Python's faulthandler on, so a crash before logging begins or inside native code still leaves its reason. The start before is kept as `daemon-stderr.1.log`; when that daemon is still shutting down on Windows (it holds the file), the new one appends to the same file instead. |
 | `logs/llama-server.log` | The local model's server output. |
 
 A client trusts `daemon.json` only if the process with that `pid` started no

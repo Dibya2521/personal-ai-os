@@ -14,6 +14,7 @@ the daemon if it is not running, so the daemon stays the index's one writer.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import subprocess
 import sys
 from contextlib import asynccontextmanager
@@ -63,7 +64,12 @@ POLL_S: Final = 0.2
 HEALTH_TIMEOUT: Final = httpx.Timeout(2.0)
 ANSWER_PREFIX: Final = "no answer: "
 SEE_LOG: Final = "see SYNTHIA_HOME/logs/synthia.log"
-STOPPED_AT_START: Final = f"the daemon stopped while starting; {SEE_LOG}"
+DAEMON_STDERR: Final = Path("logs") / "daemon-stderr.log"
+PREVIOUS_STDERR: Final = Path("logs") / "daemon-stderr.1.log"
+STOPPED_AT_START: Final = (
+    "the daemon stopped while starting; see SYNTHIA_HOME/logs/daemon-stderr.log "
+    "and SYNTHIA_HOME/logs/synthia.log"
+)
 _DONE: Final = object()
 
 
@@ -84,31 +90,42 @@ class DaemonError(SynthiaError):
     """The daemon could not be reached or started."""
 
 
-def start_daemon() -> subprocess.Popen[bytes]:
-    """Start ``synthia serve`` in the background, apart from this terminal.
+def start_daemon(home: Path) -> subprocess.Popen[bytes]:
+    """Start ``synthia serve`` for ``home`` in the background, apart from this terminal.
 
+    Its stderr goes to ``home/logs/daemon-stderr.log``, the previous start's
+    kept as ``daemon-stderr.1.log`` unless a daemon still writes it, and
+    faulthandler is on, so a crash before logging starts, or one in native
+    code, still leaves its reason.
     On Windows with no console window: the venv's python.exe is a launcher, and
     started without a console its interpreter would open a visible one.
     """
-    command = [sys.executable, "-m", "synthia", "serve"]
-    if sys.platform == "win32":
+    stderr_path = home / DAEMON_STDERR
+    stderr_path.parent.mkdir(parents=True, exist_ok=True)
+    # On Windows a daemon still shutting down holds the file and the rename
+    # fails; both then append to it rather than the start failing.
+    with contextlib.suppress(FileNotFoundError, PermissionError):
+        stderr_path.replace(home / PREVIOUS_STDERR)
+    command = [sys.executable, "-X", "faulthandler", "-m", "synthia", "serve"]
+    with stderr_path.open("ab") as stderr:
+        if sys.platform == "win32":
+            return subprocess.Popen(  # noqa: S603 - our own interpreter and module
+                command,
+                creationflags=subprocess.CREATE_NO_WINDOW
+                | subprocess.CREATE_NEW_PROCESS_GROUP,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr,
+                close_fds=True,
+            )
         return subprocess.Popen(  # noqa: S603 - our own interpreter and module
             command,
-            creationflags=subprocess.CREATE_NO_WINDOW
-            | subprocess.CREATE_NEW_PROCESS_GROUP,
+            start_new_session=True,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=stderr,
             close_fds=True,
         )
-    return subprocess.Popen(  # noqa: S603 - our own interpreter and module
-        command,
-        start_new_session=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-    )
 
 
 async def healthy(info: DaemonInfo) -> bool:
@@ -132,7 +149,7 @@ async def running_daemon(home: Path) -> DaemonInfo | None:
 async def find_or_start(
     home: Path,
     *,
-    start: Callable[[], subprocess.Popen[bytes]] = start_daemon,
+    start: Callable[[Path], subprocess.Popen[bytes]] = start_daemon,
     timeout_s: float = START_TIMEOUT_S,
 ) -> DaemonInfo:
     """Return the running daemon, starting one if there is none.
@@ -144,7 +161,7 @@ async def find_or_start(
     info = await running_daemon(home)
     if info is not None:
         return info
-    process = start()
+    process = start(home)
     try:
         async with asyncio.timeout(timeout_s):
             while (info := await running_daemon(home)) is None:
@@ -181,7 +198,7 @@ async def _refuse(_tool: str, _arguments: str, *, confined: bool) -> bool:
 async def current_daemon(
     home: Path,
     *,
-    start: Callable[[], subprocess.Popen[bytes]] = start_daemon,
+    start: Callable[[Path], subprocess.Popen[bytes]] = start_daemon,
     timeout_s: float = START_TIMEOUT_S,
 ) -> DaemonInfo:
     """Return a running daemon of this version, starting or restarting one.
