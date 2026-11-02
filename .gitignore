@@ -25,6 +25,7 @@ venv/
 .coverage
 .coverage.*
 coverage.xml
+pytest-report.xml
 htmlcov/
 
 # Runtime data, models and recordings. Regenerable or private, never source.

@@ -53,7 +53,12 @@ jobs:
         run: uv run lint-imports
 
       - name: pytest
-        run: uv run pytest --cov --cov-report=term-missing
+        run: uv run pytest --cov --cov-report=term-missing --junitxml=pytest-report.xml
+
+      # Job logs need a signed-in viewer; annotations are public, so a red run names its failing tests.
+      - name: annotate failed tests
+        if: failure()
+        run: uv run python scripts/ci_annotations.py pytest-report.xml
 
   hygiene:
     name: hygiene (secrets, sizes, line endings)
