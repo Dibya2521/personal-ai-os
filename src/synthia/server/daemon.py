@@ -52,6 +52,7 @@ from synthia.server.host import (
     traced_index,
 )
 from synthia.server.upkeep import Activity, Reindexing
+from synthia.server.websocket import ShutdownSafeWebSocket
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -124,7 +125,7 @@ async def serve(host: Host, home: Path, *, stop: asyncio.Event | None = None) ->
     server = uvicorn.Server(
         uvicorn.Config(
             create_app(host, info.token, stopping.set),
-            ws="websockets-sansio",
+            ws=ShutdownSafeWebSocket,
             # The chat's loop is idle while it waits at the prompt, so it cannot
             # answer pings; on 127.0.0.1 a client that dies closes its socket.
             ws_ping_interval=None,
