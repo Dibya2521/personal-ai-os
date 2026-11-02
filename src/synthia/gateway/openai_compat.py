@@ -70,15 +70,19 @@ class Dialect(StrEnum):
     template, and ``enable_thinking`` is the one switch Qwen3.5's template has;
     ``reasoning_control`` lets the thinking be ended mid-answer by a command;
     ``return_progress`` makes it report reading the prompt, once per batch.
+    The plain OpenAI dialect sends none of these, so thinking depth is not
+    sent to a server that speaks it; vendors that take thinking at all name
+    the field differently.
     """
 
+    OPENAI = "openai"
     OPENROUTER = "openrouter"
     LLAMA_CPP = "llama.cpp"
 
 
 def _reasoning(request: ChatRequest, dialect: Dialect) -> JSON:
     level = request.reasoning
-    if level is None or level is Reasoning.AUTO:
+    if level is None or level is Reasoning.AUTO or dialect is Dialect.OPENAI:
         return {}
     if dialect is Dialect.LLAMA_CPP:
         if level is Reasoning.OFF:
@@ -274,7 +278,7 @@ class Endpoint:
     """Where a model is served and how to address it.
 
     ``model`` is the default model id sent when a request names none.
-    ``dialect`` defaults to OpenRouter's, the only remote provider.
+    ``dialect`` defaults to OpenRouter's, the built-in remote provider.
     ``timeout`` replaces the client's own limits for this endpoint's requests;
     None keeps the client's.
     """

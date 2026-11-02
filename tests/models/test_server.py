@@ -120,13 +120,18 @@ def test_a_text_only_model_is_launched_without_a_projector(tmp_path: Path) -> No
 
 
 def test_the_key_goes_in_the_environment_never_on_the_command_line(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    provider_key = "sk-provider-planted-0123456789"  # pragma: allowlist secret
+    monkeypatch.setenv("PATH", "somewhere")
+    monkeypatch.setenv("SYNTHIA_X_API_KEY", provider_key)
     launch = launch_of(tmp_path, TEXT_ONLY)
 
-    environment = launch.environment({"PATH": "somewhere"})
+    environment = launch.environment()
 
-    assert environment == {"PATH": "somewhere", API_KEY_VARIABLE: SECRET}
+    assert (environment["PATH"], environment[API_KEY_VARIABLE]) == ("somewhere", SECRET)
+    assert not any(name.upper().startswith("SYNTHIA_") for name in environment)
+    assert provider_key not in environment.values()
     assert all(SECRET not in arg for arg in launch.command())
     assert SECRET not in repr(launch)
 

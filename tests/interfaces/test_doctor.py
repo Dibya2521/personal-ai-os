@@ -3,12 +3,15 @@ from pathlib import Path
 
 import pytest
 
+from synthia.gateway.providers import OPENROUTER, PROVIDERS_FILE
 from synthia.interfaces import doctor
 from synthia.interfaces.doctor import (
     LOCAL_MODEL,
+    REMOTE,
     Check,
     Facts,
     LocalFacts,
+    RemoteFacts,
     Status,
     _nearest_existing,  # pyright: ignore[reportPrivateUsage]
     evaluate,
@@ -44,6 +47,7 @@ HEALTHY = Facts(
     disk_free_gb=120.0,
     local=INSTALLED,
     audio=SOUND,
+    remote=RemoteFacts(OPENROUTER, key_set=True),
 )
 
 
@@ -79,7 +83,7 @@ def test_a_healthy_machine_passes_everything(tmp_path: Path) -> None:
         "home",
         "disk",
         "audio",
-        "openrouter",
+        REMOTE,
     ]
 
 
@@ -161,15 +165,36 @@ def test_the_local_model_check_says_what_runs_or_what_is_missing(
 
 
 def test_a_missing_key_is_fine_and_its_value_never_shows(tmp_path: Path) -> None:
-    unset = evaluate(settings(tmp_path, key=None), HEALTHY)
     planted = "sk-or-v1-doctor-planted-key"  # pragma: allowlist secret
-    report = evaluate(settings(tmp_path, key=planted), HEALTHY)
+    with_key = settings(tmp_path, key=planted)
+    facts = gather_facts(with_key, Installer(tmp_path, BYTES_PER_GB))
+    no_key = replace(HEALTHY, remote=RemoteFacts(OPENROUTER, key_set=False))
 
+    unset = evaluate(settings(tmp_path, key=None), no_key)
+    report = evaluate(with_key, facts)
+
+    assert facts.remote == RemoteFacts(OPENROUTER, key_set=True)
     assert overall(unset) is Status.OK
-    assert [c.detail for c in unset if c.name == "openrouter"] == [
-        "no key, so no remote model; optional, everything runs locally"
+    assert [c.detail for c in unset if c.name == REMOTE] == [
+        "openrouter: no key, so no remote model; optional, everything runs locally"
+    ]
+    assert [c.detail for c in report if c.name == REMOTE] == [
+        "openrouter: API key set; used only on /remote on"
     ]
     assert all(planted not in c.detail for c in report)
+
+
+def test_a_remote_that_cannot_be_chosen_fails_with_the_reason(tmp_path: Path) -> None:
+    (tmp_path / PROVIDERS_FILE).write_text("not toml\n", encoding="utf-8")
+
+    facts = gather_facts(settings(tmp_path), Installer(tmp_path, BYTES_PER_GB))
+    (check,) = [c for c in evaluate(settings(tmp_path), facts) if c.name == REMOTE]
+
+    assert check.status is Status.FAIL
+    assert (
+        check.detail
+        == f"{tmp_path / PROVIDERS_FILE} is not valid TOML at line 1, column 5"
+    )
 
 
 def test_unknown_core_counts_are_shown_as_unknown(tmp_path: Path) -> None:

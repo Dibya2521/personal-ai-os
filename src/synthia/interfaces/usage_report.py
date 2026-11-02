@@ -5,16 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import httpx
-
 from synthia.gateway.assemble import GATEWAY_DB
 from synthia.gateway.budget import BudgetLedger
+from synthia.gateway.clients import http_client
 from synthia.gateway.errors import GatewayError
-from synthia.gateway.providers import OPENROUTER_FREE
+from synthia.gateway.providers import key_variable, remote_key, select_remote
 from synthia.gateway.router import DEFAULT_RESERVE
 from synthia.gateway.usage import UsageLog, free_requests_today
 
 if TYPE_CHECKING:
+    import httpx
+
     from synthia.gateway.budget import BudgetStatus
     from synthia.gateway.providers import RemoteProvider
     from synthia.gateway.usage import ProviderCount
@@ -34,9 +35,16 @@ async def budget_report(
     *,
     check: bool,
     transport: httpx.AsyncBaseTransport | None = None,
-    remote: RemoteProvider = OPENROUTER_FREE,
+    remote: RemoteProvider | None = None,
 ) -> Report:
-    """Describe today's use; with ``check``, compare with OpenRouter's own count."""
+    """Describe today's use; with ``check``, compare with OpenRouter's own count.
+
+    ``remote`` defaults to the provider ``SYNTHIA_REMOTE`` names.
+
+    Raises:
+        ConfigError: If the remote provider cannot be chosen.
+    """
+    remote = select_remote(settings) if remote is None else remote
     path = settings.home / GATEWAY_DB
     ledger = BudgetLedger(path, {remote.name: remote.daily_cap})
     status = await ledger.status(remote.name)
@@ -70,12 +78,14 @@ async def _check(
         report.lines.append(f"{remote.name} does not report its own count to compare")
         report.complete = False
         return
-    key = settings.openrouter_api_key
+    key = remote_key(settings, remote)
     if key is None:
-        report.lines.append("set SYNTHIA_OPENROUTER_API_KEY to compare with OpenRouter")
+        report.lines.append(
+            f"set {key_variable(remote.name)} in .env to compare with {remote.name}"
+        )
         report.complete = False
         return
-    async with httpx.AsyncClient(transport=transport) as client:
+    async with http_client(transport=transport) as client:
         try:
             count = await free_requests_today(client, key, remote.base_url)
         except GatewayError as error:

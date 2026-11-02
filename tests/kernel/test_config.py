@@ -133,16 +133,41 @@ def test_variables_that_are_not_settings_are_named_once_each(
         "SYNTHIA_REMOTE_RPM=\n"
         "export SYNTHIA_TYPO=1\n"
         "OTHER_TOOL_SETTING=1\n"
+        "SYNTHIA_DEEPSEEK_API_KEY=\n"
     )
     monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
     monkeypatch.setenv("SYNTHIA_OPENROUTER_MODEL", "vendor/model")
     monkeypatch.setenv("SYNTHIA_TYPO", "2")
+    monkeypatch.setenv("SYNTHIA_MY_LOCAL_API_KEY", "a provider key")
 
     assert unknown_variables(env_file) == [
         "SYNTHIA_OPENROUTER_MODEL",
         "SYNTHIA_REMOTE_RPM",
         "SYNTHIA_TYPO",
     ]
+
+
+def test_provider_keys_come_from_the_environment_over_the_env_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "SYNTHIA_VENDOR_A_API_KEY=from-file-a\n"  # pragma: allowlist secret
+        "SYNTHIA_VENDOR_B_API_KEY=from-file-b\n"  # pragma: allowlist secret
+        "SYNTHIA_VENDOR_C_API_KEY=\n"
+        "SYNTHIA_LOG_LEVEL=DEBUG\n"
+    )
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.setenv("SYNTHIA_VENDOR_B_API_KEY", "from-environment-b")
+
+    keys = load_settings(env_file).api_keys()
+    without_file = load_settings(env_file=None).api_keys()
+
+    assert {k: v.get_secret_value() for k, v in keys.items() if "VENDOR" in k} == {
+        "SYNTHIA_VENDOR_A_API_KEY": "from-file-a",  # pragma: allowlist secret
+        "SYNTHIA_VENDOR_B_API_KEY": "from-environment-b",  # pragma: allowlist secret
+    }
+    assert "SYNTHIA_VENDOR_A_API_KEY" not in without_file
 
 
 def test_without_stray_variables_nothing_is_named(

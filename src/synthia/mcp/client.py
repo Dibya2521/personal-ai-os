@@ -29,11 +29,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from synthia import __version__
 from synthia.agent.tools import TOOL_NAME, Effect, Reach, ToolError
 from synthia.gateway.types import ToolSpec
+from synthia.kernel.config import environment_without_own
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.kernel.jsonrpc import ConnectionClosedError, Peer, RpcError
 from synthia.mcp.stdio import Lines, line_sender
 from synthia.tools.process_tree import ProcessTree
-from synthia.tools.run import environment_without_own, open_log
+from synthia.tools.run import open_log
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping

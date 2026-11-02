@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from synthia.tools.run import environment_without_own, run_once
+from synthia.kernel.config import environment_without_own
+from synthia.tools.run import run_once
 
 
 def test_the_environment_drops_only_synthias_own_variables(

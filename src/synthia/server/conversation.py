@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol
 
 from synthia.agent.policy import Decision
+from synthia.gateway.providers import REMOTE_KEY_HINT
 from synthia.memory.store import FactKind
 from synthia.persona.model import PersonaError
 from synthia.server.session import load_image
@@ -33,9 +34,7 @@ RULE_SHOWN: Final = {
     Decision.ASK: " | asks first",
     Decision.DENY: " | never runs",
 }
-NO_REMOTE: Final = (
-    "no remote model is configured: set SYNTHIA_OPENROUTER_API_KEY in .env"
-)
+NO_REMOTE: Final = f"no remote model is configured: {REMOTE_KEY_HINT}"
 NO_MEMORY: Final = "nothing is remembered in this conversation"
 ALREADY_TALKING: Final = (
     "this conversation has turns already; resume from a new chat: synthia chat --resume"

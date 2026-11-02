@@ -22,13 +22,15 @@ one provider's wire format; nothing above the adapter ever sees that format.
 Both providers SYNTHIA uses today, OpenRouter and the llama.cpp server, speak
 the OpenAI-compatible chat API, so a single adapter serves both
 (`synthia/gateway/openai_compat.py`). A provider is a base URL, headers and a
-record of what its model can do: context window, images, tools. The remote
-provider is one record, `OPENROUTER_FREE` in `synthia/gateway/providers.py`.
-It asks for `openrouter/free` at `https://openrouter.ai/api/v1` and holds the
-rate limit of 20 requests a minute. Provider facts live in that record, so
-`.env` holds only what belongs to the person running SYNTHIA, such as the key.
-A second remote provider would be a second record. A provider speaking another
-protocol would be one more adapter behind the same interface.
+record of what its model can do: context window, images, tools. The built-in
+remote provider is one record, `OPENROUTER_FREE` in
+`synthia/gateway/providers.py`. It asks for `openrouter/free` at
+`https://openrouter.ai/api/v1` and holds the rate limit of 20 requests a
+minute. Any other OpenAI-compatible provider is one more record, written by the
+person in `providers.toml` (see [Providers](#providers)). Provider facts live
+in those records, so `.env` holds only what belongs to the person running
+SYNTHIA, such as the key. A provider speaking another protocol would be one
+more adapter behind the same interface.
 
 ## The path of a request
 
@@ -37,14 +39,97 @@ caller
   -> accounting                 records the call once it finishes
   -> router                     local, unless the request asks for the remote
        local:  adapter -> llama.cpp server on 127.0.0.1
-       remote: retry -> circuit breaker -> rate limit + budget -> adapter -> OpenRouter
+       remote: retry -> circuit breaker -> rate limit + budget -> adapter -> the remote provider
 ```
 
 The chat is built this way by `build_gateway` (`synthia/gateway/assemble.py`),
 the one place that knows how the pieces fit. Everything else receives the
-finished model. The remote part exists only when an OpenRouter key is set;
-without one the gateway is local only. It refuses to start only when there is
-neither a key nor an installed local model.
+finished model. The remote part exists only when the remote provider's key is
+set; without one the gateway is local only. It refuses to start only when
+there is neither a key nor an installed local model.
+
+## Providers
+
+OpenRouter is built in. Any other provider that speaks the OpenAI chat API
+(OpenAI, Gemini, DeepSeek, Moonshot, another OpenRouter model, a server on
+this machine) is a `[providers.<name>]` table in `SYNTHIA_HOME/providers.toml`:
+
+```toml
+[providers.openai]
+base_url = "https://api.openai.com/v1"
+model = "<model id from the vendor>"
+context_window = 32768        # required: the model's window in tokens
+tools = true                  # the model takes tool calls (default false)
+vision = true                 # the model takes images (default false)
+
+[providers.gemini]
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+model = "<model id from the vendor>"
+context_window = 32768
+
+[providers.deepseek]
+base_url = "https://api.deepseek.com"
+model = "<model id from the vendor>"
+context_window = 32768
+requests_per_minute = 20      # default 20
+daily_cap = 200               # requests per UTC day, default 200
+
+[providers.moonshot]
+base_url = "https://api.moonshot.ai/v1"
+model = "<model id from the vendor>"
+context_window = 32768
+```
+
+The numbers above are placeholders: take `context_window` from the vendor's
+page for the model, and the limits from the vendor's terms for the key.
+
+Each table may also set `dialect`: `openai` (the default) sends only fields of
+the OpenAI chat API, so thinking depth is not sent; `openrouter` sends
+OpenRouter's `reasoning` field; `llama.cpp` sends llama.cpp's
+`chat_template_kwargs`. `reports_daily_cap = true` (default false) is only for
+a provider that answers OpenRouter's `GET /key`.
+
+Rules, each checked when the file is read:
+
+- A name is 1 to 32 lowercase letters, digits and hyphens, starting with a
+  letter or a digit. `openrouter` is the built-in one and cannot be redefined.
+- `base_url` is `https://`, or `http://` only to this machine, with the host
+  written exactly as `localhost`, `127.0.0.1` or `[::1]`, so the key never
+  crosses a network unencrypted. It carries no user name, password, query,
+  fragment, space or control character.
+- A plain-http request to those three hosts always goes direct, even when
+  `HTTP_PROXY` or `ALL_PROXY` is set: through a proxy its `Authorization`
+  header would reach the proxy in clear text. Every other request keeps the
+  environment's proxy, which for https only tunnels the encrypted connection.
+  The one place that builds these clients is `synthia/gateway/clients.py`.
+- A number or a switch is written as its TOML type: `"20"` or `1` for `true`
+  is refused, not converted. Every number is at most 2,147,483,647, the
+  largest signed 32-bit integer. An unknown field is refused.
+- The file is at most 64 KiB of UTF-8; a file nested too deeply or holding a
+  number with thousands of digits is refused too. Anything wrong stops
+  SYNTHIA with an error naming the file, the table and the field, never a
+  value from the file. A table or field name is shown only when it is 1 to 32
+  letters, digits, `_` or `-`, so a key pasted in place of a name never is.
+
+`SYNTHIA_REMOTE` names the provider in the remote slot (default `openrouter`).
+Each provider's key has its own variable, `SYNTHIA_<NAME>_API_KEY`, NAME being
+the provider's name in capitals with `-` as `_`: `SYNTHIA_OPENROUTER_API_KEY`
+for the built-in one, `SYNTHIA_OPENAI_API_KEY` for `[providers.openai]`,
+`SYNTHIA_MY_LOCAL_API_KEY` for `[providers.my-local]`. It is read from the
+environment or `.env`, the environment winning, and an empty value is unset.
+Names have no capitals and no `_`, so two providers never share a variable.
+A provider is sent only its own key, so changing `SYNTHIA_REMOTE` never sends
+one vendor's key to another; with the new provider's key unset, there is no
+remote model. The key goes only to that provider's `base_url`, in the
+`Authorization` header, and every `SYNTHIA_*_API_KEY` value is masked in the
+logs. A provider from the file gets no other headers; OpenRouter's
+attribution headers go to OpenRouter alone.
+
+Choosing a provider never sends anything by itself. Every turn stays on this
+machine until remote is turned on for that chat, with `/remote on` or
+`synthia chat --remote`. `synthia providers` lists every provider with its
+URL and model, which one is selected, and whether a key is set, never any
+part of the key.
 
 ## Routing: local first, the remote only when asked
 
@@ -367,10 +452,13 @@ token. `uv run python scripts/record_cassettes.py` records them again.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SYNTHIA_OPENROUTER_API_KEY` | unset | the remote model's key; without it the chat does not start |
+| `SYNTHIA_REMOTE` | `openrouter` | the remote provider, built in or a table in `providers.toml` |
+| `SYNTHIA_OPENROUTER_API_KEY` | unset | the built-in OpenRouter provider's key |
+| `SYNTHIA_<NAME>_API_KEY` | unset | the key of provider `<name>` from `providers.toml`, NAME in capitals with `-` as `_` |
 | `SYNTHIA_LOCAL_MODEL` | `qwen3.5-4b` | a name from `synthia models list` |
 | `SYNTHIA_LOCAL_BACKEND` | `auto` | `auto`, `cpu`, `vulkan`, `cuda` or `metal` |
 
 A `SYNTHIA_` variable that is not a setting does nothing. Every command that
 reads the settings names each one in a warning on stderr; `.env.example` lists
-every setting.
+every setting. Any `SYNTHIA_*_API_KEY` is taken as a provider's key and never
+warned about, so a misspelt provider name in one is not reported.

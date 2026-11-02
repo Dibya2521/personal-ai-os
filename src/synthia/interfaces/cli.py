@@ -17,7 +17,12 @@ from rich.table import Table
 from synthia import __version__
 from synthia.agent.trace import TRACES, read_trace, sessions
 from synthia.gateway.assemble import NO_MODEL
-from synthia.gateway.providers import OPENROUTER_FREE
+from synthia.gateway.providers import (
+    OPENROUTER_FREE,
+    load_providers,
+    remote_key,
+    select_remote,
+)
 from synthia.interfaces import doctor as doctor_checks
 from synthia.interfaces import model_commands
 from synthia.interfaces.chat import run_chat, visible
@@ -507,13 +512,42 @@ def budget(
 ) -> None:
     """Show today's remote requests and tokens, per UTC day.
 
-    Exits 1 when --check could not be completed.
+    Exits 1 when --check could not be completed, and 2 when the remote
+    provider cannot be chosen.
     """
-    report = asyncio.run(budget_report(_settings(), check=check))
+    try:
+        report = asyncio.run(budget_report(_settings(), check=check))
+    except ConfigError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
     for line in report.lines:
         typer.echo(line)
     if not report.complete:
         raise typer.Exit(doctor_checks.Status.WARN)
+
+
+@app.command()
+def providers() -> None:
+    """List the remote providers: OpenRouter, built in, and SYNTHIA_HOME/providers.toml.
+
+    The selected one is SYNTHIA_REMOTE, asked only after /remote on in a chat
+    or with synthia chat --remote. No part of a key is ever shown. Exits 2
+    when providers.toml or SYNTHIA_REMOTE is invalid.
+    """
+    settings = _settings()
+    try:
+        selected = select_remote(settings)
+        known = load_providers(settings.home)
+    except ConfigError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    for provider in known.values():
+        chosen = "selected" if provider.name == selected.name else "not selected"
+        key = "no key" if remote_key(settings, provider) is None else "key set"
+        typer.echo(
+            f"{provider.name}: {provider.base_url}, model {provider.model.id}, "
+            f"{chosen}, {key}"
+        )
 
 
 def _settings() -> Settings:
@@ -559,8 +593,9 @@ def local_service(
 
 
 def _local_setup(settings: Settings) -> LocalSetup | None:
-    # The remote's window, so moving a conversation to the local model never
-    # shrinks what it can hold.
+    # The built-in remote's window, so moving a conversation from it never
+    # shrinks what it holds; not the chosen remote's, whose window could need
+    # more memory for the local model than this machine has.
     return find_local(
         settings,
         _installer(settings),
@@ -573,9 +608,11 @@ def _require_a_model(settings: Settings) -> None:
     """Refuse at once when there is no model at all, instead of a daemon that stops.
 
     Raises:
-        ConfigError: If there is neither a remote key nor a local model.
+        ConfigError: If there is neither a remote key nor a local model, or
+            the remote provider cannot be chosen.
     """
-    if settings.openrouter_api_key is None and _local_setup(settings) is None:
+    key = remote_key(settings, select_remote(settings))
+    if key is None and _local_setup(settings) is None:
         raise ConfigError(NO_MODEL)
 
 

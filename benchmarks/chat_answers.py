@@ -95,6 +95,7 @@ from rag_eval import (
 from synthia.agent.loop import ToolFinished
 from synthia.agent.tools import Toolbox
 from synthia.gateway.assemble import build_gateway
+from synthia.gateway.providers import OPENROUTER_FREE
 from synthia.gateway.types import ChatChunk
 from synthia.kernel.config import load_settings
 from synthia.knowledge.chunk import Chunking
@@ -375,12 +376,13 @@ def no_remote_gateway(
 ) -> Gateway:
     """Return the chat's gateway, with ``local`` and no remote model behind its router.
 
-    The settings are copied without the OpenRouter key, which is the only
-    thing that builds a remote model, and with ``home`` as the home, where
-    the router's usage log is written.
+    The remote is the built-in OpenRouter provider, whatever ``SYNTHIA_REMOTE``
+    says, and the settings are copied without its key, the only thing that
+    builds a remote model, and with ``home`` as the home, where the router's
+    usage log is written.
     """
     kept = settings.model_copy(update={"openrouter_api_key": None, "home": home})
-    return build_gateway(kept, client, publish_route, local)
+    return build_gateway(kept, client, publish_route, local, remote=OPENROUTER_FREE)
 
 
 def chat_over(gateway: Gateway, knowledge: Knowledge, settings: Settings) -> Chat:

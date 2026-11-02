@@ -49,6 +49,7 @@ from synthia.gateway.errors import (
     RemoteUnavailableError,
 )
 from synthia.gateway.metered import MeteredModel
+from synthia.gateway.providers import REMOTE_KEY_HINT
 from synthia.gateway.reasoning import limit, resolve
 from synthia.gateway.retry import RetryingModel
 from synthia.gateway.types import ModelInfo, Reasoning
@@ -289,10 +290,7 @@ class Router:
             return Route.LOCAL, RouteReason.LOCAL_FIRST, self._local_only(request)
         remote = self._remote
         if remote is None:
-            message = (
-                "no remote model is configured: set SYNTHIA_OPENROUTER_API_KEY "
-                "in .env to ask one"
-            )
+            message = f"no remote model is configured: {REMOTE_KEY_HINT} to ask one"
             raise RemoteUnavailableError(message)
         reason = await self._reason_for_local(request, remote, background=background)
         if reason is None:

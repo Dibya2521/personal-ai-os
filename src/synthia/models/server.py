@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
 import secrets
 import socket
 import subprocess
@@ -21,6 +20,7 @@ from typing import TYPE_CHECKING, BinaryIO, Final
 import httpx
 from pydantic import SecretStr
 
+from synthia.kernel.config import environment_without_own
 from synthia.kernel.errors import SynthiaError
 
 if TYPE_CHECKING:
@@ -150,9 +150,13 @@ class Launch:
             args += ["--mmproj", str(self.projector)]
         return args
 
-    def environment(self, base: dict[str, str]) -> dict[str, str]:
-        """Return ``base`` with the key added, for the server's process."""
-        return {**base, API_KEY_VARIABLE: self.key.get_secret_value()}
+    def environment(self) -> dict[str, str]:
+        """Return the server process's environment: this one, plus the key.
+
+        Like every program SYNTHIA starts, the server gets none of SYNTHIA's
+        own ``SYNTHIA_*`` variables, so no provider key reaches it.
+        """
+        return environment_without_own({API_KEY_VARIABLE: self.key.get_secret_value()})
 
 
 class ServerCrashedError(ServerError):
@@ -236,7 +240,7 @@ class LlamaServer:
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=log,
                 stderr=asyncio.subprocess.STDOUT,
-                env=launch.environment(dict(os.environ)),
+                env=launch.environment(),
                 # Ctrl+C in the terminal stops an answer; in the terminal's own
                 # process group it would also stop the server.
                 creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),

@@ -153,7 +153,8 @@ async def test_a_check_without_a_key_or_an_answer_is_incomplete(tmp_path: Path) 
     )
 
     assert (
-        no_key.lines[-1] == "set SYNTHIA_OPENROUTER_API_KEY to compare with OpenRouter"
+        no_key.lines[-1]
+        == "set SYNTHIA_OPENROUTER_API_KEY in .env to compare with openrouter"
     )
     assert no_answer.lines[-1] == "could not ask OpenRouter: HTTP 401: User not found."
     assert (no_key.complete, no_answer.complete) == (False, False)
@@ -175,3 +176,16 @@ def test_the_command_prints_the_report_and_exits_1_when_the_check_is_incomplete(
     assert "0 of 50 used" in plain.stdout
     assert "set SYNTHIA_OPENROUTER_API_KEY" in checked.stdout
     assert "SYNTHIA_DISK_BUDGET_GB" in broken.stderr
+
+
+def test_the_command_exits_2_when_the_remote_cannot_be_chosen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.setenv("SYNTHIA_REMOTE", "nowhere")
+
+    result = CliRunner().invoke(app, ["budget"])
+
+    assert result.exit_code == 2
+    assert "error: SYNTHIA_REMOTE=nowhere is not a provider" in result.stderr

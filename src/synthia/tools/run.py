@@ -7,10 +7,9 @@ place decides how a run is bounded and how its ending is told to the model.
 from __future__ import annotations
 
 import asyncio
-import os
 import subprocess
 from dataclasses import dataclass
-from typing import IO, TYPE_CHECKING, BinaryIO, Final
+from typing import IO, TYPE_CHECKING, BinaryIO
 
 from synthia.agent.tools import ToolError
 from synthia.tools.process_tree import ProcessTree
@@ -18,8 +17,6 @@ from synthia.tools.process_tree import ProcessTree
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from pathlib import Path
-
-_OWN_PREFIX: Final = "SYNTHIA_"
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,19 +27,6 @@ class Run:
     exit_code: int | None
     timed_out: bool = False
     output_cut: bool = False
-
-
-def environment_without_own(extra: Mapping[str, str]) -> dict[str, str]:
-    """Return the environment without any ``SYNTHIA_*`` variable, plus ``extra``.
-
-    SYNTHIA's own settings, its key among them, never reach a program it starts.
-    """
-    inherited = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.upper().startswith(_OWN_PREFIX)
-    }
-    return inherited | dict(extra)
 
 
 def open_log(log_dir: Path, name: str) -> BinaryIO:

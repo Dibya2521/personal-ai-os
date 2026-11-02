@@ -1,7 +1,7 @@
 """Build the gateway a conversation talks to, from the settings.
 
 This is the one place that knows how the pieces fit: the local model when one
-is installed, and, when its key is set, the OpenRouter adapter, metered and
+is installed, and, when its key is set, the remote provider's adapter, metered and
 guarded, behind a router whose budget, rate and circuit are the same objects
 the guards use, with every finished call accounted for on top. Everything else
 receives the finished model.
@@ -19,7 +19,7 @@ from synthia.gateway.budget import BudgetLedger
 from synthia.gateway.circuit import CircuitBreaker
 from synthia.gateway.errors import GatewayError
 from synthia.gateway.openai_compat import OpenAICompatibleModel
-from synthia.gateway.providers import OPENROUTER_FREE
+from synthia.gateway.providers import REMOTE_KEY_HINT, remote_key, select_remote
 from synthia.gateway.ratelimit import SlidingWindowLimiter
 from synthia.gateway.router import Remote, RemoteHealth, Router, guard_remote
 from synthia.gateway.usage import AccountingModel, UsageLog, free_requests_today
@@ -87,8 +87,7 @@ async def learn_daily_cap(
 
 NO_MODEL: Final = (
     "no model is available: install a local model with "
-    "`synthia models install`, or set SYNTHIA_OPENROUTER_API_KEY in .env "
-    "to ask a remote one"
+    f"`synthia models install`, or {REMOTE_KEY_HINT} to ask a remote one"
 )
 
 
@@ -98,17 +97,20 @@ def build_gateway(
     publish: Callable[[Event], Awaitable[None]],
     local: LocalChatModel | None = None,
     *,
-    remote: RemoteProvider = OPENROUTER_FREE,
+    remote: RemoteProvider | None = None,
 ) -> Gateway:
     """Assemble the gateway; ``client`` carries every remote request.
 
     ``local`` serves every request that does not ask for the remote model.
-    The remote model exists only when its key is set.
+    ``remote`` defaults to the provider ``SYNTHIA_REMOTE`` names, and the
+    remote model exists only when its key is set.
 
     Raises:
-        ConfigError: If there is neither a local model nor a remote key.
+        ConfigError: If there is neither a local model nor a remote key, or
+            the remote provider cannot be chosen.
     """
-    key = settings.openrouter_api_key
+    remote = select_remote(settings) if remote is None else remote
+    key = remote_key(settings, remote)
     if key is None and local is None:
         raise ConfigError(NO_MODEL)
     usage = UsageLog(settings.home / GATEWAY_DB)

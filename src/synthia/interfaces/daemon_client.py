@@ -28,6 +28,7 @@ from websockets.asyncio.client import connect
 from synthia import __version__
 from synthia.agent.loop import ToolFinished
 from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
+from synthia.gateway.clients import http_client
 from synthia.gateway.errors import GatewayError
 from synthia.gateway.types import (
     ChatChunk,
@@ -131,7 +132,7 @@ def start_daemon(home: Path) -> subprocess.Popen[bytes]:
 async def healthy(info: DaemonInfo) -> bool:
     """Return whether the daemon in ``info`` answers ``/health``."""
     try:
-        async with httpx.AsyncClient(timeout=HEALTH_TIMEOUT) as web:
+        async with http_client(timeout=HEALTH_TIMEOUT) as web:
             answer = await web.get(f"{info.base_url}/health")
     except httpx.HTTPError:
         return False

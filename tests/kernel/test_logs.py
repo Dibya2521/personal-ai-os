@@ -195,6 +195,24 @@ def test_secret_values_lists_only_secrets_that_are_set() -> None:
     assert secret_values(make_settings(LogFormat.JSON, key=None)) == []
 
 
+def test_every_provider_key_is_masked_in_the_log(
+    captured: tuple[io.StringIO, list[logging.Handler]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream, _ = captured
+    provider = "sk-vendor-planted-0123456789abcdef"  # pragma: allowlist secret
+    monkeypatch.setenv("SYNTHIA_VENDOR_B_API_KEY", provider)
+    settings = make_settings(LogFormat.JSON)
+    configure_logging(settings, stream)
+
+    logging.getLogger(TEST_LOGGER).info("sent %s", provider)
+
+    assert secret_values(settings) == [PLANTED, provider]
+    (line,) = json_lines(stream)
+    assert line["msg"] == f"sent {REDACTED}"
+    assert provider not in stream.getvalue()
+
+
 def test_a_secret_containing_another_is_masked_whole() -> None:
     redactor = Redactor(["abc", "xxabcxx"])
 

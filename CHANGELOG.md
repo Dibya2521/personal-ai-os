@@ -16,6 +16,19 @@ All notable changes are recorded here. The format follows
   `SYNTHIA_HOME/logs/daemon-stderr.log` (the start before is kept as
   `daemon-stderr.1.log`), with Python's faulthandler on, so even a crash in
   native code shows where it happened. Before, that output was discarded.
+- Any OpenAI-compatible provider (OpenAI, Gemini, DeepSeek, Moonshot, or a
+  server on this machine) can be the remote model: describe it as a
+  `[providers.<name>]` table in `SYNTHIA_HOME/providers.toml`, name it in
+  `SYNTHIA_REMOTE` and put its key in its own variable, `SYNTHIA_<NAME>_API_KEY`
+  (`SYNTHIA_OPENAI_API_KEY` for `[providers.openai]`, `-` as `_`), so a key is
+  only ever sent to its own provider. It is still asked only after
+  `/remote on` or `synthia chat --remote`. A `base_url` must be https, or http
+  only to exactly localhost, 127.0.0.1 or [::1], and plain-http requests to
+  those never go through an `HTTP_PROXY`. `synthia providers` lists them,
+  which one is selected and whether its key is set, never the key.
+- The local model's server, like every program SYNTHIA starts, no longer
+  inherits SYNTHIA's own `SYNTHIA_*` variables, so no provider key reaches it.
+  `synthia doctor` names its key check `remote` instead of `openrouter`.
 
 ## [0.3.0] - 2026-10-27
 

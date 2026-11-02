@@ -32,6 +32,7 @@ from synthia.server.api import (
     NO_LEARNING,
     NOT_LEARNING,
 )
+from synthia.server.conversation import NO_REMOTE
 from synthia.server.daemon import run_daemon, serve
 from synthia.server.discovery import DAEMON_FILE, DaemonInfo, read_info
 from synthia.server.host import Host, open_learning, publish_route
@@ -315,9 +316,7 @@ async def test_commands_answer_with_lines_to_show(tmp_path: Path) -> None:
     assert replies[:4] == [
         {
             "notes": [],
-            "errors": [
-                "no remote model is configured: set SYNTHIA_OPENROUTER_API_KEY in .env"
-            ],
+            "errors": [NO_REMOTE],
         },
         {
             "notes": [],

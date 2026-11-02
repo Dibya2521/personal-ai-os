@@ -143,12 +143,17 @@ class ConsoleFormatter(_RedactingFormatter):
 
 
 def secret_values(settings: Settings) -> list[str]:
-    """Return the value of every secret setting that is set."""
-    return [
-        value.get_secret_value()
-        for value in vars(settings).values()
+    """Return the value of every secret setting and every provider key that is set.
+
+    A provider key is any ``SYNTHIA_*_API_KEY`` (see :meth:`Settings.api_keys`),
+    masked whether or not its provider is the one in use.
+    """
+    secrets = [
+        value
+        for value in (*vars(settings).values(), *settings.api_keys().values())
         if isinstance(value, SecretStr)
     ]
+    return list(dict.fromkeys(s.get_secret_value() for s in secrets))
 
 
 def configure_logging(settings: Settings, stream: TextIO | None = None) -> Redactor:

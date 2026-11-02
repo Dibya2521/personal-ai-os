@@ -16,8 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
 
-import httpx
-
+from synthia.gateway.clients import http_client
 from synthia.kernel.bus import Event, EventBus
 from synthia.kernel.supervisor import (
     RestartPolicy,
@@ -35,6 +34,8 @@ from synthia.models.server import Launch, LlamaServer, free_port, new_key
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
+
+    import httpx
 
     from synthia.kernel.config import LocalBackend, Settings
     from synthia.kernel.supervisor import ServiceEvent
@@ -132,7 +133,7 @@ class LocalService:
     ) -> None:
         self._setup = setup
         fallback = Fallback(setup.runtimes, setup.launch)
-        self._client = httpx.AsyncClient()
+        self._client = http_client()
         self.server = LlamaServer(
             fallback.launch,
             self._client,

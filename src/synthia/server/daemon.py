@@ -19,13 +19,12 @@ import socket
 from functools import partial
 from typing import TYPE_CHECKING, Final, Protocol
 
-import httpx
 import uvicorn
 
 from synthia import __version__
 from synthia.agent.trace import TRACES, Trace
 from synthia.gateway.assemble import build_gateway
-from synthia.gateway.providers import OPENROUTER_FREE
+from synthia.gateway.clients import http_client
 from synthia.knowledge.tool import knowledge_tool
 from synthia.memory.recall import memory_tool
 from synthia.persona.library import PersonaLibrary
@@ -57,6 +56,8 @@ from synthia.server.upkeep import Activity, Reindexing
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
+
+    import httpx
 
     from synthia.agent.tools import Tool
     from synthia.gateway.assemble import Gateway
@@ -191,19 +192,21 @@ async def run_daemon(  # noqa: PLR0913 - every outside part is injected for test
     local: LocalModels | None,
     *,
     transport: httpx.AsyncBaseTransport | None = None,
-    remote: RemoteProvider = OPENROUTER_FREE,
+    remote: RemoteProvider | None = None,
     stop: asyncio.Event | None = None,
     embedder: EmbedderOpener = open_embedder,
 ) -> None:
     """Start what every conversation shares, serve until stopped, then stop it all.
 
-    ``embedder`` is opened once and shared by memory and knowledge.
+    ``remote`` defaults to the provider ``SYNTHIA_REMOTE`` names. ``embedder``
+    is opened once and shared by memory and knowledge.
 
     Raises:
-        ConfigError: If no model can be reached.
+        ConfigError: If no model can be reached, or the remote provider
+            cannot be chosen.
         PersonaError: If a persona file is invalid.
     """
-    async with httpx.AsyncClient(transport=transport, timeout=TIMEOUT) as client:
+    async with http_client(transport=transport, timeout=TIMEOUT) as client:
         gateway = build_gateway(
             settings,
             client,

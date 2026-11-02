@@ -37,6 +37,7 @@ from synthia.kernel.errors import ConfigError
 from synthia.models.service import LocalService, LocalSetup
 from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
+from synthia.server.conversation import NO_REMOTE as NO_REMOTE_MESSAGE
 from synthia.server.conversation import Conversation
 from synthia.server.daemon import run_daemon
 from synthia.server.discovery import DaemonInfo, new_token, started_now
@@ -534,7 +535,7 @@ def test_without_a_key_the_local_model_answers_and_remote_is_refused(
     text = out.getvalue()
     assert "echo: hello\nlocal | local | thinking off | 3 in, 2 out |" in text
     assert "last turn: local to tiny (local first)" in text
-    assert "no remote model is configured: set SYNTHIA_OPENROUTER_API_KEY" in text
+    assert " ".join(NO_REMOTE_MESSAGE.split()) in " ".join(text.split())
     assert "no remote model is configured, so there is no budget" in text
     assert not service_threads()
 

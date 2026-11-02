@@ -63,7 +63,7 @@ def test_doctor_json_lists_every_check_and_exits_with_the_worst() -> None:
     result = runner.invoke(app, ["doctor", "--json"])
 
     report = json.loads(result.stdout)
-    assert {c["name"] for c in report} >= {"python", "memory", "disk", "openrouter"}
+    assert {c["name"] for c in report} >= {"python", "memory", "disk", "remote"}
     worst = max(doctor.Status[c["status"].upper()] for c in report)
     assert result.exit_code == worst
 
@@ -72,7 +72,7 @@ def test_doctor_table_is_readable_text() -> None:
     result = runner.invoke(app, ["doctor"])
 
     assert "python" in result.stdout
-    assert "openrouter" in result.stdout
+    assert "remote" in result.stdout
 
 
 def test_doctor_is_ok_with_a_key_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,7 +82,7 @@ def test_doctor_is_ok_with_a_key_set(monkeypatch: pytest.MonkeyPatch) -> None:
     result = runner.invoke(app, ["doctor", "--json"])
 
     statuses = {c["name"]: c["status"] for c in json.loads(result.stdout)}
-    assert statuses["openrouter"] == "ok"
+    assert statuses["remote"] == "ok"
     assert "sk-test" not in result.stdout
 
 
@@ -98,7 +98,7 @@ def test_a_variable_that_is_not_a_setting_is_named_on_stderr_only(
         "warning: not a setting, ignored: SYNTHIA_OPENROUTER_MODEL, "
         "SYNTHIA_REMOTE_RPM (.env.example lists every setting)\n"
     )
-    assert {c["name"] for c in json.loads(result.stdout)} >= {"python", "openrouter"}
+    assert {c["name"] for c in json.loads(result.stdout)} >= {"python", "remote"}
     assert "SYNTHIA_REMOTE_RPM" not in result.stdout
     assert "SYNTHIA_OPENROUTER_MODEL" not in result.stdout
 

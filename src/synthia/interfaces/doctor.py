@@ -17,8 +17,10 @@ from typing import TYPE_CHECKING
 
 import psutil
 
+from synthia.gateway.providers import remote_key, select_remote
 from synthia.interfaces.model_commands import configured, this_machine
 from synthia.kernel.config import LocalBackend
+from synthia.kernel.errors import ConfigError
 from synthia.models.service import installed_builds
 from synthia.voice.audio import AudioUnavailableError, Devices, devices
 
@@ -32,6 +34,7 @@ MIN_PYTHON = (3, 12)
 MIN_MEMORY_GB = 8.0
 MIN_FREE_DISK_GB = 1.0
 LOCAL_MODEL = "local model"
+REMOTE = "remote"
 
 
 class Status(IntEnum):
@@ -63,6 +66,14 @@ class LocalFacts:
 
 
 @dataclass(frozen=True, slots=True)
+class RemoteFacts:
+    """The provider ``SYNTHIA_REMOTE`` names, and whether its own key is set."""
+
+    name: str
+    key_set: bool
+
+
+@dataclass(frozen=True, slots=True)
 class Facts:
     """What the machine looks like, read once."""
 
@@ -77,6 +88,8 @@ class Facts:
     local: LocalFacts
     audio: Devices | str
     """The sound devices, or why PortAudio could not list them."""
+    remote: RemoteFacts | str
+    """The remote provider, or why it cannot be chosen."""
 
 
 def _nearest_existing(path: Path) -> Path:
@@ -102,6 +115,7 @@ def gather_facts(settings: Settings, installer: Installer) -> Facts:
         disk_free_gb=shutil.disk_usage(_nearest_existing(home)).free / BYTES_PER_GB,
         local=_local_facts(settings, installer, machine.target),
         audio=_audio_facts(),
+        remote=_remote_facts(settings),
     )
 
 
@@ -110,6 +124,14 @@ def _audio_facts() -> Devices | str:
         return devices()
     except AudioUnavailableError as error:
         return str(error)
+
+
+def _remote_facts(settings: Settings) -> RemoteFacts | str:
+    try:
+        remote = select_remote(settings)
+    except ConfigError as error:
+        return str(error)
+    return RemoteFacts(remote.name, key_set=remote_key(settings, remote) is not None)
 
 
 def _local_facts(
@@ -140,7 +162,7 @@ def evaluate(settings: Settings, facts: Facts) -> list[Check]:
         _home(settings, facts),
         _disk(settings, facts),
         _audio(facts),
-        _openrouter(settings),
+        _remote(facts),
     ]
 
 
@@ -229,14 +251,16 @@ def _audio(facts: Facts) -> Check:
     return Check("audio", Status.OK, detail)
 
 
-def _openrouter(settings: Settings) -> Check:
-    if settings.openrouter_api_key is None:
-        return Check(
-            "openrouter",
-            Status.OK,
-            "no key, so no remote model; optional, everything runs locally",
-        )
-    return Check("openrouter", Status.OK, "API key set; used only on /remote on")
+def _remote(facts: Facts) -> Check:
+    remote = facts.remote
+    if isinstance(remote, str):
+        return Check(REMOTE, Status.FAIL, remote)
+    if not remote.key_set:
+        detail = "no key, so no remote model; optional, everything runs locally"
+        return Check(REMOTE, Status.OK, f"{remote.name}: {detail}")
+    return Check(
+        REMOTE, Status.OK, f"{remote.name}: API key set; used only on /remote on"
+    )
 
 
 def overall(checks: list[Check]) -> Status:

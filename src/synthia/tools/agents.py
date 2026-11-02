@@ -24,12 +24,8 @@ from typing import TYPE_CHECKING, Annotated, Final
 from pydantic import Field
 
 from synthia.agent.tools import Effect, FunctionTool, Reach
-from synthia.tools.run import (
-    describe_run,
-    environment_without_own,
-    open_log,
-    run_once,
-)
+from synthia.kernel.config import environment_without_own
+from synthia.tools.run import describe_run, open_log, run_once
 
 if TYPE_CHECKING:
     from collections.abc import Callable
