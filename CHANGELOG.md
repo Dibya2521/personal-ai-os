@@ -30,6 +30,14 @@ All notable changes are recorded here. The format follows
   inherits SYNTHIA's own `SYNTHIA_*` variables, so no provider key reaches it.
   `synthia doctor` names its key check `remote` instead of `openrouter`.
 
+### Security
+
+- `fetch_url` no longer follows redirects to local or private addresses. A
+  hop to another origin is refused when its host resolves to a loopback,
+  private, link-local or metadata address, so an approved public page can no
+  longer send the call to a local model server or a cloud metadata service.
+  Reported by Matt Abate (@mattabate).
+
 ## [0.3.0] - 2026-10-27
 
 SYNTHIA is always there, remembers, and reads the person's files. One daemon
