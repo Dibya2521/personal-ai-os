@@ -81,7 +81,8 @@ async def _check(
     key = remote_key(settings, remote)
     if key is None:
         report.lines.append(
-            f"set {key_variable(remote.name)} in .env to compare with {remote.name}"
+            f"store {remote.name}'s key with synthia keys set {remote.name}, or "
+            f"set {key_variable(remote.name)} in .env, to compare with {remote.name}"
         )
         report.complete = False
         return

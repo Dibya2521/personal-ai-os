@@ -154,7 +154,8 @@ async def test_a_check_without_a_key_or_an_answer_is_incomplete(tmp_path: Path) 
 
     assert (
         no_key.lines[-1]
-        == "set SYNTHIA_OPENROUTER_API_KEY in .env to compare with openrouter"
+        == "store openrouter's key with synthia keys set openrouter, or set "
+        "SYNTHIA_OPENROUTER_API_KEY in .env, to compare with openrouter"
     )
     assert no_answer.lines[-1] == "could not ask OpenRouter: HTTP 401: User not found."
     assert (no_key.complete, no_answer.complete) == (False, False)

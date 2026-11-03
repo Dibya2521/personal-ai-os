@@ -55,7 +55,8 @@ HTTP: Final = "http"
 SHOWN_NAME: Final = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 HIDDEN_NAME: Final = "<a name longer than 32 characters or with other characters>"
 REMOTE_KEY_HINT: Final = (
-    "set the remote provider's key in .env as SYNTHIA_<NAME>_API_KEY, NAME being "
+    "store the remote provider's key with synthia keys set <name>, or set it "
+    "in .env as SYNTHIA_<NAME>_API_KEY, NAME being "
     "SYNTHIA_REMOTE in capitals with - as _ (SYNTHIA_OPENROUTER_API_KEY for the "
     "default, openrouter; SYNTHIA_OPENAI_API_KEY for a provider named openai)"
 )
@@ -136,7 +137,8 @@ def _check_base_url(url: str) -> str:
     if "@" in parts.netloc:
         message = (
             "base_url must not carry a user name or password; "
-            "the key goes in SYNTHIA_<NAME>_API_KEY in .env"
+            "store the key with synthia keys set <name>, or in .env as "
+            "SYNTHIA_<NAME>_API_KEY"
         )
         raise ValueError(message)
     if not host:
@@ -337,7 +339,9 @@ def remote_key(settings: Settings, provider: RemoteProvider) -> SecretStr | None
 
     Only the provider's own variable is read (:func:`key_variable`), so a key
     never reaches another provider's host when ``SYNTHIA_REMOTE`` changes.
+    A key in the system key store wins over ``.env``.
     """
-    if provider.name == OPENROUTER:
+    key = settings.api_keys().get(key_variable(provider.name))
+    if key is None and provider.name == OPENROUTER:
         return settings.openrouter_api_key
-    return settings.api_keys().get(key_variable(provider.name))
+    return key

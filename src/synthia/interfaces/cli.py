@@ -24,7 +24,7 @@ from synthia.gateway.providers import (
     select_remote,
 )
 from synthia.interfaces import doctor as doctor_checks
-from synthia.interfaces import model_commands
+from synthia.interfaces import key_commands, model_commands
 from synthia.interfaces.chat import run_chat, visible
 from synthia.interfaces.daemon_client import (
     DaemonError,
@@ -41,9 +41,16 @@ from synthia.interfaces.daemon_client import (
 )
 from synthia.interfaces.trace_view import build_tree, summary
 from synthia.interfaces.usage_report import budget_report
-from synthia.kernel.config import Settings, load_settings, unknown_variables
+from synthia.kernel.config import (
+    DEFAULT_ENV_FILE,
+    Settings,
+    api_key_variables,
+    load_settings,
+    unknown_variables,
+)
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.kernel.jsonrpc import RpcError
+from synthia.kernel.keys import KeyStore, SystemCredentials
 from synthia.kernel.logs import logging_to
 from synthia.knowledge.service import SEARCH_LIMIT
 from synthia.models.install import BYTES_PER_GB, Installer
@@ -84,6 +91,12 @@ knowledge_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(knowledge_app, name="knowledge")
+
+keys_app = typer.Typer(
+    help="Keep remote providers' keys in the system key store.",
+    no_args_is_help=True,
+)
+app.add_typer(keys_app, name="keys")
 
 CHAT_LOG = Path("logs") / "synthia.log"
 SHOWN_BODY_LINES = 8
@@ -224,7 +237,7 @@ def stop() -> None:
     servers are stopped with it. The next chat starts it again.
     """
     try:
-        stopped = asyncio.run(stop_running(_settings().home))
+        stopped = asyncio.run(stop_running(_settings(stored_keys=False).home))
     except DaemonError as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
@@ -550,7 +563,67 @@ def providers() -> None:
         )
 
 
-def _settings() -> Settings:
+@keys_app.command("set")
+def keys_set(
+    provider: Annotated[
+        str, typer.Argument(help="The provider, as synthia providers names it.")
+    ],
+) -> None:
+    """Store a provider's key in the system key store, asked without echo.
+
+    The stored key wins over SYNTHIA_<NAME>_API_KEY in .env. Exits 2 when the
+    provider is unknown, the key is not a key, or the store cannot be written.
+    """
+    settings = _settings(stored_keys=False)
+    try:
+        key_commands.require_provider(provider, load_providers(settings.home).keys())
+        typed = typer.prompt(f"{provider} key", hide_input=True)
+        said = key_commands.set_key(
+            KeyStore(settings.home, SystemCredentials()), provider, typed
+        )
+    except ConfigError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    typer.echo(said)
+
+
+@keys_app.command("list")
+def keys_list() -> None:
+    """Say where each provider's key comes from, never any part of it."""
+    settings = _settings(stored_keys=False)
+    try:
+        known = load_providers(settings.home)
+        stored = KeyStore(settings.home, SystemCredentials()).load()
+    except ConfigError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    from_env = api_key_variables(DEFAULT_ENV_FILE)
+    for line in key_commands.key_lines(known, stored.keys(), from_env):
+        typer.echo(line)
+
+
+@keys_app.command("remove")
+def keys_remove(
+    provider: Annotated[str, typer.Argument(help="The provider whose key to delete.")],
+) -> None:
+    """Delete a provider's key from the system key store.
+
+    Exits 2 when the store cannot be written.
+    """
+    settings = _settings(stored_keys=False)
+    try:
+        said = key_commands.remove_key(
+            KeyStore(settings.home, SystemCredentials()),
+            provider,
+            api_key_variables(DEFAULT_ENV_FILE),
+        )
+    except ConfigError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    typer.echo(said)
+
+
+def _settings(*, stored_keys: bool = True) -> Settings:
     unknown = unknown_variables()
     if unknown:
         typer.echo(
@@ -559,7 +632,7 @@ def _settings() -> Settings:
             err=True,
         )
     try:
-        return load_settings()
+        return load_settings(stored_keys=stored_keys)
     except ConfigError as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None

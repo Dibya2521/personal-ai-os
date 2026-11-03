@@ -24,9 +24,12 @@ from pydantic_settings import (
 )
 
 from synthia.kernel.errors import ConfigError
+from synthia.kernel.keys import KeyStore, SystemCredentials
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from synthia.kernel.keys import Credentials
 
 APP_NAME = "synthia"
 ENV_PREFIX = "SYNTHIA_"
@@ -97,6 +100,7 @@ class Settings(BaseSettings):
     file_roots: Annotated[tuple[Path, ...], NoDecode] = ()
 
     _env_file_read: Path | None = PrivateAttr(default=None)
+    _stored_keys: dict[str, SecretStr] = PrivateAttr(default_factory=dict)
 
     @field_validator("file_roots", mode="before")
     @classmethod
@@ -109,19 +113,31 @@ class Settings(BaseSettings):
     def api_keys(self) -> dict[str, SecretStr]:
         """Return every ``SYNTHIA_<NAME>_API_KEY`` set, by its upper-case name.
 
-        They are read from the sources these settings were read from: the
-        environment, then the ``.env`` file :func:`load_settings` was given,
-        the environment winning. An empty value is not set.
+        A key in the system key store wins, so ``synthia keys set`` takes
+        effect even when ``.env`` still holds an older key. Then the
+        environment, then the ``.env`` file :func:`load_settings` was given.
+        An empty value is not set.
         """
-        return api_key_variables(self._env_file_read)
+        return api_key_variables(self._env_file_read) | self._stored_keys
 
 
-def load_settings(env_file: Path | None = DEFAULT_ENV_FILE) -> Settings:
+def load_settings(
+    env_file: Path | None = DEFAULT_ENV_FILE,
+    *,
+    credentials: Credentials | None = None,
+    stored_keys: bool = True,
+) -> Settings:
     """Load and validate the settings, reading ``env_file`` if it exists.
 
+    The keys in the system key store, or in ``credentials`` when given, are
+    read here, once, unless ``stored_keys`` is false: a command that never
+    sends a key (``synthia stop``, ``synthia keys``) must still work while the
+    store is locked.
+
     Raises:
-        ConfigError: If any value fails validation. The message names the
-            variables and the problem, never the values, which may be secrets.
+        ConfigError: If any value fails validation, or the key store holds
+            keys it cannot give. The message names the variables and the
+            problem, never the values, which may be secrets.
     """
     try:
         settings = Settings(_env_file=env_file)  # pyright: ignore[reportCallIssue]
@@ -133,6 +149,12 @@ def load_settings(env_file: Path | None = DEFAULT_ENV_FILE) -> Settings:
         message = f"invalid configuration: {problems}"
         raise ConfigError(message) from None
     settings._env_file_read = env_file  # noqa: SLF001 # pyright: ignore[reportPrivateUsage]
+    if not stored_keys:
+        return settings
+    store = KeyStore(
+        settings.home, SystemCredentials() if credentials is None else credentials
+    )
+    settings._stored_keys = store.load()  # noqa: SLF001 # pyright: ignore[reportPrivateUsage]
     return settings
 
 

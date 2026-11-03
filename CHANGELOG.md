@@ -29,6 +29,14 @@ All notable changes are recorded here. The format follows
 - The local model's server, like every program SYNTHIA starts, no longer
   inherits SYNTHIA's own `SYNTHIA_*` variables, so no provider key reaches it.
   `synthia doctor` names its key check `remote` instead of `openrouter`.
+- `synthia keys set <provider>` keeps a provider's key in the system key store
+  (Windows Credential Manager, the macOS Keychain, the Secret Service on
+  Linux), asked without echo, so it need not sit in plain text in `.env`. A
+  stored key wins over `SYNTHIA_<NAME>_API_KEY`. `synthia keys list` says
+  where each provider's key comes from, never any part of it, and
+  `synthia keys remove <provider>` deletes it. Only the names of stored keys
+  are written to disk, in `SYNTHIA_HOME/keys.json`; with none stored, the key
+  store is never opened.
 
 ### Security
 
