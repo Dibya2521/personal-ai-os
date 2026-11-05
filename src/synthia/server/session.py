@@ -37,7 +37,7 @@ from synthia.agent.tools import Toolbox, ToolError
 from synthia.agent.trace import utc_now
 from synthia.gateway.confinement import CONFINEMENT, Confinement
 from synthia.gateway.errors import GatewayError, IncompleteResponseError
-from synthia.gateway.router import RouteDecided
+from synthia.gateway.router import RouteDecided, RouteReason
 from synthia.gateway.types import (
     ChatChunk,
     ChatRequest,
@@ -151,7 +151,8 @@ class TurnReport:
     ``confined`` is whether the chat holds private text once the turn is
     over, so it stays on this machine until it starts again. ``sources`` are
     the citations of the person's files the turn's searches showed, in the
-    order first shown, each once.
+    order first shown, each once. ``no_consent`` says the turn stayed on
+    this machine because the remote provider has no consent.
     """
 
     route: str
@@ -162,6 +163,7 @@ class TurnReport:
     reasoning: Reasoning | None = None
     confined: bool = False
     sources: tuple[str, ...] = ()
+    no_consent: bool = False
 
 
 @dataclass(slots=True)
@@ -601,4 +603,5 @@ class ChatSession:
             reasoning=route.reasoning if route else request.reasoning,
             confined=self.confinement.confined,
             sources=tuple(dict.fromkeys(taken.cited)),
+            no_consent=route is not None and route.reason is RouteReason.NO_CONSENT,
         )

@@ -31,6 +31,7 @@ from synthia.gateway.types import (
 from synthia.models.catalogue import Backend, Model, find
 from synthia.models.local import LocalModel, end_thinking
 from synthia.models.server import Launch, LlamaServer, free_port, new_key
+from tests.consenting import OPENROUTER, consented
 from tests.models import fake_llama_server
 from tests.timing import HANG_TIMEOUT_S
 
@@ -363,7 +364,11 @@ async def test_the_router_sends_a_local_request_to_the_served_model(
     async with httpx.AsyncClient() as client:
         server = server_at(tmp_path, client, new_key())
         local = LocalModel(server, client, QWEN, 4096)
-        router = Router(local, Remote(Unused(), health), local_ready=local.ready)
+        router = Router(
+            local,
+            Remote(Unused(), health, consented, OPENROUTER),
+            local_ready=local.ready,
+        )
         stop = asyncio.Event()
         task = asyncio.create_task(server.run(stop))
         await asyncio.wait_for(server.ready.wait(), HANG_TIMEOUT_S)

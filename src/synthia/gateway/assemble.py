@@ -23,6 +23,7 @@ from synthia.gateway.providers import REMOTE_KEY_HINT, remote_key, select_remote
 from synthia.gateway.ratelimit import SlidingWindowLimiter
 from synthia.gateway.router import Remote, RemoteHealth, Router, guard_remote
 from synthia.gateway.usage import AccountingModel, UsageLog, free_requests_today
+from synthia.kernel.consent import ConsentBook
 from synthia.kernel.errors import ConfigError
 
 if TYPE_CHECKING:
@@ -49,13 +50,15 @@ class Gateway:
     its decisions, capabilities and remote guards. ``learn_daily_cap`` asks
     the remote for the key's daily cap and stores it (see
     :func:`learn_daily_cap`); without a remote, or with one that does not
-    report its cap, it returns ``None``.
+    report its cap, it returns ``None``. ``consent`` holds the person's
+    decisions the router's remote reads.
     """
 
     model: ChatModel
     router: Router
     usage: UsageLog
     learn_daily_cap: Callable[[], Coroutine[None, None, int | None]]
+    consent: ConsentBook
 
     @property
     def health(self) -> RemoteHealth | None:
@@ -114,6 +117,7 @@ def build_gateway(
     if key is None and local is None:
         raise ConfigError(NO_MODEL)
     usage = UsageLog(settings.home / GATEWAY_DB)
+    consent = ConsentBook(settings.home)
     guarded: Remote | None = None
     learn: Callable[[], Coroutine[None, None, int | None]] = _nothing_to_learn
     if key is not None:
@@ -129,7 +133,12 @@ def build_gateway(
         adapter = OpenAICompatibleModel(
             client=client, endpoint=remote.endpoint(key), info=remote.model
         )
-        guarded = Remote(guard_remote(adapter, health), health)
+        guarded = Remote(
+            guard_remote(adapter, health),
+            health,
+            partial(consent.allows, remote.receiver),
+            remote.receiver,
+        )
         if remote.reports_daily_cap:
             learn = partial(learn_daily_cap, ledger, client, key, remote)
     local_ids = frozenset[str]() if local is None else frozenset({local.info.id})
@@ -144,7 +153,9 @@ def build_gateway(
         local_ready=(lambda: False) if local is None else local.ready,
         remote_speed=remote_speed,
     )
-    return Gateway(AccountingModel(router, usage, publish), router, usage, learn)
+    return Gateway(
+        AccountingModel(router, usage, publish), router, usage, learn, consent
+    )
 
 
 async def _nothing_to_learn() -> int | None:

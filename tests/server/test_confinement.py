@@ -11,6 +11,7 @@ from synthia.gateway.assemble import Gateway
 from synthia.gateway.router import Remote, Route, Router, RouteReason
 from synthia.gateway.usage import UsageLog
 from synthia.kernel.config import Settings
+from synthia.kernel.consent import ConsentBook
 from synthia.memory.hybrid import Recall
 from synthia.memory.remembering import REMINDER_HEADER, Remembering
 from synthia.memory.store import MEMORY_FILE, MemoryStore, Turn
@@ -25,8 +26,9 @@ from synthia.server.conversation import (
 from synthia.server.daemon import run_daemon
 from synthia.server.session import ChatSession, LastRoute, TurnReport
 from tests.agent.scripted import Scripted, calls, says
+from tests.consenting import OPENROUTER, consented, grant
 from tests.gateway.test_confinement import READ_NOTE, private_reader
-from tests.gateway.test_router import LOCAL, REMOTE, Fake, Setup
+from tests.gateway.test_router import LOCAL, PROVIDER, REMOTE, Fake, Setup
 from tests.interfaces.daemons import toy_embedder
 from tests.memory.test_hybrid import MONDAY
 from tests.retrieval.toy import Network, embedder
@@ -69,8 +71,15 @@ def conversation(
     routes: LastRoute,
     memory: Remembering | None = None,
 ) -> Conversation:
+    grant(tmp_path, PROVIDER)
     session = ChatSession(router, PersonaLibrary(), "synthia", routes, memory=memory)
-    gateway = Gateway(router, router, UsageLog(tmp_path / "usage.db"), nothing_learned)
+    gateway = Gateway(
+        router,
+        router,
+        UsageLog(tmp_path / "usage.db"),
+        nothing_learned,
+        ConsentBook(tmp_path),
+    )
     return Conversation(session, gateway)
 
 
@@ -156,7 +165,9 @@ async def test_remote_on_in_a_confined_chat_stays_local_until_reset(
 ) -> None:
     remote, local, routes = Fake(REMOTE), Fake(LOCAL), LastRoute()
     talk = conversation(
-        tmp_path, Router(local, Remote(remote, setup.health), routes), routes
+        tmp_path,
+        Router(local, Remote(remote, setup.health, consented, OPENROUTER), routes),
+        routes,
     )
     talk.session.confinement.confine(READ_NOTE)
 
@@ -186,7 +197,7 @@ async def test_a_resumed_private_conversation_confines_the_chat(
     store = MemoryStore(tmp_path / "memory.db")
     await seeded(store, confined=True)
     remote, local, routes = Fake(REMOTE), Fake(LOCAL), LastRoute()
-    router = Router(local, Remote(remote, setup.health), routes)
+    router = Router(local, Remote(remote, setup.health, consented, OPENROUTER), routes)
     talk = conversation(tmp_path, router, routes, Remembering(Recall(store)))
     talk.session.use_remote = True
 
@@ -207,7 +218,7 @@ async def test_without_a_local_model_a_private_conversation_is_not_resumed(
     store = MemoryStore(tmp_path / "memory.db")
     earlier = await seeded(store, confined=confined)
     remote, routes = Fake(REMOTE), LastRoute()
-    router = Router(None, Remote(remote, setup.health), routes)
+    router = Router(None, Remote(remote, setup.health, consented, OPENROUTER), routes)
     talk = conversation(tmp_path, router, routes, Remembering(Recall(store)))
     talk.session.use_remote = True
 
@@ -241,8 +252,18 @@ async def test_reset_and_forget_are_refused_while_a_turn_runs(
         tools=tools,
         memory=Remembering(Recall(MemoryStore(tmp_path / "memory.db"))),
     )
-    router = Router(Fake(LOCAL), Remote(Fake(REMOTE), setup.health), LastRoute())
-    gateway = Gateway(router, router, UsageLog(tmp_path / "usage.db"), nothing_learned)
+    router = Router(
+        Fake(LOCAL),
+        Remote(Fake(REMOTE), setup.health, consented, OPENROUTER),
+        LastRoute(),
+    )
+    gateway = Gateway(
+        router,
+        router,
+        UsageLog(tmp_path / "usage.db"),
+        nothing_learned,
+        ConsentBook(tmp_path),
+    )
     talk = Conversation(session, gateway)
     session.confinement.confine(READ_NOTE)
 

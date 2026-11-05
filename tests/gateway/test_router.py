@@ -43,6 +43,7 @@ from synthia.gateway.types import (
 )
 from synthia.kernel.bus import Event
 from tests.agent.scripted import Scripted, calls, says
+from tests.consenting import OPENROUTER, consented
 from tests.gateway.test_confinement import READ_NOTE, private_reader
 
 AUTO = Reasoning.AUTO
@@ -120,7 +121,11 @@ class Setup:
         local: Fake | None = None,
         local_ready: Callable[[], bool] = _ready,
     ) -> Router:
-        guarded = None if remote is None else Remote(remote, self.health)
+        guarded = (
+            None
+            if remote is None
+            else Remote(remote, self.health, consented, OPENROUTER)
+        )
         return Router(local, guarded, self.publish, local_ready)
 
     def routes(self) -> list[tuple[Route, RouteReason, str]]:
@@ -415,7 +420,9 @@ async def test_a_turn_that_reads_private_text_sends_its_next_steps_local(
     setup: Setup,
 ) -> None:
     remote, local = Scripted(calls(("read_note", "{}"))), Scripted(says("done"))
-    router = Router(local, Remote(remote, setup.health), setup.publish)
+    router = Router(
+        local, Remote(remote, setup.health, consented, OPENROUTER), setup.publish
+    )
     CONFINEMENT.set(Confinement())
     request = ChatRequest((Message.user("what does my note say?"),), use_remote=True)
 
@@ -482,7 +489,9 @@ async def test_the_guarded_remote_counts_attempts_and_opens_the_circuit(
     setup.clock.now = 1000.0  # past any earlier window
     flaky = Fake(REMOTE, ProviderError("down"), ProviderError("down"))
     remote = guard_remote(flaky, health, RetryPolicy(max_attempts=3, base_s=0.0))
-    router = Router(Fake(LOCAL), Remote(remote, health), setup.publish)
+    router = Router(
+        Fake(LOCAL), Remote(remote, health, consented, OPENROUTER), setup.publish
+    )
 
     answer = await collect(router.stream(ASK))
 
@@ -558,7 +567,10 @@ async def test_only_a_remote_request_gets_a_token_limit(setup: Setup) -> None:
 
     remote, local = Fake(REMOTE, AuthError("bad key")), Fake(LOCAL)
     router = Router(
-        local, Remote(remote, setup.health), setup.publish, remote_speed=speed
+        local,
+        Remote(remote, setup.health, consented, OPENROUTER),
+        setup.publish,
+        remote_speed=speed,
     )
     request = ChatRequest(
         (Message.user("hi there"),), reasoning=Reasoning.MEDIUM, use_remote=True

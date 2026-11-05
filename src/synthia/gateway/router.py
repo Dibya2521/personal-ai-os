@@ -4,8 +4,10 @@ Local comes first: a request goes to the remote model only when it asks for
 it with ``use_remote``, so SYNTHIA keeps working, and keeps conversations on
 the machine, whatever happens to the remote service. A request made while its
 chat holds private text (:mod:`synthia.gateway.confinement`) goes local
-whatever it asks. A request that may not leave the machine is never sent out,
-even when no local model can serve it: it fails with the reason instead.
+whatever it asks, and so does one asking for a remote provider the person has
+not consented to (:mod:`synthia.kernel.consent`). A request that may not leave
+the machine is never sent out, even when no local model can serve it: it fails
+with the reason instead.
 
 A request that asks for the remote model gets it first, because the free
 remote models are far stronger than a small local one. It goes local instead
@@ -54,6 +56,7 @@ from synthia.gateway.reasoning import limit, resolve
 from synthia.gateway.retry import RetryingModel
 from synthia.gateway.types import ModelInfo, Reasoning
 from synthia.kernel.bus import Event
+from synthia.kernel.consent import Provider, Scope
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -74,6 +77,10 @@ DEFAULT_MAX_WAIT_S = 5.0
 DEFAULT_RESERVE = 10
 ROUTER_ID = "auto"
 HOLDS_PRIVATE_TEXT = "this chat holds private text, so it cannot leave this machine"
+NO_CONSENT = (
+    "{provider} has no consent to receive this chat, so it stays on this machine "
+    "(/remote on asks, or synthia consent grant {provider})"
+)
 
 
 class Route(StrEnum):
@@ -88,6 +95,7 @@ class RouteReason(StrEnum):
 
     LOCAL_FIRST = "local first"
     CONFINED = "chat holds private text"
+    NO_CONSENT = "remote provider has no consent"
     REMOTE_ASKED = "remote asked for"
     BACKGROUND = "background job"
     CAPABILITY = "remote cannot serve this request"
@@ -135,10 +143,17 @@ class RemoteHealth:
 
 @dataclass(frozen=True, slots=True)
 class Remote:
-    """The remote model, already guarded, with the guards the router reads."""
+    """The remote model, already guarded, with the guards the router reads.
+
+    ``allows`` says whether the person consents to ``scope`` going to
+    ``receiver``, asked again for every request, so a revoke takes effect on
+    the next one.
+    """
 
     model: ChatModel
     health: RemoteHealth
+    allows: Callable[[Scope], bool]
+    receiver: Provider
 
 
 def guard_remote(
@@ -284,7 +299,7 @@ class Router:
         self, request: ChatRequest, *, background: bool
     ) -> tuple[Route, RouteReason, ChatModel]:
         if confined():
-            local = self._local_only(request, private=True)
+            local = self._local_only(request, HOLDS_PRIVATE_TEXT)
             return Route.LOCAL, RouteReason.CONFINED, local
         if not request.use_remote:
             return Route.LOCAL, RouteReason.LOCAL_FIRST, self._local_only(request)
@@ -292,6 +307,9 @@ class Router:
         if remote is None:
             message = f"no remote model is configured: {REMOTE_KEY_HINT} to ask one"
             raise RemoteUnavailableError(message)
+        if not remote.allows(Scope.CHAT):
+            why = NO_CONSENT.format(provider=remote.receiver.name)
+            return Route.LOCAL, RouteReason.NO_CONSENT, self._local_only(request, why)
         reason = await self._reason_for_local(request, remote, background=background)
         if reason is None:
             return Route.REMOTE, RouteReason.REMOTE_ASKED, remote.model
@@ -300,15 +318,16 @@ class Router:
             return Route.LOCAL, reason, local
         return Route.REMOTE, RouteReason.NO_LOCAL, remote.model
 
-    def _local_only(self, request: ChatRequest, *, private: bool = False) -> ChatModel:
+    def _local_only(self, request: ChatRequest, held: str | None = None) -> ChatModel:
+        """Return the local model; ``held`` says why the request may not leave."""
         # Readiness is not checked: a starting local model is waited for,
         # since sending the request out instead is not allowed.
         local = self._local
         if local is None:
             install = "install one with `synthia models install`"
             message = (
-                f"{HOLDS_PRIVATE_TEXT}, and no local model is installed: {install}"
-                if private
+                f"{held}, and no local model is installed: {install}"
+                if held
                 else f"no local model is installed: {install}, "
                 "or ask for the remote model"
             )
@@ -316,8 +335,8 @@ class Router:
         if not can_serve(local.info, request):
             needs = "images" if request.has_images else "tools"
             message = (
-                f"{HOLDS_PRIVATE_TEXT}, and the local model cannot take {needs}"
-                if private
+                f"{held}, and the local model cannot take {needs}"
+                if held
                 else f"the local model cannot take {needs}: ask for the remote "
                 "model to send this request off the machine"
             )

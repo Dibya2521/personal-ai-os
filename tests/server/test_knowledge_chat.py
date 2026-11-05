@@ -26,6 +26,7 @@ from synthia.server.daemon import run_daemon
 from synthia.server.session import ChatSession, NoKnowledgeError, TurnItem, TurnReport
 from tests.agent.scripted import Reply, Scripted, calls, says
 from tests.agent.test_plan import planned
+from tests.consenting import OPENROUTER, consented
 from tests.gateway.test_router import Setup
 from tests.interfaces.daemons import toy_embedder
 from tests.knowledge.corpus import planted
@@ -78,7 +79,9 @@ async def test_a_deep_turn_searches_before_the_model_is_first_asked(
     local = Scripted(
         rewrites("door code"), calls(search("pune")), says("The door code is 4021.")
     )
-    router = Router(local, Remote(remote, setup.health), setup.publish)
+    router = Router(
+        local, Remote(remote, setup.health, consented, OPENROUTER), setup.publish
+    )
     chat = chat_over(knowledge, router)
     question = "what is the door code?"
 
@@ -127,7 +130,9 @@ async def test_a_public_deep_turn_is_expanded_locally_and_answered_remotely(
     knowledge = await knowing(tmp_path, private=False)
     remote = Scripted(says("It is a host."))
     local = Scripted(rewrites("kestrel host"))
-    router = Router(local, Remote(remote, setup.health), setup.publish)
+    router = Router(
+        local, Remote(remote, setup.health, consented, OPENROUTER), setup.publish
+    )
 
     items = await turned(chat_over(knowledge, router), "what is kestrel?", deep=True)
 
@@ -144,7 +149,9 @@ async def test_a_deep_turn_with_no_local_model_fails_and_keeps_nothing(
 ) -> None:
     knowledge = await knowing(tmp_path)
     remote = Scripted()
-    chat = chat_over(knowledge, Router(None, Remote(remote, setup.health)))
+    chat = chat_over(
+        knowledge, Router(None, Remote(remote, setup.health, consented, OPENROUTER))
+    )
 
     with pytest.raises(LocalUnavailableError, match=f"^{re.escape(NO_LOCAL_MODEL)}$"):
         await turned(chat, "what is the door code?", deep=True)
@@ -367,7 +374,9 @@ async def test_a_private_passage_keeps_the_rest_of_the_turn_local(
     knowledge = await knowing(tmp_path)
     remote = Scripted(calls(search("kestrel")))
     local = Scripted(calls(search("pune")), says("The door code is 4021."))
-    router = Router(local, Remote(remote, setup.health), setup.publish)
+    router = Router(
+        local, Remote(remote, setup.health, consented, OPENROUTER), setup.publish
+    )
 
     items = await turned(chat_over(knowledge, router), "what is the door code?")
 
@@ -392,7 +401,9 @@ async def test_a_public_search_leaves_the_turn_remote(
     knowledge = await knowing(tmp_path, private=False)
     remote = Scripted(calls(search("kestrel")), says("It is a host."))
     local = Scripted()
-    router = Router(local, Remote(remote, setup.health), setup.publish)
+    router = Router(
+        local, Remote(remote, setup.health, consented, OPENROUTER), setup.publish
+    )
 
     items = await turned(chat_over(knowledge, router), "what is kestrel?")
 
@@ -408,7 +419,11 @@ async def test_a_turn_with_no_search_has_no_sources(
     tmp_path: Path, setup: Setup
 ) -> None:
     knowledge = await knowing(tmp_path)
-    router = Router(None, Remote(Scripted(says("hi")), setup.health), setup.publish)
+    router = Router(
+        None,
+        Remote(Scripted(says("hi")), setup.health, consented, OPENROUTER),
+        setup.publish,
+    )
 
     items = await turned(chat_over(knowledge, router), "hello")
 

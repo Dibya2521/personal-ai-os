@@ -32,6 +32,7 @@ from synthia.knowledge.deep import (
 from synthia.knowledge.retrieve import Merge, Side, Variant, VariantError
 from synthia.knowledge.service import Knowledge
 from tests.agent.scripted import Scripted
+from tests.consenting import OPENROUTER, consented
 from tests.gateway.test_router import Setup
 from tests.knowledge.corpus import NOTES, citations, opened, planted
 
@@ -312,7 +313,9 @@ async def test_through_the_router_deep_search_never_asks_the_remote(
 ) -> None:
     setup = Setup(tmp_path)
     local, remote = Local(reply(["pet"])), Scripted()
-    router = Router(local, Remote(remote, setup.health), setup.publish)
+    router = Router(
+        local, Remote(remote, setup.health, consented, OPENROUTER), setup.publish
+    )
 
     deep = await deep_search(notes, router, "kestrel", private=False)
 
@@ -328,7 +331,9 @@ async def test_with_no_local_model_deep_search_is_refused_not_sent_out(
 ) -> None:
     setup = Setup(tmp_path)
     remote = Scripted()
-    router = Router(None, Remote(remote, setup.health), setup.publish)
+    router = Router(
+        None, Remote(remote, setup.health, consented, OPENROUTER), setup.publish
+    )
 
     with pytest.raises(LocalUnavailableError) as refused:
         await deep_search(notes, router, "kestrel")

@@ -37,7 +37,7 @@ from synthia.memory.summary import summarize
 from synthia.models.catalogue import DEFAULT_EMBEDDER, EMBEDDERS
 from synthia.models.install import BYTES_PER_GB, Installer
 from synthia.retrieval.embed import EmbedError, TextEmbedder
-from synthia.server.conversation import Conversation
+from synthia.server.conversation import AskConsent, Conversation, never_asked
 from synthia.server.session import ChatSession, LastRoute
 from synthia.server.upkeep import Activity
 from synthia.tools import local_tools, outside_tools
@@ -278,8 +278,15 @@ class Host:
             work.append(self.reindexing.run())
         return work
 
-    def conversation(self, approver: Approver) -> Conversation:
-        """Return a new conversation that asks ``approver`` before each call."""
+    def conversation(
+        self,
+        approver: Approver,
+        ask_consent: AskConsent = never_asked,
+    ) -> Conversation:
+        """Return a new conversation that asks ``approver`` before each call.
+
+        ``ask_consent`` asks whether the chat may go to a remote provider.
+        """
         router = self.gateway.router
         session = ChatSession(
             self.gateway.model,
@@ -302,4 +309,4 @@ class Host:
                 partial(summarize, self.gateway.model) if router.has_local else None
             ),
         )
-        return Conversation(session, self.gateway)
+        return Conversation(session, self.gateway, ask_consent)

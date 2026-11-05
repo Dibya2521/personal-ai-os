@@ -30,6 +30,7 @@ from synthia.persona.library import PersonaLibrary
 from synthia.persona.model import PersonaError
 from synthia.server.conversation import Conversation
 from synthia.server.session import ChatSession, LastRoute
+from tests.consenting import grant
 
 KEY = "sk-or-v1-adversarial-test-key-000"  # pragma: allowlist secret
 HELLO = ChatRequest((Message.user("hello"),), use_remote=True)
@@ -52,6 +53,7 @@ async def _ignore(_: Event) -> None:
 
 
 def settings(tmp_path: Path) -> Settings:
+    grant(tmp_path, "openrouter")
     return Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
 
 

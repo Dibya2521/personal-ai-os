@@ -61,6 +61,12 @@ Request, daemon to client: ``approve`` {``tool``, ``arguments``, ``confined``}
 returns true to run the call; ``confined`` says the conversation holds private
 text, which the call's arguments may carry. A client that is gone, or answers
 anything but true, is a no.
+
+Request, daemon to client: ``consent`` {``provider``, ``url``} returns true
+when the person lets this chat's text go to that remote provider at that
+address, false when they refuse; the answer is saved in
+``SYNTHIA_HOME/consent.json``. A client that is gone, errors, or answers
+anything but a boolean could not ask, and nothing is saved.
 """
 
 from __future__ import annotations
@@ -90,6 +96,7 @@ if TYPE_CHECKING:
 
     from synthia.agent.tools import Tool
     from synthia.gateway.types import ChatChunk
+    from synthia.kernel.consent import Provider
     from synthia.kernel.jsonrpc import Method, Params
     from synthia.knowledge.deep import Deep
     from synthia.knowledge.model import Source
@@ -114,6 +121,7 @@ NOT_INDEXING: Final = (
 KNOWLEDGE_REFUSED: Final = -32005
 MAX_SEARCH_LIMIT: Final = 50
 APPROVE: Final = "approve"
+CONSENT: Final = "consent"
 
 logger = logging.getLogger(__name__)
 
@@ -347,7 +355,7 @@ class Served:
         sessions: Callable[[], int] = lambda: 1,
     ) -> None:
         self.peer = Peer(send, methods=self._methods())
-        self.conversation = host.conversation(self._approve)
+        self.conversation = host.conversation(self._approve, self._ask_consent)
         self._on_stop = on_stop
         self._sessions = sessions
         self._warnings = host.warnings
@@ -568,3 +576,14 @@ class Served:
         except (ConnectionClosedError, RpcError):
             return False
         return answer is True
+
+    async def _ask_consent(self, receiver: Provider) -> bool | None:
+        # A client from before consent existed answers method-not-found: it
+        # cannot ask, which is not the person saying no. Nor is a reply that
+        # is not a boolean.
+        asked: Params = {"provider": receiver.name, "url": receiver.url}
+        try:
+            answer = await self.peer.request(CONSENT, asked)
+        except (ConnectionClosedError, RpcError):
+            return None
+        return answer if isinstance(answer, bool) else None

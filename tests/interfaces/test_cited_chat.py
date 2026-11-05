@@ -8,6 +8,7 @@ from synthia.gateway.usage import UsageLog
 from synthia.interfaces.chat import SOURCES, ChatApp
 from synthia.interfaces.commands import parse
 from synthia.interfaces.daemon_client import conversation
+from synthia.kernel.consent import ConsentBook
 from synthia.knowledge.tool import CITED, knowledge_tool
 from synthia.persona.library import PersonaLibrary
 from synthia.server.conversation import Conversation
@@ -113,7 +114,13 @@ async def test_a_control_character_in_a_source_is_shown_escaped(
     model = Scripted(calls(("cite", "{}")), says("done"))
     session = ChatSession(model, PersonaLibrary(), "synthia", tools=tools)
     router = Router(Fake(LOCAL))
-    gateway = Gateway(router, router, UsageLog(tmp_path / "usage.db"), nothing_learned)
+    gateway = Gateway(
+        router,
+        router,
+        UsageLog(tmp_path / "usage.db"),
+        nothing_learned,
+        ConsentBook(tmp_path),
+    )
     screen, out = console()
 
     await ChatApp(Conversation(session, gateway), screen).handle(parse("cite it"))

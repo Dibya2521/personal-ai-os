@@ -28,6 +28,7 @@ from synthia.gateway.types import (
     Message,
     ModelInfo,
 )
+from tests.consenting import OPENROUTER, consented
 
 INFO = ModelInfo("tracked", 1000, vision=False, tools=False)
 HELLO = ChatRequest((Message.user("hello"),))
@@ -79,7 +80,7 @@ def routing(inner: ChatModel, tmp: Path) -> ChatModel:
     health = RemoteHealth(
         "remote", ledger, SlidingWindowLimiter(5), CircuitBreaker("remote"), reserve=0
     )
-    return Router(None, Remote(inner, health))
+    return Router(None, Remote(inner, health, consented, OPENROUTER))
 
 
 def routing_local(inner: ChatModel, _: Path) -> ChatModel:

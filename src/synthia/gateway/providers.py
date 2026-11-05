@@ -23,6 +23,7 @@ from synthia.gateway.clients import LOOPBACK_HOSTS
 from synthia.gateway.openai_compat import Dialect, Endpoint
 from synthia.gateway.types import ModelInfo
 from synthia.kernel.config import API_KEY_SUFFIX, ENV_PREFIX
+from synthia.kernel.consent import MAX_URL_LENGTH, PROVIDER_NAME, Provider
 from synthia.kernel.errors import ConfigError
 
 if TYPE_CHECKING:
@@ -39,7 +40,6 @@ APP_TITLE: Final = "SYNTHIA"
 
 PROVIDERS_FILE: Final = Path("providers.toml")
 MAX_PROVIDERS_FILE_BYTES: Final = 64 * 1024
-PROVIDER_NAME: Final = r"^[a-z0-9][a-z0-9-]{0,31}$"
 PROVIDER_NAME_RULE: Final = (
     "a provider name is 1 to 32 lowercase letters, digits and hyphens, "
     "starting with a letter or a digit"
@@ -94,6 +94,11 @@ class RemoteProvider:
             dict(self.headers),
             dialect=self.dialect,
         )
+
+    @property
+    def receiver(self) -> Provider:
+        """Return who a consent for this provider names: its name and address."""
+        return Provider(name=self.name, url=self.base_url)
 
 
 OPENROUTER_FREE: Final = RemoteProvider(
@@ -174,7 +179,9 @@ class ProviderEntry(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    base_url: Annotated[str, AfterValidator(_check_base_url)]
+    base_url: Annotated[
+        str, Field(max_length=MAX_URL_LENGTH), AfterValidator(_check_base_url)
+    ]
     model: str = Field(min_length=1)
     context_window: int = Field(gt=0, le=MAX_INT32)
     tools: bool = False

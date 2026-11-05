@@ -17,10 +17,16 @@ from synthia.gateway.types import ChatRequest, Message, ModelInfo, Reasoning, Us
 from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings
 from synthia.kernel.errors import ConfigError
+from tests.consenting import grant
 from tests.models.test_service import service_at
 
 KEY = "sk-or-v1-assemble-test-key-000"  # pragma: allowlist secret
 HELLO = ChatRequest((Message.user("hello"),), use_remote=True)
+
+
+@pytest.fixture(autouse=True)
+def _consented(tmp_path: Path) -> None:
+    grant(tmp_path, "openrouter")
 
 
 def answer(_: httpx.Request) -> httpx.Response:
@@ -186,6 +192,7 @@ async def test_a_request_goes_to_the_provider_with_the_key_only_in_its_header(
     proxied = replace(OPENROUTER_FREE, base_url="https://proxy.example/api/v1")
     settings = Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        grant(tmp_path, proxied)
         gateway = build_gateway(settings, client, _ignore, remote=proxied)
         reply = await collect(gateway.model.stream(HELLO))
 

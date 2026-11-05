@@ -24,12 +24,18 @@ from synthia.gateway.structured import generate
 from synthia.gateway.types import ChatResponse, FinishReason
 from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings
+from tests.consenting import grant
 
 KEY = "sk-or-v1-replay-test-key-000"  # pragma: allowlist secret
 FREE_SUFFIX = ":free"
 CREDENTIAL = re.compile(
     r"sk-or-[A-Za-z0-9-]{8,}|bearer\s+\S|authorization", re.IGNORECASE
 )
+
+
+@pytest.fixture(autouse=True)
+def _consented(tmp_path: Path) -> None:
+    grant(tmp_path, "openrouter")
 
 
 async def _ignore(_event: Event) -> None:

@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 
     from websockets.asyncio.client import ClientConnection
 
-    from synthia.kernel.jsonrpc import Params
+    from synthia.kernel.jsonrpc import Method, Params
     from synthia.server.session import TurnItem
 
 # Building the gateway and starting MCP servers (30 s each, at once) comes
@@ -480,6 +480,7 @@ def report_from(result: object) -> TurnReport:
         reasoning=None if level is None else Reasoning(str(level)),
         confined=fields.get("confined") is True,
         sources=tuple(map(str, cast("list[object]", fields.get("sources", [])))),
+        no_consent=fields.get("no_consent") is True,
     )
 
 
@@ -503,17 +504,35 @@ def reply_from(result: object) -> Reply:
     return Reply(tuple(fields["notes"]), tuple(fields["errors"]))
 
 
+type Consenting = Callable[[str, str], Awaitable[bool]]
+
+
+def _asking(consent: Consenting) -> Method:
+    async def ask(params: Params) -> object:
+        return await consent(str(params["provider"]), str(params["url"]))
+
+    return ask
+
+
 class RemoteConversation:
     """A conversation the daemon holds, reached over its WebSocket."""
 
-    def __init__(self, socket: ClientConnection, answer: Answer) -> None:
+    def __init__(
+        self,
+        socket: ClientConnection,
+        answer: Answer,
+        consent: Consenting | None = None,
+    ) -> None:
         self._socket = socket
         self._answer = answer
         self._outgoing: asyncio.Queue[bytes] = asyncio.Queue()
         self._items: asyncio.Queue[TurnItem | object] | None = None
         self.peer = Peer(
             self._outgoing.put_nowait,
-            methods={"approve": self._approve},
+            # Without ``consent`` the method is unknown, so the daemon hears
+            # that this client cannot ask rather than a no.
+            methods={"approve": self._approve}
+            | ({} if consent is None else {"consent": _asking(consent)}),
             notices={
                 "chunk": lambda p: self._put(chunk_from(p)),
                 "tool": lambda p: self._put(tool_from(p)),
@@ -691,12 +710,17 @@ class RemoteConversation:
 
 @asynccontextmanager
 async def conversation(
-    info: DaemonInfo, answer: Answer
+    info: DaemonInfo,
+    answer: Answer,
+    consent: Consenting | None = None,
 ) -> AsyncGenerator[RemoteConversation]:
-    """Open a conversation in the daemon described by ``info``."""
+    """Open a conversation in the daemon described by ``info``.
+
+    ``consent`` asks the person whether the chat may go to a remote provider.
+    """
     headers = {"Authorization": f"Bearer {info.token}"}
     async with connect(info.socket_url, additional_headers=headers) as socket:
-        talk = RemoteConversation(socket, answer)
+        talk = RemoteConversation(socket, answer, consent)
         carrying = asyncio.create_task(talk.run())
         try:
             await talk.hello()

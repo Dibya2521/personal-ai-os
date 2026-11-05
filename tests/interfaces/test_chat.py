@@ -42,6 +42,7 @@ from synthia.server.conversation import Conversation
 from synthia.server.daemon import run_daemon
 from synthia.server.discovery import DaemonInfo, new_token, started_now
 from synthia.server.session import ChatSession, LastRoute, TurnReport
+from tests.consenting import grant
 from tests.interfaces.daemons import private_daemon
 from tests.models.test_service import (
     CPU,
@@ -99,6 +100,7 @@ def console() -> tuple[Console, io.StringIO]:
 
 
 def settings(tmp_path: Path) -> Settings:
+    grant(tmp_path, "openrouter")
     return Settings(home=tmp_path, openrouter_api_key=SecretStr(KEY))
 
 
@@ -499,6 +501,7 @@ NO_REMOTE = replace(OPENROUTER_FREE, base_url="http://127.0.0.1:9/api/v1", daily
 
 
 def remote_spent(tmp_path: Path, **values: object) -> Settings:
+    grant(tmp_path, "openrouter", NO_REMOTE)
     return Settings.model_validate({"home": tmp_path} | values)
 
 

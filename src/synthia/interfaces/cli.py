@@ -23,8 +23,8 @@ from synthia.gateway.providers import (
     remote_key,
     select_remote,
 )
+from synthia.interfaces import consent_commands, key_commands, model_commands
 from synthia.interfaces import doctor as doctor_checks
-from synthia.interfaces import key_commands, model_commands
 from synthia.interfaces.chat import run_chat, visible
 from synthia.interfaces.daemon_client import (
     DaemonError,
@@ -48,6 +48,7 @@ from synthia.kernel.config import (
     load_settings,
     unknown_variables,
 )
+from synthia.kernel.consent import ConsentBook, Provider
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.kernel.jsonrpc import RpcError
 from synthia.kernel.keys import KeyStore, SystemCredentials
@@ -97,6 +98,12 @@ keys_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(keys_app, name="keys")
+
+consent_app = typer.Typer(
+    help="Decide which remote providers may receive what you type in chats.",
+    no_args_is_help=True,
+)
+app.add_typer(consent_app, name="consent")
 
 CHAT_LOG = Path("logs") / "synthia.log"
 SHOWN_BODY_LINES = 8
@@ -621,6 +628,75 @@ def keys_remove(
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
     typer.echo(said)
+
+
+@consent_app.command("list")
+def consent_list() -> None:
+    """Say, for each provider, whether chats may go to it and when that was decided.
+
+    Exits 2 when the consent file cannot be read or is damaged.
+    """
+    settings = _settings(stored_keys=False)
+    try:
+        lines = consent_commands.consent_lines(
+            ConsentBook(settings.home), _receivers(settings)
+        )
+    except ConfigError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    for line in lines:
+        typer.echo(line)
+
+
+@consent_app.command("grant")
+def consent_grant(
+    provider: Annotated[
+        str, typer.Argument(help="The provider, as synthia providers names it.")
+    ],
+) -> None:
+    """Let chats go to a provider once remote is on.
+
+    Exits 2 when the provider is unknown or the consent file cannot be written.
+    """
+    settings = _settings(stored_keys=False)
+    try:
+        said = consent_commands.grant(
+            ConsentBook(settings.home), provider, _receivers(settings)
+        )
+    except ConfigError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    typer.echo(said)
+
+
+@consent_app.command("revoke")
+def consent_revoke(
+    provider: Annotated[str, typer.Argument(help="The provider to keep chats from.")],
+) -> None:
+    """Keep every chat away from a provider, from its next request.
+
+    Exits 2 when the consent file cannot be written.
+    """
+    settings = _settings(stored_keys=False)
+    try:
+        receivers = _receivers(settings)
+    except ConfigError:
+        # A broken providers.toml must not stop a revoke; every address in
+        # the consent file is still refused.
+        receivers = {}
+    try:
+        said = consent_commands.revoke(ConsentBook(settings.home), provider, receivers)
+    except ConfigError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(doctor_checks.Status.FAIL) from None
+    typer.echo(said)
+
+
+def _receivers(settings: Settings) -> dict[str, Provider]:
+    return {
+        name: provider.receiver
+        for name, provider in load_providers(settings.home).items()
+    }
 
 
 def _settings(*, stored_keys: bool = True) -> Settings:

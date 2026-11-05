@@ -46,7 +46,7 @@ from synthia.interfaces.commands import (
     UseRemote,
     parse,
 )
-from synthia.interfaces.daemon_client import Answer, conversation
+from synthia.interfaces.daemon_client import Answer, Consenting, conversation
 from synthia.persona.model import PersonaError
 from synthia.server.conversation import Reply, Talk
 from synthia.server.session import (
@@ -76,6 +76,10 @@ HOLDS_PRIVATE: Final = (
 )
 STAYS_LOCAL: Final = (
     "this chat read private text, so it stays on this machine until /reset"
+)
+NO_CONSENT_LOCAL: Final = (
+    "this turn stayed on this machine: the remote provider has no consent; "
+    "/remote on asks again"
 )
 SOURCES: Final = "sources: "
 
@@ -184,6 +188,28 @@ def terminal_approver(read: ReadLine) -> Approver:
         return await answer(tool.spec.name, arguments, confined=confined())
 
     return approve
+
+
+def consent_question(provider: str, url: str) -> str:
+    """Return the question asked before a chat's text first goes to ``provider``."""
+    return (
+        f"send what you type in chats to {visible(provider)} at {visible(url)}? "
+        f"The answer is saved; synthia consent revoke {visible(provider)} "
+        "takes it back. [y/N] "
+    )
+
+
+def terminal_consent(read: ReadLine) -> Consenting:
+    """Return how the terminal answers a consent question; only y or yes is yes."""
+
+    async def consent(provider: str, url: str) -> bool:
+        try:
+            said = read(consent_question(provider, url))
+        except EOFError:
+            return False
+        return said.strip().lower() in YES
+
+    return consent
 
 
 def shorten(text: str) -> str:
@@ -332,6 +358,7 @@ class ChatApp[T: Talk]:
         self.console = console
         self._clock = clock
         self._told_local = False
+        self._told_unconsented = False
 
     def greet(self) -> None:
         """Print who is listening and how to get help."""
@@ -392,6 +419,7 @@ class ChatApp[T: Talk]:
                 reply = await conversation.think(level)
             case UseRemote(on=on):
                 reply = await conversation.remote(on=on)
+                self._told_unconsented = False
             case ShowModel():
                 reply = await conversation.model()
             case ShowTools():
@@ -399,6 +427,7 @@ class ChatApp[T: Talk]:
             case _:
                 reply = await conversation.reset()
                 self._told_local = False
+                self._told_unconsented = False
         return reply
 
     async def _memory_reply(
@@ -469,6 +498,9 @@ class ChatApp[T: Talk]:
         if report.confined and not self._told_local:
             self._told_local = True
             self._note(STAYS_LOCAL)
+        if report.no_consent and not self._told_unconsented:
+            self._told_unconsented = True
+            self._note(NO_CONSENT_LOCAL)
 
     def _note(self, text: str) -> None:
         self.console.print(text, style="cyan", markup=False, highlight=False)
@@ -533,7 +565,9 @@ def run_chat(  # noqa: PLR0913 - one parameter per `synthia chat` option
         stack = contextlib.AsyncExitStack()
         try:
             talk = runner.run(
-                stack.enter_async_context(conversation(daemon, terminal_answer(read)))
+                stack.enter_async_context(
+                    conversation(daemon, terminal_answer(read), terminal_consent(read))
+                )
             )
             for line in talk.warnings:
                 console.print(line, style="red", markup=False, highlight=False)

@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -21,7 +22,6 @@ from synthia.gateway.providers import (
     MAX_PROVIDERS_FILE_BYTES,
     OPENROUTER,
     OPENROUTER_FREE,
-    PROVIDER_NAME,
     PROVIDERS_FILE,
     key_variable,
     load_providers,
@@ -32,7 +32,9 @@ from synthia.gateway.types import ChatRequest, Message, ModelInfo, Reasoning
 from synthia.interfaces.cli import app
 from synthia.kernel.bus import Event
 from synthia.kernel.config import Settings, load_settings
+from synthia.kernel.consent import PROVIDER_NAME
 from synthia.kernel.errors import ConfigError
+from tests.consenting import grant
 from tests.models.test_service import service_at
 
 PLANTED = "sk-planted-0123456789abcdef"  # pragma: allowlist secret
@@ -72,8 +74,16 @@ context_window = 8192
 HELLO = ChatRequest((Message.user("hello"),), reasoning=Reasoning.OFF, use_remote=True)
 
 
+@pytest.fixture(autouse=True)
+def _consented(tmp_path: Path) -> None:
+    grant(tmp_path, "openrouter")
+
+
 def written(home: Path, text: str) -> Path:
     (home / PROVIDERS_FILE).write_text(text, encoding="utf-8")
+    # Tests of a bad file need no consent; the rest send to what they configure.
+    with contextlib.suppress(ConfigError):
+        grant(home, *load_providers(home).values())
     return home
 
 

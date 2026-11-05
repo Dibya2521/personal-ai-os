@@ -16,12 +16,13 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from synthia.agent.policy import Decision
 from synthia.gateway.providers import REMOTE_KEY_HINT
+from synthia.kernel.consent import ConsentError, Provider, Scope
 from synthia.memory.store import FactKind
 from synthia.persona.model import PersonaError
 from synthia.server.session import load_image
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Awaitable, Callable
     from pathlib import Path
 
     from synthia.gateway.assemble import Gateway
@@ -155,14 +156,33 @@ class Talk(Protocol):
         ...
 
 
-class Conversation:
-    """One conversation and the commands about it."""
+type AskConsent = Callable[[Provider], Awaitable[bool | None]]
 
-    def __init__(self, session: ChatSession, gateway: Gateway) -> None:
+
+async def never_asked(_receiver: Provider) -> bool | None:
+    """Answer no consent question: nobody is there to ask."""
+    return None
+
+
+class Conversation:
+    """One conversation and the commands about it.
+
+    ``ask_consent`` asks the person whether this chat's text may go to the
+    named provider: True or False is their answer, None means they could not
+    be asked.
+    """
+
+    def __init__(
+        self,
+        session: ChatSession,
+        gateway: Gateway,
+        ask_consent: AskConsent = never_asked,
+    ) -> None:
         self.session = session
         self.gateway = gateway
         self.learning: asyncio.Task[int | None] | None = None
         self._resuming = False
+        self._ask_consent = ask_consent
 
     @property
     def persona_name(self) -> str:
@@ -197,8 +217,13 @@ class Conversation:
         The person's choice is kept even in a chat that holds private text,
         which stays on this machine, so the chat goes remote after /reset.
         """
-        if on and self.gateway.router.remote is None:
+        remote = self.gateway.router.remote
+        if on and remote is None:
             return error(NO_REMOTE)
+        if on and remote is not None:
+            refused = await self._consented(remote.receiver)
+            if refused is not None:
+                return refused
         if on is not None:
             self.session.use_remote = on
         if self.session.use_remote and self.learning is None:
@@ -216,6 +241,35 @@ class Conversation:
         if self.session.use_remote:
             return note("remote: on, turns may leave this machine")
         return note("remote: off, every turn stays on this machine")
+
+    async def _consented(self, receiver: Provider) -> Reply | None:
+        """Return None once ``receiver`` may receive this chat, else why not.
+
+        The person is asked only when no yes is recorded, and their answer is
+        recorded either way.
+        """
+        provider = receiver.name
+        book = self.gateway.consent
+        try:
+            if book.granted(receiver, Scope.CHAT):
+                return None
+        except ConsentError as problem:
+            return error(str(problem))
+        said = await self._ask_consent(receiver)
+        if said is None:
+            return error(
+                f"remote: stays off, {provider} has no consent and this client "
+                f"cannot ask; run synthia consent grant {provider}"
+            )
+        try:
+            book.decide(receiver, Scope.CHAT, granted=said, by="chat")
+        except ConsentError as problem:
+            return error(str(problem))
+        if said:
+            return None
+        return note(
+            f"remote: stays off, {provider} refused; every turn stays on this machine"
+        )
 
     async def persona(self, key: str) -> Reply:
         """Continue as the persona ``key``; an empty key lists them."""
