@@ -6,6 +6,8 @@ local model. It stops the way the real one does, through its stop event.
 """
 
 import asyncio
+import faulthandler
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Generator
@@ -87,6 +89,14 @@ def _written(
     while (info := read_info(settings.home / DAEMON_FILE)) is None:
         if not thread.is_alive():
             raise running.error or AssertionError("the daemon stopped at start")
-        assert time.monotonic() < deadline, "the daemon did not start"
+        assert time.monotonic() < deadline, f"the daemon did not start\n{_stacks()}"
         time.sleep(0.02)
     return info
+
+
+def _stacks() -> str:
+    """Return every thread's stack, so a start that stalls names where."""
+    with tempfile.TemporaryFile("w+", encoding="utf-8") as out:
+        faulthandler.dump_traceback(out, all_threads=True)
+        out.seek(0)
+        return out.read()
