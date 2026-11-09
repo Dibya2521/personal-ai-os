@@ -38,6 +38,12 @@ All notable changes are recorded here. The format follows
   are written to disk, in `SYNTHIA_HOME/keys.json`; with none stored, the key
   store is never opened.
 
+### Fixed
+
+- A daemon that does not answer within 90 s of being started is now stopped
+  before the error is shown. Before, it kept running unseen, could come up
+  later or hang, and each new chat started another one.
+
 ### Security
 
 - `fetch_url` no longer follows redirects to local or private addresses. A

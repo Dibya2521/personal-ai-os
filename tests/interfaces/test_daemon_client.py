@@ -3,6 +3,8 @@ import contextlib
 import os
 import re
 import socket
+import subprocess
+import sys
 from pathlib import Path
 
 import httpx
@@ -61,6 +63,12 @@ class Process:
     def poll(self) -> int | None:
         return self.code
 
+    def kill(self) -> None:
+        self.code = 1
+
+    def wait(self) -> int | None:
+        return self.code
+
 
 async def refuse(_tool: str, _arguments: str, *, confined: bool) -> bool:
     del confined
@@ -109,6 +117,27 @@ async def test_a_daemon_that_never_serves_is_reported(
 ) -> None:
     with pytest.raises(DaemonError, match=problem):
         await find_or_start(tmp_path, start=lambda _home: process, timeout_s=timeout_s)  # type: ignore[arg-type,return-value]
+
+
+async def test_a_daemon_that_never_serves_is_stopped_not_left_running(
+    tmp_path: Path,
+) -> None:
+    started: list[subprocess.Popen[bytes]] = []
+
+    def start(_home: Path) -> subprocess.Popen[bytes]:
+        command = [sys.executable, "-c", "import time; time.sleep(60)"]
+        started.append(subprocess.Popen(command))  # noqa: S603 - our own interpreter
+        return started[-1]
+
+    try:
+        with pytest.raises(DaemonError, match=r"within 0\.3 s and was stopped"):
+            await find_or_start(tmp_path, start=start, timeout_s=0.3)
+        assert started[0].returncode is not None
+    finally:
+        for process in started:
+            if process.poll() is None:
+                process.kill()
+                process.wait(HANG_TIMEOUT_S)
 
 
 async def test_a_daemon_that_dies_at_start_leaves_its_reason(

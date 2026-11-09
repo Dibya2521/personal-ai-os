@@ -157,7 +157,7 @@ async def find_or_start(
 
     Raises:
         DaemonError: If it stops while starting, or does not answer within
-            ``timeout_s``.
+            ``timeout_s`` (it is then stopped).
     """
     info = await running_daemon(home)
     if info is not None:
@@ -170,7 +170,14 @@ async def find_or_start(
                     raise DaemonError(STOPPED_AT_START)
                 await asyncio.sleep(POLL_S)
     except TimeoutError:
-        message = f"the daemon did not start within {timeout_s:g} s; {SEE_LOG}"
+        # Left running, it could come up later unknown to anyone, or hang; and a
+        # dropped live Popen is a ResourceWarning. Each start then adds another.
+        process.kill()
+        await asyncio.to_thread(process.wait)
+        message = (
+            f"the daemon did not start within {timeout_s:g} s and was stopped; "
+            f"{SEE_LOG}"
+        )
         raise DaemonError(message) from None
     return info
 
