@@ -127,7 +127,11 @@ attribution headers go to OpenRouter alone.
 
 Choosing a provider never sends anything by itself. Every turn stays on this
 machine until remote is turned on for that chat, with `/remote on` or
-`synthia chat --remote`. `synthia providers` lists every provider with its
+`synthia chat --remote`, or for every chat with `SYNTHIA_BRAIN=remote`
+(`--no-remote` keeps one chat local). `/remote on` and `--remote` ask for the
+person's consent for that provider until they say yes. A remote brain asks
+only when nothing is saved: after a no, the chat starts local and says so, and
+`/remote on` asks again. `synthia providers` lists every provider with its
 URL and model, which one is selected, and whether a key is set, never any
 part of the key.
 
@@ -159,7 +163,7 @@ router reads it for every request: the router is the one place every request
 of a turn passes, while the agent copies the first request's `use_remote` into
 each later step. With no local model that can serve the request, it fails
 saying the chat holds private text, never with "ask for the remote model". In the chat, `/remote on` and `/remote off` switch it for the session, and
-`synthia chat --remote` starts with it on. The chat asks OpenRouter for the
+`synthia chat --remote` (or `SYNTHIA_BRAIN=remote`) starts with it on. The chat asks OpenRouter for the
 key's daily cap only after the first `/remote on`, since that request also
 sends the key.
 

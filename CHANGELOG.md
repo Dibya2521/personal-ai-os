@@ -37,6 +37,12 @@ All notable changes are recorded here. The format follows
   `synthia keys remove <provider>` deletes it. Only the names of stored keys
   are written to disk, in `SYNTHIA_HOME/keys.json`; with none stored, the key
   store is never opened.
+- `SYNTHIA_BRAIN=remote` starts every chat with the remote model on, as
+  `synthia chat --remote` does; `synthia chat --no-remote` keeps one chat
+  local. A turn still goes to the provider only with the person's consent for
+  it: asked when nothing is saved, and after a saved no the chat starts local
+  and says so, without asking again. The default, `local`, starts every chat
+  local.
 
 ### Fixed
 

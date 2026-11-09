@@ -62,6 +62,16 @@ def test_a_decision_is_kept_and_the_newest_replaces_it(tmp_path: Path) -> None:
     assert not book(tmp_path).allows(OPENROUTER, Scope.CHAT)
 
 
+def test_a_saved_no_is_told_apart_from_no_decision(tmp_path: Path) -> None:
+    consents = book(tmp_path)
+    consents.decide(OPENROUTER, Scope.CHAT, granted=False, by="chat")
+    consents.decide(GEMINI, Scope.CHAT, granted=True, by="cli")
+
+    assert consents.decision(OPENROUTER, Scope.CHAT) is False
+    assert consents.decision(GEMINI, Scope.CHAT) is True
+    assert consents.decision(OPENROUTER, Scope.PRIVATE) is None
+
+
 def test_each_receiver_and_scope_is_decided_alone(tmp_path: Path) -> None:
     consents = book(tmp_path)
 

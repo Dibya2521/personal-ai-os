@@ -7,6 +7,7 @@ import threading
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal, NamedTuple
 
 import httpx
 import pytest
@@ -33,6 +34,7 @@ from synthia.interfaces.chat import (
 from synthia.interfaces.cli import app
 from synthia.interfaces.commands import parse
 from synthia.kernel.config import Settings
+from synthia.kernel.consent import CONSENT_FILE, ConsentBook, Scope
 from synthia.kernel.errors import ConfigError
 from synthia.models.service import LocalService, LocalSetup
 from synthia.persona.library import PersonaLibrary
@@ -656,6 +658,60 @@ def test_chat_finds_the_daemon_then_chats_with_it(
         (info, "neon", True, False),
         (info, None, False, True),
     ]
+
+
+class BrainStart(NamedTuple):
+    saved: bool | Literal["damaged"] | None
+    flags: tuple[str, ...]
+    starts_remote: bool
+    told: bool
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        BrainStart(saved=None, flags=(), starts_remote=True, told=False),
+        BrainStart(saved=True, flags=(), starts_remote=True, told=False),
+        BrainStart(saved=False, flags=(), starts_remote=False, told=True),
+        BrainStart(saved=False, flags=("--remote",), starts_remote=True, told=False),
+        BrainStart(saved="damaged", flags=(), starts_remote=True, told=False),
+        BrainStart(saved=True, flags=("--no-remote",), starts_remote=False, told=False),
+    ],
+    ids=["undecided", "yes", "no", "no-then-asked", "damaged", "kept-local"],
+)
+def test_a_remote_brain_starts_remote_unless_the_person_said_no(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: BrainStart
+) -> None:
+    saved, flags, starts_remote, told = case
+    info = DaemonInfo(
+        port=45678, pid=1, version=__version__, started=started_now(), token=new_token()
+    )
+    remote: list[bool] = []
+
+    async def current(_: Path) -> DaemonInfo:
+        return info
+
+    def chat(*_: object, use_remote: bool = False, **__: object) -> None:
+        remote.append(use_remote)
+
+    monkeypatch.setattr(cli, "current_daemon", current)
+    monkeypatch.setattr(cli, "run_chat", chat)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("SYNTHIA_HOME", str(tmp_path))
+    monkeypatch.setenv("SYNTHIA_OPENROUTER_API_KEY", KEY)
+    monkeypatch.setenv("SYNTHIA_BRAIN", "remote")
+    if saved == "damaged":
+        (tmp_path / CONSENT_FILE).write_text("{", encoding="utf-8")
+    elif isinstance(saved, bool):
+        ConsentBook(tmp_path).decide(
+            OPENROUTER_FREE.receiver, Scope.CHAT, granted=saved, by="chat"
+        )
+
+    result = CliRunner().invoke(app, ["chat", *flags])
+
+    assert result.exit_code == 0
+    assert remote == [starts_remote]
+    assert ("you said no to chats going to openrouter" in result.stdout) is told
 
 
 def test_the_command_logs_to_a_file_not_over_the_prompt(

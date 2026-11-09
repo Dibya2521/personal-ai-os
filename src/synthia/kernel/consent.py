@@ -132,17 +132,24 @@ class ConsentBook:
             )
             raise ConsentError(message) from None
 
+    def decision(self, receiver: Provider, scope: Scope) -> bool | None:
+        """Return the recorded answer for ``scope`` to ``receiver``, None if none.
+
+        Raises:
+            ConsentError: If the file cannot be read or is damaged.
+        """
+        for consent in self.consents():
+            if (consent.receiver, consent.scope) == (receiver, scope):
+                return consent.granted
+        return None
+
     def granted(self, receiver: Provider, scope: Scope) -> bool:
         """Return whether ``scope`` may go to ``receiver``.
 
         Raises:
             ConsentError: If the file cannot be read or is damaged.
         """
-        return any(
-            c.granted
-            for c in self.consents()
-            if (c.receiver, c.scope) == (receiver, scope)
-        )
+        return self.decision(receiver, scope) is True
 
     def allows(self, receiver: Provider, scope: Scope) -> bool:
         """Return whether ``scope`` may go to ``receiver``; a damaged file is no."""

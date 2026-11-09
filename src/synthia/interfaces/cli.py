@@ -43,12 +43,13 @@ from synthia.interfaces.trace_view import build_tree, summary
 from synthia.interfaces.usage_report import budget_report
 from synthia.kernel.config import (
     DEFAULT_ENV_FILE,
+    Brain,
     Settings,
     api_key_variables,
     load_settings,
     unknown_variables,
 )
-from synthia.kernel.consent import ConsentBook, Provider
+from synthia.kernel.consent import ConsentBook, ConsentError, Provider, Scope
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.kernel.jsonrpc import RpcError
 from synthia.kernel.keys import KeyStore, SystemCredentials
@@ -185,11 +186,12 @@ def chat(
         typer.Option(help="Persona to start as. Default: SYNTHIA_PERSONA."),
     ] = None,
     remote: Annotated[
-        bool,
+        bool | None,
         typer.Option(
-            help="Let turns go to the remote model from the start, as /remote on does."
+            help="Let turns go to the remote model from the start, as /remote on "
+            "does, or keep them local. Default: SYNTHIA_BRAIN."
         ),
-    ] = False,
+    ] = None,
     resume: Annotated[
         bool,
         typer.Option(
@@ -205,12 +207,16 @@ def chat(
     Ctrl+C at the prompt, Ctrl+D or /exit leaves.
     """
     settings = _settings()
+    use_remote = settings.brain is Brain.REMOTE if remote is None else remote
     try:
+        if remote is None and use_remote and _refused(settings):
+            typer.echo(_brain_refused(settings.remote))
+            use_remote = False
         _require_a_model(settings)
         with logging_to(settings, settings.home / CHAT_LOG):
             daemon = asyncio.run(current_daemon(settings.home))
             run_chat(
-                daemon, Console(), persona=persona, use_remote=remote, resume=resume
+                daemon, Console(), persona=persona, use_remote=use_remote, resume=resume
             )
     except (ConfigError, PersonaError, DaemonError) as error:
         typer.echo(f"error: {error}", err=True)
@@ -550,8 +556,9 @@ def budget(
 def providers() -> None:
     """List the remote providers: OpenRouter, built in, and SYNTHIA_HOME/providers.toml.
 
-    The selected one is SYNTHIA_REMOTE, asked only after /remote on in a chat
-    or with synthia chat --remote. No part of a key is ever shown. Exits 2
+    The selected one is SYNTHIA_REMOTE, asked only after /remote on in a chat,
+    with synthia chat --remote, or with SYNTHIA_BRAIN=remote. No part of a key
+    is ever shown. Exits 2
     when providers.toml or SYNTHIA_REMOTE is invalid.
     """
     settings = _settings()
@@ -707,6 +714,29 @@ def consent_revoke(
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
     typer.echo(said)
+
+
+def _refused(settings: Settings) -> bool:
+    """Return whether the person said no to chats going to the selected provider.
+
+    A damaged consent file is not a refusal here: the chat's own ``/remote on``
+    reports it and stays local.
+
+    Raises:
+        ConfigError: If ``providers.toml`` or ``SYNTHIA_REMOTE`` is invalid.
+    """
+    receiver = select_remote(settings).receiver
+    try:
+        return ConsentBook(settings.home).decision(receiver, Scope.CHAT) is False
+    except ConsentError:
+        return False
+
+
+def _brain_refused(provider: str) -> str:
+    return (
+        f"remote: stays off, you said no to chats going to {provider}; "
+        f"/remote on asks again, synthia consent grant {provider} allows it"
+    )
 
 
 def _receivers(settings: Settings) -> dict[str, Provider]:

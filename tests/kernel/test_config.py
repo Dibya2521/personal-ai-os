@@ -9,6 +9,7 @@ from synthia.kernel.config import (
     DEFAULT_DISK_BUDGET_GB,
     DEFAULT_PERSONA,
     ENV_PREFIX,
+    Brain,
     LogFormat,
     LogLevel,
     Settings,
@@ -32,6 +33,7 @@ def test_defaults_apply_when_nothing_is_set() -> None:
     assert settings.openrouter_api_key is None
     assert settings.persona == DEFAULT_PERSONA == "synthia"
     assert settings.file_roots == ()
+    assert settings.brain is Brain.LOCAL
 
 
 def test_file_roots_split_like_path(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -49,6 +51,7 @@ def test_environment_variables_are_read_with_the_prefix(
     monkeypatch.setenv("SYNTHIA_LOG_FORMAT", "json")
     monkeypatch.setenv("SYNTHIA_DISK_BUDGET_GB", "2.5")
     monkeypatch.setenv("SYNTHIA_PERSONA", "horizon")
+    monkeypatch.setenv("SYNTHIA_BRAIN", "remote")
 
     settings = load_settings(env_file=None)
 
@@ -57,6 +60,7 @@ def test_environment_variables_are_read_with_the_prefix(
     assert settings.log_format is LogFormat.JSON
     assert settings.disk_budget_gb == 2.5
     assert settings.persona == "horizon"
+    assert settings.brain is Brain.REMOTE
 
 
 def test_env_file_is_read_and_a_real_variable_beats_it(
@@ -107,6 +111,7 @@ def test_a_secret_never_appears_in_repr_or_str(
         ("SYNTHIA_LOG_FORMAT", "xml-and-secret"),
         ("SYNTHIA_DISK_BUDGET_GB", "-7"),
         ("SYNTHIA_DISK_BUDGET_GB", "lots"),
+        ("SYNTHIA_BRAIN", "cloud-and-secret"),
     ],
 )
 def test_invalid_values_name_the_variable_but_not_the_value(

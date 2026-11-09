@@ -41,6 +41,13 @@ DEFAULT_REMOTE = "openrouter"
 API_KEY_SUFFIX = "_API_KEY"  # pragma: allowlist secret
 
 
+class Brain(StrEnum):
+    """Where a chat's turns go when it starts; ``remote`` still asks consent first."""
+
+    LOCAL = "local"
+    REMOTE = "remote"
+
+
 class LocalBackend(StrEnum):
     """What the local model runs on; ``auto`` picks the fastest that starts."""
 
@@ -94,6 +101,7 @@ class Settings(BaseSettings):
     disk_budget_gb: float = Field(default=DEFAULT_DISK_BUDGET_GB, gt=0)
     openrouter_api_key: SecretStr | None = None
     remote: str = Field(default=DEFAULT_REMOTE, min_length=1)
+    brain: Brain = Brain.LOCAL
     persona: str = Field(default=DEFAULT_PERSONA, min_length=1)
     local_model: str = Field(default=DEFAULT_LOCAL_MODEL, min_length=1)
     local_backend: LocalBackend = LocalBackend.AUTO

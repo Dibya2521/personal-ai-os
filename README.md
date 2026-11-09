@@ -69,8 +69,9 @@ uv run synthia chat
 Every turn stays on the machine, with no key and no network needed. A stronger
 free remote model is optional: put an [OpenRouter](https://openrouter.ai/keys)
 key in `.env` as `SYNTHIA_OPENROUTER_API_KEY`, and turns go to it only after
-`/remote on` in the chat (or `synthia chat --remote`). `/help` lists the
-chat's commands.
+`/remote on` in the chat (or `synthia chat --remote`, or every chat with
+`SYNTHIA_BRAIN=remote`), and each provider only with your consent. `/help`
+lists the chat's commands.
 
 The first chat starts SYNTHIA's daemon in the background, and it keeps the
 model loaded for the next one. `uv run synthia status` shows it, and
