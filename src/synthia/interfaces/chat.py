@@ -495,7 +495,7 @@ class ChatApp[T: Talk]:
                 markup=False,
                 highlight=False,
             )
-        if report.confined and not self._told_local:
+        if report.held_private and not self._told_local:
             self._told_local = True
             self._note(STAYS_LOCAL)
         if report.no_consent and not self._told_unconsented:

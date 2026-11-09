@@ -464,7 +464,7 @@ def test_a_chat_can_stay_local_only_with_a_local_model_that_takes_tools(
 ) -> None:
     router = setup.router(Fake(REMOTE), None if local is None else Fake(local))
 
-    assert router.can_stay_local is stays
+    assert router.can_keep_private is stays
 
 
 def test_a_negative_reserve_or_wait_is_refused(setup: Setup) -> None:

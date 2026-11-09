@@ -5,16 +5,20 @@ from collections.abc import AsyncGenerator, Callable
 from pathlib import Path
 from typing import Never, cast, override
 
+import httpx
 import pytest
+from pydantic import SecretStr
 
 from synthia.agent.loop import ToolFinished
 from synthia.agent.quoting import quote
 from synthia.agent.tools import Toolbox, ToolError
 from synthia.agent.trace import ToolBegan, ToolEnded, Trace, read_trace, sessions
+from synthia.gateway.assemble import build_gateway
 from synthia.gateway.errors import GatewayError, LocalUnavailableError
 from synthia.gateway.router import Remote, Route, Router, RouteReason
 from synthia.gateway.types import ChatChunk, ChatRequest, FinishReason, Role, Usage
 from synthia.kernel.config import Settings
+from synthia.kernel.consent import ConsentBook, Scope
 from synthia.knowledge.deep import NO_LOCAL_MODEL
 from synthia.knowledge.service import Knowledge, KnowledgeError
 from synthia.knowledge.store import KNOWLEDGE_FILE
@@ -23,6 +27,7 @@ from synthia.memory.window import MAX_CHARS_PER_TOKEN, START_CHARS_PER_TOKEN
 from synthia.persona.library import PersonaLibrary
 from synthia.retrieval.embed import TextEmbedder
 from synthia.server.daemon import run_daemon
+from synthia.server.host import publish_route
 from synthia.server.session import ChatSession, NoKnowledgeError, TurnItem, TurnReport
 from tests.agent.scripted import Reply, Scripted, calls, says
 from tests.agent.test_plan import planned
@@ -54,7 +59,9 @@ def chat_over(
     tools = Toolbox(
         [
             knowledge_tool(
-                knowledge, can_stay_local=lambda: router.can_stay_local, model=router
+                knowledge,
+                can_keep_private=lambda: router.can_keep_private,
+                model=router,
             )
         ]
     )
@@ -413,6 +420,55 @@ async def test_a_public_search_leaves_the_turn_remote(
     assert {route[0] for route in setup.routes()} == {Route.REMOTE}
     assert not report.confined
     assert report.sources == tuple(shown(result))
+
+
+def streamed(delta: dict[str, object], finish: str) -> bytes:
+    choice = {"index": 0, "delta": delta, "finish_reason": finish}
+    return f"data: {json.dumps({'choices': [choice]})}\n\ndata: [DONE]\n\n".encode()
+
+
+SEARCH_CALL = streamed(
+    {
+        "tool_calls": [
+            {
+                "index": 0,
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": SEARCH,
+                    "arguments": json.dumps({"query": "door"}),
+                },
+            }
+        ]
+    },
+    "tool_calls",
+)
+
+
+@pytest.mark.parametrize(("private", "leaves"), [(False, False), (True, True)])
+async def test_a_private_passage_reaches_the_provider_only_with_private_consent(
+    tmp_path: Path, *, private: bool, leaves: bool
+) -> None:
+    replies = [SEARCH_CALL, streamed({"content": "Done."}, "stop")]
+    bodies: list[bytes] = []
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content)
+        headers = {"content-type": "text/event-stream"}
+        return httpx.Response(200, content=replies.pop(0), headers=headers)
+
+    knowledge = await knowing(tmp_path)
+    ConsentBook(tmp_path).decide(OPENROUTER, Scope.CHAT, granted=True, by="cli")
+    if private:
+        ConsentBook(tmp_path).decide(OPENROUTER, Scope.PRIVATE, granted=True, by="cli")
+    settings = Settings(home=tmp_path, openrouter_api_key=SecretStr("sk-or-test"))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as client:
+        router = build_gateway(settings, client, publish_route).router
+        await turned(chat_over(knowledge, router), "what is the door code?")
+
+    assert len(bodies) == 2
+    assert ("4021" in bodies[1].decode()) is leaves
+    assert not any("4021" in body.decode() for body in bodies[:1])
 
 
 async def test_a_turn_with_no_search_has_no_sources(

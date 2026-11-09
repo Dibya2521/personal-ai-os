@@ -152,7 +152,8 @@ class TurnReport:
     over, so it stays on this machine until it starts again. ``sources`` are
     the citations of the person's files the turn's searches showed, in the
     order first shown, each once. ``no_consent`` says the turn stayed on
-    this machine because the remote provider has no consent.
+    this machine because the remote provider has no consent, and
+    ``held_private`` because it holds private text no provider may receive.
     """
 
     route: str
@@ -164,6 +165,7 @@ class TurnReport:
     confined: bool = False
     sources: tuple[str, ...] = ()
     no_consent: bool = False
+    held_private: bool = False
 
 
 @dataclass(slots=True)
@@ -257,9 +259,11 @@ class ChatSession:
     def may_leave(self) -> bool:
         """Return whether this chat's requests may go to the remote model.
 
-        Only while remote is switched on and the chat holds no private text.
+        Only while remote is switched on. A chat that holds private text is
+        kept on this machine by the router unless the person let private text
+        go to the provider.
         """
-        return self.use_remote and not self.confinement.confined
+        return self.use_remote
 
     def persona_names(self) -> tuple[str, ...]:
         """Return the keys of every persona the session can switch to."""
@@ -604,4 +608,5 @@ class ChatSession:
             confined=self.confinement.confined,
             sources=tuple(dict.fromkeys(taken.cited)),
             no_consent=route is not None and route.reason is RouteReason.NO_CONSENT,
+            held_private=route is not None and route.reason is RouteReason.CONFINED,
         )

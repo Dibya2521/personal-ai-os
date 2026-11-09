@@ -35,7 +35,7 @@ async def test_the_chat_lists_the_sources_under_the_answer_once(
 ) -> None:
     knowledge = await knowing(tmp_path, private=False)
     tools = Toolbox(
-        [knowledge_tool(knowledge, can_stay_local=stays_local, model=Scripted())]
+        [knowledge_tool(knowledge, can_keep_private=stays_local, model=Scripted())]
     )
     model = Local(
         calls(("search_knowledge", '{"query": "kestrel"}')),
@@ -67,7 +67,7 @@ async def test_deep_searches_first_shows_the_call_and_cites_what_it_found(
         says("Kestrel is a host."),
     )
     tools = Toolbox(
-        [knowledge_tool(knowledge, can_stay_local=stays_local, model=model)]
+        [knowledge_tool(knowledge, can_keep_private=stays_local, model=model)]
     )
     screen, out = console()
     async with (

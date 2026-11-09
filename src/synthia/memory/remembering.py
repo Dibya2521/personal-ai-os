@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from synthia.memory.hybrid import CANDIDATES
-from synthia.memory.recall import cannot_stay_local, local_zone, shown, surfaced
+from synthia.memory.recall import cannot_keep_private, local_zone, shown, surfaced
 from synthia.memory.store import Asked
 
 if TYPE_CHECKING:
@@ -88,18 +88,18 @@ class Remembering:
         recall: Recall,
         learning: FactLearning | None = None,
         *,
-        can_stay_local: Callable[[], bool] = cannot_stay_local,
+        can_keep_private: Callable[[], bool] = cannot_keep_private,
     ) -> None:
         """Remember into ``recall``; with ``learning``, learn facts from each turn.
 
-        ``can_stay_local`` says whether a chat could go on with no remote
-        model; only then are turns of private chats put in its reminders.
+        ``can_keep_private`` says whether a chat could go on once it holds
+        private text; only then are turns of private chats put in its reminders.
         """
         self.private = False
         self._recall = recall
         self._store = recall.store
         self._learning = learning
-        self._can_stay_local = can_stay_local
+        self._can_keep_private = can_keep_private
         self._conversation: int | None = None
         # The newest turn and when it was asked: its id alone can be given to
         # another chat's turn once forgotten there.
@@ -230,7 +230,7 @@ class Remembering:
         others = surfaced(
             [r.turn for r in found if r.turn.conversation != self._conversation],
             REMINDED,
-            self._can_stay_local,
+            self._can_keep_private,
         )
         if not others:
             return ""

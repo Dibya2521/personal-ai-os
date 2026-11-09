@@ -30,19 +30,29 @@ def consent_lines(book: ConsentBook, providers: Mapping[str, Provider]) -> list[
     )
     lines: list[str] = []
     for receiver in receivers:
-        where = f"{receiver.name} ({receiver.url}) chat"
-        consent = decided.get((receiver, Scope.CHAT))
-        if consent is None:
-            lines.append(f"{where}: {NOT_DECIDED}")
-            continue
-        answer = "granted" if consent.granted else "refused"
-        when = consent.decided_at.astimezone().strftime("%Y-%m-%d %H:%M")
-        lines.append(f"{where}: {answer} {when} ({consent.by})")
+        for scope in Scope:
+            where = f"{receiver.name} ({receiver.url}) {scope}"
+            consent = decided.get((receiver, scope))
+            if consent is None:
+                lines.append(f"{where}: {NOT_DECIDED}")
+                continue
+            answer = "granted" if consent.granted else "refused"
+            when = consent.decided_at.astimezone().strftime("%Y-%m-%d %H:%M")
+            lines.append(f"{where}: {answer} {when} ({consent.by})")
     return lines
 
 
-def grant(book: ConsentBook, provider: str, providers: Mapping[str, Provider]) -> str:
-    """Let this chat's text go to ``provider``; return what to tell the person.
+def grant(
+    book: ConsentBook,
+    provider: str,
+    providers: Mapping[str, Provider],
+    *,
+    private: bool = False,
+) -> str:
+    """Let chats go to ``provider``, with ``private`` text too; say what changed.
+
+    A private grant grants the chat as well, since private text only ever
+    travels inside a chat.
 
     Raises:
         ConsentError: If the consent file is damaged or cannot be written.
@@ -51,24 +61,43 @@ def grant(book: ConsentBook, provider: str, providers: Mapping[str, Provider]) -
     require_provider(provider, providers.keys())
     receiver = providers[provider]
     book.decide(receiver, Scope.CHAT, granted=True, by="cli")
+    if not private:
+        return (
+            f"granted: chats may go to {provider} at {receiver.url} once remote is on"
+            f"{NEXT_REQUEST}"
+        )
+    book.decide(receiver, Scope.PRIVATE, granted=True, by="cli")
     return (
-        f"granted: chats may go to {provider} at {receiver.url} once remote is on"
-        f"{NEXT_REQUEST}"
+        f"granted: chats may go to {provider} at {receiver.url} once remote is on, "
+        f"with private memory and file passages{NEXT_REQUEST}"
     )
 
 
-def revoke(book: ConsentBook, provider: str, providers: Mapping[str, Provider]) -> str:
-    """Keep every chat away from ``provider``; return what to tell the person.
+def revoke(
+    book: ConsentBook,
+    provider: str,
+    providers: Mapping[str, Provider],
+    *,
+    private: bool = False,
+) -> str:
+    """Keep chats away from ``provider``, or only ``private`` text; say what changed.
 
-    Every address ``provider`` was granted for is refused, including one no
-    longer configured.
+    Revoking the chat revokes private text too. Every address ``provider`` was
+    granted for is refused, including one no longer configured.
 
     Raises:
         ConsentError: If the consent file is damaged or cannot be written.
     """
-    refused = book.revoke(
-        provider, Scope.CHAT, current=providers.get(provider), by="cli"
-    )
+    # Private first: if the second write fails, no private grant outlives the chat's.
+    scopes = (Scope.PRIVATE,) if private else (Scope.PRIVATE, Scope.CHAT)
+    current = providers.get(provider)
+    refused = [
+        consent
+        for scope in scopes
+        for consent in book.revoke(provider, scope, current=current, by="cli")
+    ]
     if not refused:
         return f"nothing to revoke: {provider} was never decided"
+    if private:
+        return f"revoked: no private text goes to {provider}{NEXT_REQUEST}"
     return f"revoked: nothing goes to {provider}{NEXT_REQUEST}"

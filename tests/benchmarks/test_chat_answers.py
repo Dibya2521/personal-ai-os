@@ -71,7 +71,7 @@ def ticks(*times: float) -> Callable[[], float]:
 
 async def chat(tmp_path: Path, model: Scripted, clock: Callable[[], float]) -> Chat:
     knowledge = await knowing(tmp_path, private=False)
-    tool = knowledge_tool(knowledge, can_stay_local=stays_local, model=Scripted())
+    tool = knowledge_tool(knowledge, can_keep_private=stays_local, model=Scripted())
     return Chat(model, PersonaLibrary(), "synthia", Toolbox([tool]), clock)
 
 
@@ -443,7 +443,7 @@ async def setup_of_run(folder: Path, settings: Settings) -> Setup:
     """Return the setup the builder computes for a run on ``settings`` and toy()."""
     library = PersonaLibrary(settings.home / PERSONAS_DIR)
     knowledge = await knowing(folder, private=False)
-    tool = knowledge_tool(knowledge, can_stay_local=stays_local, model=Scripted())
+    tool = knowledge_tool(knowledge, can_keep_private=stays_local, model=Scripted())
     chat_of_run = Chat(Scripted(), library, settings.persona, Toolbox([tool]))
     spec = toy().spec
     setup = setup_of(chat_of_run, spec.id, Chunking.for_embedder(spec))

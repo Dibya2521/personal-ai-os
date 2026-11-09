@@ -1,5 +1,8 @@
 """A chat that has read private text stays on this machine until it starts again.
 
+Unless the person let private text go to the remote provider
+(``synthia consent grant <provider> --private``).
+
 The rule is enforced in the router, because the router is the one place every
 request of a turn passes. The chat builds only the first request of a turn;
 the agent then copies that request's ``use_remote`` into every later step
@@ -11,7 +14,8 @@ rule lived where the first request is built.
 So each chat keeps one :class:`Confinement`, a latch, and puts it in
 :data:`CONFINEMENT` for the turn it runs. Whatever reads private text during
 the turn closes the latch, and the router reads it for every request, sending
-each one local while it is closed. Only starting the chat again opens it.
+each one local while it is closed, unless that private grant exists. Only
+starting the chat again opens it.
 
 The latch is not a field of ``ChatRequest``: the response cache keys a
 request by serialising every one of its fields (``gateway/cache.py``) and

@@ -110,17 +110,18 @@ async def test_reading_private_text_keeps_the_chat_local_until_reset(
     chat.use_remote = True
 
     first = await reported(chat, PRIVATE_QUESTION)
-    left_after_reading = chat.may_leave
+    latched_after_reading = chat.confinement.confined
     second = await reported(chat, "thanks")
     chat.reset()
     third = await reported(chat, "hello")
 
     assert [r.confined for r in (first, second, third)] == [True, True, False]
-    assert (left_after_reading, chat.may_leave) == (False, True)
-    # The turn's second step still asks: the router keeps it local.
-    assert [r.use_remote for r in model.requests] == [True, True, False, True]
+    assert (latched_after_reading, chat.confinement.confined) == (True, False)
+    # Every request still asks: the router keeps a confined one local unless
+    # private text may leave.
+    assert [r.use_remote for r in model.requests] == [True, True, True, True]
     began = [r for r in read_trace(trace.path)[0] if isinstance(r, TurnBegan)]
-    assert [b.use_remote for b in began] == [True, False, True]
+    assert [b.use_remote for b in began] == [True, True, True]
     kept = {t.question: t.confined for t in await store.search("")}
     assert kept == {PRIVATE_QUESTION: True, "thanks": True, "hello": False}
 
@@ -148,7 +149,7 @@ async def test_a_reminder_of_a_private_turn_confines_the_turn_before_it_asks(
         model,
         PersonaLibrary(),
         "synthia",
-        memory=Remembering(recall, can_stay_local=lambda: True),
+        memory=Remembering(recall, can_keep_private=lambda: True),
     )
     chat.use_remote = True
 
@@ -157,7 +158,8 @@ async def test_a_reminder_of_a_private_turn_confines_the_turn_before_it_asks(
     (request,) = model.requests
     assert request.messages[-1].text.startswith(REMINDER_HEADER)
     assert "my cat is called miso" in request.messages[-1].text
-    assert (request.use_remote, report.confined) == (False, True)
+    assert report.confined
+    assert chat.confinement.reason is not None
 
 
 async def test_remote_on_in_a_confined_chat_stays_local_until_reset(

@@ -9,8 +9,13 @@ from synthia.kernel.consent import ConsentBook, Scope
 OPENROUTER: Final = OPENROUTER_FREE.receiver
 
 
-def consented(_scope: Scope) -> bool:
-    """Consent to every scope, as a person who granted everything would."""
+def consented(scope: Scope) -> bool:
+    """Consent to the chat's text only, as /remote on asks."""
+    return scope is Scope.CHAT
+
+
+def consented_private(_scope: Scope) -> bool:
+    """Consent to every scope, as synthia consent grant --private records."""
     return True
 
 

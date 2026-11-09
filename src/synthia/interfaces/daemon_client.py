@@ -488,6 +488,7 @@ def report_from(result: object) -> TurnReport:
         confined=fields.get("confined") is True,
         sources=tuple(map(str, cast("list[object]", fields.get("sources", [])))),
         no_consent=fields.get("no_consent") is True,
+        held_private=fields.get("held_private") is True,
     )
 
 

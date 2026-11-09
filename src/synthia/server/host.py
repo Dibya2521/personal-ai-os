@@ -302,7 +302,7 @@ class Host:
                 else Remembering(
                     self.memory,
                     self.learning,
-                    can_stay_local=lambda: router.can_stay_local,
+                    can_keep_private=lambda: router.can_keep_private,
                 )
             ),
             summarizer=(

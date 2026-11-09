@@ -107,7 +107,7 @@ async def test_a_confined_turn_is_kept_marked_and_never_learned_from(
     ]
 
 
-def test_surfacing_keeps_confined_turns_only_for_a_latch_that_can_stay_local() -> None:
+def test_confined_turns_surface_only_for_a_latch_that_can_keep_private() -> None:
     turns = [remembered(OPEN, confined=False), remembered(PRIVATE, confined=True)]
 
     def shown(latch: Confinement | None, *, stays: bool, most: int) -> list[str]:
@@ -140,7 +140,7 @@ async def search(
     tool = (
         memory_tool(recall)
         if stays is None
-        else memory_tool(recall, can_stay_local=lambda: stays)
+        else memory_tool(recall, can_keep_private=lambda: stays)
     )
     CONFINEMENT.set(latch)
     return await tool.run(json.dumps({"query": "door code"}))
@@ -182,7 +182,7 @@ async def test_a_reminder_holds_a_private_turn_only_in_a_chat_that_stays_local(
     memory = (
         Remembering(recall)
         if stays is None
-        else Remembering(recall, can_stay_local=lambda: stays)
+        else Remembering(recall, can_keep_private=lambda: stays)
     )
     latch = Confinement() if in_chat else None
     CONFINEMENT.set(latch)

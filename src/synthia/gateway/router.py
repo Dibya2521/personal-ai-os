@@ -3,9 +3,10 @@
 Local comes first: a request goes to the remote model only when it asks for
 it with ``use_remote``, so SYNTHIA keeps working, and keeps conversations on
 the machine, whatever happens to the remote service. A request made while its
-chat holds private text (:mod:`synthia.gateway.confinement`) goes local
-whatever it asks, and so does one asking for a remote provider the person has
-not consented to (:mod:`synthia.kernel.consent`). A request that may not leave
+chat holds private text (:mod:`synthia.gateway.confinement`) goes local unless
+the person let private text go to the provider, and one asking for a remote
+provider the person has not consented to (:mod:`synthia.kernel.consent`) goes
+local too. A request that may not leave
 the machine is never sent out, even when no local model can serve it: it fails
 with the reason instead.
 
@@ -225,12 +226,24 @@ class Router:
         return self._local is not None
 
     @property
-    def can_stay_local(self) -> bool:
-        """Return whether a chat confined to this machine can still use its tools.
+    def can_keep_private(self) -> bool:
+        """Return whether a chat can go on, tools and all, once it reads private text.
 
-        True when a local model that takes tools stands behind the router.
+        True when a local model that takes tools stands behind the router, or
+        when the person let private text go to the remote provider.
         """
-        return self._local is not None and self._local.info.tools
+        local = self._local is not None and self._local.info.tools
+        return local or self.private_may_leave
+
+    @property
+    def private_may_leave(self) -> bool:
+        """Return whether the person let private text go to the remote provider."""
+        remote = self._remote
+        return (
+            remote is not None
+            and remote.allows(Scope.CHAT)
+            and remote.allows(Scope.PRIVATE)
+        )
 
     @property
     def info(self) -> ModelInfo:
@@ -298,7 +311,7 @@ class Router:
     async def _choose(
         self, request: ChatRequest, *, background: bool
     ) -> tuple[Route, RouteReason, ChatModel]:
-        if confined():
+        if confined() and not self.private_may_leave:
             local = self._local_only(request, HOLDS_PRIVATE_TEXT)
             return Route.LOCAL, RouteReason.CONFINED, local
         if not request.use_remote:

@@ -44,22 +44,22 @@ def local_zone() -> tzinfo | None:
     return datetime.now().astimezone().tzinfo
 
 
-def cannot_stay_local() -> bool:
+def cannot_keep_private() -> bool:
     """Return False: without a router to ask, no chat is known to stay local."""
     return False
 
 
 def surfaced(
-    turns: Sequence[Remembered], most: int, can_stay_local: Callable[[], bool]
+    turns: Sequence[Remembered], most: int, can_keep_private: Callable[[], bool]
 ) -> list[Remembered]:
     """Return up to ``most`` of ``turns`` that the running chat may read.
 
     A confined turn is kept only in a chat's turn whose latch is in context
-    and when ``can_stay_local``; the latch is then closed if one is returned.
+    and when ``can_keep_private``; the latch is then closed if one is returned.
     Otherwise confined turns are left out.
     """
     latch = CONFINEMENT.get()
-    if latch is None or not can_stay_local():
+    if latch is None or not can_keep_private():
         return [turn for turn in turns if not turn.confined][:most]
     shown = list(turns[:most])
     if any(turn.confined for turn in shown):
@@ -91,12 +91,12 @@ def memory_tool(
     recall: Recall,
     zone: Callable[[], tzinfo | None] = local_zone,
     *,
-    can_stay_local: Callable[[], bool] = cannot_stay_local,
+    can_keep_private: Callable[[], bool] = cannot_keep_private,
 ) -> FunctionTool:
     """Return the tool that searches what ``recall`` remembers.
 
-    ``can_stay_local`` says whether a chat could go on with no remote model,
-    which decides whether turns of private chats are shown.
+    ``can_keep_private`` says whether a chat could go on once it holds private
+    text, which decides whether turns of private chats are shown.
     """
 
     async def search_memory(
@@ -129,7 +129,7 @@ def memory_tool(
             else datetime.combine(until + timedelta(days=1), time(), local)
         )
         found = await recall.find(query, since=start, until=end, limit=MAX_FOUND)
-        turns = surfaced([r.turn for r in found], MAX_FOUND, can_stay_local)
+        turns = surfaced([r.turn for r in found], MAX_FOUND, can_keep_private)
         if not turns:
             return NOTHING_FOUND
         return "\n".join(shown(turn, local) for turn in turns)

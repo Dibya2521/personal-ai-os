@@ -653,6 +653,14 @@ def consent_grant(
     provider: Annotated[
         str, typer.Argument(help="The provider, as synthia providers names it.")
     ],
+    *,
+    private: Annotated[
+        bool,
+        typer.Option(
+            "--private",
+            help="Also let private memory and file passages go with the chat.",
+        ),
+    ] = False,
 ) -> None:
     """Let chats go to a provider once remote is on.
 
@@ -661,7 +669,7 @@ def consent_grant(
     settings = _settings(stored_keys=False)
     try:
         said = consent_commands.grant(
-            ConsentBook(settings.home), provider, _receivers(settings)
+            ConsentBook(settings.home), provider, _receivers(settings), private=private
         )
     except ConfigError as error:
         typer.echo(f"error: {error}", err=True)
@@ -672,6 +680,13 @@ def consent_grant(
 @consent_app.command("revoke")
 def consent_revoke(
     provider: Annotated[str, typer.Argument(help="The provider to keep chats from.")],
+    *,
+    private: Annotated[
+        bool,
+        typer.Option(
+            "--private", help="Keep only private passages away; chats still go."
+        ),
+    ] = False,
 ) -> None:
     """Keep every chat away from a provider, from its next request.
 
@@ -685,7 +700,9 @@ def consent_revoke(
         # the consent file is still refused.
         receivers = {}
     try:
-        said = consent_commands.revoke(ConsentBook(settings.home), provider, receivers)
+        said = consent_commands.revoke(
+            ConsentBook(settings.home), provider, receivers, private=private
+        )
     except ConfigError as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None

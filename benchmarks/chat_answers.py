@@ -392,10 +392,12 @@ def chat_over(gateway: Gateway, knowledge: Knowledge, settings: Settings) -> Cha
     """
     router = gateway.router
 
-    def can_stay_local() -> bool:
-        return router.can_stay_local
+    def can_keep_private() -> bool:
+        return router.can_keep_private
 
-    tool = knowledge_tool(knowledge, can_stay_local=can_stay_local, model=gateway.model)
+    tool = knowledge_tool(
+        knowledge, can_keep_private=can_keep_private, model=gateway.model
+    )
     library = PersonaLibrary(settings.home / PERSONAS_DIR)
     return Chat(gateway.model, library, settings.persona, Toolbox([tool]))
 

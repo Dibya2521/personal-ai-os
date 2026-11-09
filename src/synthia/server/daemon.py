@@ -170,18 +170,20 @@ def _searching(
     """Return the tools that search memory and the person's files, those open."""
     router = gateway.router
 
-    def can_stay_local() -> bool:
-        return router.can_stay_local
+    def can_keep_private() -> bool:
+        return router.can_keep_private
 
     memory_tools = (
-        () if memory is None else (memory_tool(memory, can_stay_local=can_stay_local),)
+        ()
+        if memory is None
+        else (memory_tool(memory, can_keep_private=can_keep_private),)
     )
     knowledge_tools = (
         ()
         if knowledge is None
         else (
             knowledge_tool(
-                knowledge, can_stay_local=can_stay_local, model=gateway.model
+                knowledge, can_keep_private=can_keep_private, model=gateway.model
             ),
         )
     )

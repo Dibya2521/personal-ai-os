@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from tests.consenting import OPENROUTER
 runner = CliRunner()
 GONE = Provider(name="gone", url="https://gone.example/v1")
 LISTED = f"openrouter ({OPENROUTER.url}) chat"
+LISTED_PRIVATE = f"openrouter ({OPENROUTER.url}) private"
 
 
 @pytest.fixture(autouse=True)
@@ -34,8 +36,67 @@ def test_list_says_nothing_is_decided_at_first(home: Path) -> None:
     result = runner.invoke(app, ["consent", "list"])
 
     assert result.exit_code == 0, result.output
-    assert result.output == f"{LISTED}: not decided, stays on this machine\n"
+    assert result.output == (
+        f"{LISTED}: not decided, stays on this machine\n"
+        f"{LISTED_PRIVATE}: not decided, stays on this machine\n"
+    )
     assert not (home / CONSENT_FILE).exists()
+
+
+def allowed(home: Path) -> tuple[bool, bool]:
+    book = ConsentBook(home)
+    return book.allows(OPENROUTER, Scope.CHAT), book.allows(OPENROUTER, Scope.PRIVATE)
+
+
+def test_a_plain_grant_keeps_private_text_on_this_machine(home: Path) -> None:
+    runner.invoke(app, ["consent", "grant", "openrouter"])
+
+    assert allowed(home) == (True, False)
+
+
+def test_a_private_grant_lets_the_chat_and_private_text_go(home: Path) -> None:
+    granted = runner.invoke(app, ["consent", "grant", "openrouter", "--private"])
+    listed = runner.invoke(app, ["consent", "list"]).output.splitlines()
+
+    assert granted.exit_code == 0, granted.output
+    assert "with private memory and file passages" in granted.output
+    assert allowed(home) == (True, True)
+    assert len(listed) == 2
+    assert all(": granted " in line for line in listed)
+
+
+def test_revoking_private_keeps_the_chat_and_revoking_the_chat_takes_both(
+    home: Path,
+) -> None:
+    runner.invoke(app, ["consent", "grant", "openrouter", "--private"])
+    private = runner.invoke(app, ["consent", "revoke", "openrouter", "--private"])
+    after_private = allowed(home)
+    runner.invoke(app, ["consent", "grant", "openrouter", "--private"])
+    runner.invoke(app, ["consent", "revoke", "openrouter"])
+
+    assert "revoked: no private text goes to openrouter" in private.output
+    assert after_private == (True, False)
+    assert allowed(home) == (False, False)
+
+
+def test_a_revoke_that_fails_halfway_leaves_no_private_grant(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner.invoke(app, ["consent", "grant", "openrouter", "--private"])
+    writes: list[Path] = []
+
+    def second_write_fails(self: Path, target: Path) -> Path:
+        writes.append(target)
+        if len(writes) == 2:
+            raise PermissionError(13, "Permission denied")
+        os.replace(self, target)  # noqa: PTH105 - Path.replace is the patched method
+        return Path(target)
+
+    monkeypatch.setattr(Path, "replace", second_write_fails)
+    revoked = runner.invoke(app, ["consent", "revoke", "openrouter"])
+
+    assert revoked.exit_code == 2
+    assert allowed(home) == (True, False)
 
 
 def test_grant_then_revoke_is_listed_with_who_decided(home: Path) -> None:

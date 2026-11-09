@@ -6,11 +6,11 @@ import pytest
 from synthia.gateway.assemble import Gateway
 from synthia.gateway.router import Remote, Router
 from synthia.gateway.usage import UsageLog
-from synthia.interfaces.chat import NO_CONSENT_LOCAL, ChatApp
+from synthia.interfaces.chat import NO_CONSENT_LOCAL, STAYS_LOCAL, ChatApp
 from synthia.interfaces.commands import parse
 from synthia.kernel.consent import CONSENT_FILE, ConsentBook, Provider, Scope
 from synthia.persona.library import PersonaLibrary
-from synthia.server.conversation import Conversation
+from synthia.server.conversation import REMOTE_ON_PRIVATE, Conversation
 from synthia.server.session import ChatSession, LastRoute
 from tests.consenting import OPENROUTER
 from tests.gateway.test_router import LOCAL, REMOTE, Fake, Setup
@@ -159,3 +159,40 @@ async def test_a_revoke_mid_chat_keeps_the_next_turn_local_and_says_so_once(
     assert f"remote | {REMOTE.id}" in text
     assert f"local | {LOCAL.id}" in text
     assert text.count(NO_CONSENT_LOCAL) == 1
+
+
+@pytest.mark.parametrize("private", [False, True])
+async def test_a_confined_chat_goes_remote_only_after_a_private_grant(
+    tmp_path: Path, setup: Setup, *, private: bool
+) -> None:
+    book = ConsentBook(tmp_path)
+    book.decide(OPENROUTER, Scope.CHAT, granted=True, by="cli")
+    if private:
+        book.decide(OPENROUTER, Scope.PRIVATE, granted=True, by="cli")
+    chat = talk(tmp_path, setup, Asker(answer=False))
+    chat.session.confinement.confine("a private note was read")
+    screen, out = console()
+
+    reply = await chat.remote(on=True)
+    await ChatApp(chat, screen).handle(parse("hi"))
+
+    text = out.getvalue()
+    assert (reply.notes == (REMOTE_ON_PRIVATE,)) is private
+    assert (f"remote | {REMOTE.id}" in text) is private
+    assert (STAYS_LOCAL in text) is not private
+
+
+async def test_a_confined_chat_with_remote_off_is_not_told_it_is_held(
+    tmp_path: Path, setup: Setup
+) -> None:
+    book = ConsentBook(tmp_path)
+    book.decide(OPENROUTER, Scope.CHAT, granted=True, by="cli")
+    book.decide(OPENROUTER, Scope.PRIVATE, granted=True, by="cli")
+    chat = talk(tmp_path, setup, Asker(answer=False))
+    chat.session.confinement.confine("a private note was read")
+    screen, out = console()
+
+    await ChatApp(chat, screen).handle(parse("hi"))
+
+    assert f"local | {LOCAL.id}" in out.getvalue()
+    assert STAYS_LOCAL not in out.getvalue()

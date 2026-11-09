@@ -48,7 +48,7 @@ def stays_local() -> bool:
     return True
 
 
-def cannot_stay_local() -> bool:
+def cannot_keep_private() -> bool:
     return False
 
 
@@ -78,26 +78,26 @@ def shown(found: str) -> list[str]:
 async def searched(
     knowledge: Knowledge,
     *,
-    can_stay_local: bool = True,
+    can_keep_private: bool = True,
     query: str = "kestrel",
     model: Scripted | None = None,
 ) -> str:
     """Search as the model does; a model with no reply fails the test if asked."""
     tool = knowledge_tool(
         knowledge,
-        can_stay_local=stays_local if can_stay_local else cannot_stay_local,
+        can_keep_private=stays_local if can_keep_private else cannot_keep_private,
         model=model or Scripted(),
     )
     return await tool.run(json.dumps({"query": query}))
 
 
 async def deeply(
-    knowledge: Knowledge, model: Scripted, *, can_stay_local: bool = True
+    knowledge: Knowledge, model: Scripted, *, can_keep_private: bool = True
 ) -> str:
     """Search deep, as the session does for ``/deep``."""
     deep = DEEP.set(True)
     try:
-        return await searched(knowledge, can_stay_local=can_stay_local, model=model)
+        return await searched(knowledge, can_keep_private=can_keep_private, model=model)
     finally:
         DEEP.reset(deep)
 
@@ -109,7 +109,7 @@ def rewritten(*queries: str, passage: str = "") -> Scripted:
 async def test_the_tool_reads_without_asking_and_says_how_to_use_it(
     knowledge: Knowledge,
 ) -> None:
-    tool = knowledge_tool(knowledge, can_stay_local=stays_local, model=Scripted())
+    tool = knowledge_tool(knowledge, can_keep_private=stays_local, model=Scripted())
 
     assert (tool.spec.name, tool.reach, tool.effect) == (
         SEARCH_KNOWLEDGE,
@@ -123,7 +123,7 @@ async def test_the_tool_reads_without_asking_and_says_how_to_use_it(
 async def test_what_the_model_sees_of_the_tool_has_no_way_to_ask_for_deep(
     knowledge: Knowledge,
 ) -> None:
-    tool = knowledge_tool(knowledge, can_stay_local=stays_local, model=Scripted())
+    tool = knowledge_tool(knowledge, can_keep_private=stays_local, model=Scripted())
 
     assert tool.spec == ToolSpec(
         "search_knowledge",
@@ -175,13 +175,13 @@ async def test_a_deep_search_over_a_private_file_confines_the_chat(
     assert latch.reason == CONFINED
 
 
-async def test_a_deep_search_in_a_chat_that_cannot_stay_local_withholds_private(
+async def test_a_deep_search_in_a_chat_that_cannot_keep_private_withholds_it(
     knowledge: Knowledge,
 ) -> None:
     latch = Confinement()
     CONFINEMENT.set(latch)
 
-    found = await deeply(knowledge, rewritten("door code"), can_stay_local=False)
+    found = await deeply(knowledge, rewritten("door code"), can_keep_private=False)
 
     assert found.endswith(f"\n\n{ONE_WITHHELD}")
     assert not latch.confined
@@ -197,7 +197,7 @@ async def test_a_deep_search_with_no_valid_rewrites_says_it_searched_plainly(
     assert found == f"{await searched(knowledge)}\n\n{NO_REWRITES}"
 
 
-async def test_a_chat_that_can_stay_local_reads_private_text_and_is_confined(
+async def test_a_chat_that_can_keep_private_reads_private_text_and_is_confined(
     knowledge: Knowledge,
 ) -> None:
     latch = Confinement()
@@ -211,13 +211,13 @@ async def test_a_chat_that_can_stay_local_reads_private_text_and_is_confined(
     assert latch.reason == CONFINED
 
 
-async def test_a_chat_that_cannot_stay_local_has_private_text_withheld(
+async def test_a_chat_that_cannot_keep_private_has_private_text_withheld(
     knowledge: Knowledge,
 ) -> None:
     latch = Confinement()
     CONFINEMENT.set(latch)
 
-    found = await searched(knowledge, can_stay_local=False)
+    found = await searched(knowledge, can_keep_private=False)
 
     assert "4021" not in found
     assert found.startswith(f"[{KESTREL}]")
@@ -301,7 +301,7 @@ async def test_a_private_document_is_never_named_by_a_public_link(
     files = {"kestrel.md": "# Kestrel\n\nthe host kestrel, see [[door]]\n"}
     knowledge = await knowing(tmp_path, files=files)
 
-    found = await searched(knowledge, can_stay_local=False)
+    found = await searched(knowledge, can_keep_private=False)
 
     assert "links to" not in found
 

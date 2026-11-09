@@ -42,9 +42,12 @@ ALREADY_TALKING: Final = (
 )
 TURN_RUNNING: Final = "a turn is still running: wait for its answer, or stop it first"
 RESUMED_PRIVATE: Final = "the resumed conversation read private text"
+REMOTE_ON_PRIVATE: Final = "remote: on, turns may leave this machine, private text too"
 PRIVATE_NEEDS_LOCAL: Final = (
     "the last conversation read private text, so it can only go on with a "
-    "local model that takes tools; install one with `synthia models install`"
+    "local model that takes tools (install one with `synthia models install`) "
+    "or once private text may go to the remote provider "
+    "(synthia consent grant <provider> --private)"
 )
 
 logger = logging.getLogger(__name__)
@@ -215,7 +218,8 @@ class Conversation:
         """Allow or stop turns going to the remote model, or with None say which.
 
         The person's choice is kept even in a chat that holds private text,
-        which stays on this machine, so the chat goes remote after /reset.
+        which stays on this machine unless private text may go to the
+        provider, so the chat goes remote after /reset.
         """
         remote = self.gateway.router.remote
         if on and remote is None:
@@ -234,6 +238,8 @@ class Conversation:
             )
         confinement = self.session.confinement
         if self.session.use_remote and confinement.confined:
+            if self.gateway.router.private_may_leave:
+                return note(REMOTE_ON_PRIVATE)
             return note(
                 f"remote: stays off in this chat: {confinement.reason}; "
                 "/reset starts a chat that may leave this machine"
@@ -444,7 +450,7 @@ class Conversation:
 
     def _resumed(self, memory: Remembering, earlier: Resumed) -> Reply:
         if any(turn.confined for turn in earlier.turns):
-            if not self.gateway.router.can_stay_local:
+            if not self.gateway.router.can_keep_private:
                 memory.begin_again()
                 return error(PRIVATE_NEEDS_LOCAL)
             self.session.confinement.confine(RESUMED_PRIVATE)

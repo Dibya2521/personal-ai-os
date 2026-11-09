@@ -97,12 +97,12 @@ def _result(found: Found, links: Mapping[ChunkId, Sequence[LinkTarget]]) -> str:
 
 
 def knowledge_tool(
-    knowledge: Knowledge, *, can_stay_local: Callable[[], bool], model: ChatModel
+    knowledge: Knowledge, *, can_keep_private: Callable[[], bool], model: ChatModel
 ) -> FunctionTool:
     """Return the tool that searches ``knowledge``.
 
-    ``can_stay_local`` says whether a local model that takes tools is there
-    now, which decides whether private passages are shown. ``model``, the
+    ``can_keep_private`` says whether the chat could go on once it holds
+    private text, which decides whether private passages are shown. ``model``, the
     gateway's, writes a deep search's rewrites.
     """
 
@@ -112,7 +112,7 @@ def knowledge_tool(
         ],
     ) -> str:
         latch = CONFINEMENT.get()
-        show_private = latch is not None and can_stay_local()
+        show_private = latch is not None and can_keep_private()
         note = ""
         if DEEP.get():
             deep = await deep_search(knowledge, model, query, private=show_private)
