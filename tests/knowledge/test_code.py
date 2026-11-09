@@ -1,3 +1,4 @@
+import ast
 from itertools import pairwise
 from pathlib import PurePosixPath
 
@@ -315,10 +316,9 @@ def test_import_links_are_import_kind() -> None:
         "def f(:",
         "x = 1\0",
         "x = '\ud800'",
-        "x = 1" + " + 1" * 100_000,
         "x = " + "not " * 100_000 + "1",
     ],
-    ids=["syntax", "nul", "surrogate", "recursion", "parser stack"],
+    ids=["syntax", "nul", "surrogate", "parser stack"],
 )
 def test_a_file_that_does_not_parse_is_read_by_lines_and_says_so(line: str) -> None:
     outline = read(line, "", "more")
@@ -328,6 +328,31 @@ def test_a_file_that_does_not_parse_is_read_by_lines_and_says_so(line: str) -> N
     assert outline.links == ()
     assert outline.note.startswith("did not parse: ")
     assert outline.note.endswith("; read by lines")
+
+
+def test_a_file_too_deep_for_the_parser_is_read_by_lines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Real nesting overflows only where the C stack is small: Linux py3.14 parses
+    # the 100 000 chained additions that Windows refuses with RecursionError.
+    parse = ast.parse
+
+    def too_deep(
+        source: str, filename: str = "<unknown>", mode: str = "exec"
+    ) -> ast.AST:
+        if filename == MODULE.name:
+            message = "maximum recursion depth exceeded"
+            raise RecursionError(message)
+        return parse(source, filename, mode)
+
+    monkeypatch.setattr(ast, "parse", too_deep)
+    outline = read("x = 1", "", "more")
+
+    assert outline.title == "m.py"
+    assert outline.blocks == (Block(None, 1, 3, (), 0),)
+    assert outline.note == (
+        "did not parse: maximum recursion depth exceeded; read by lines"
+    )
 
 
 def test_plain_text_is_one_block_under_the_file_name() -> None:
