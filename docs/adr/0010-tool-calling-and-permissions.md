@@ -58,7 +58,8 @@ Option 3.
   the field, and the model can try again. A failing tool returns its error as
   the result; it never ends the turn.
 - **Tool output is data.** Each result reaches the model inside a
-  `tool_result` block marked untrusted, with the closing tag and the
+  `tool_result` block marked untrusted that ends only at the end mark its
+  opening tag names (a hash of the output), with the closing tag and the
   chat-template token start defused, and lines shaped like instructions are
   flagged on the call's line. Quoting lowers how often a model follows injected
   text; the rule above is what makes it safe.

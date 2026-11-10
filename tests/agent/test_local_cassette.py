@@ -22,8 +22,8 @@ RECORDED_CALLS = [
     ("calculate", '{"expression":"1234 * 5678"}', "7006652", True),
 ]
 RECORDED_ANSWER = (
-    "It is Saturday, October 3, 2026, at 09:30:00 UTC+0530, "
-    "and the product of 1234 and 5678 is 7006652."
+    "The current time is Saturday, October 3, 2026, at 09:30:00 UTC+0530, "
+    "and 1234 multiplied by 5678 equals 7,006,652."
 )
 
 

@@ -190,7 +190,7 @@ async def test_knowledge_is_searched_in_shared_collections_without_private_text(
     ]
     text = text_of(result)
     assert result["isError"] is False
-    assert text.startswith('<tool_result name="knowledge_search" trusted="false">')
+    assert text.startswith('<tool_result name="knowledge_search" trusted="false" end="')
     assert "[notes/a.md:1-2] A\nmy cat is miso" in text
     assert "2 private passages withheld" in text
     assert GRANT in text
@@ -260,7 +260,7 @@ async def test_a_result_is_cut_and_its_text_cannot_close_the_quote() -> None:
 
     text = text_of(await call(exposure, KNOWLEDGE_SEARCH, {"query": "a", "limit": 20}))
 
-    assert text.count("</tool_result>") == 1
+    assert text.count("</tool_result") == 1
     assert len(text) < MAX_RESULT_CHARS + 200
 
 

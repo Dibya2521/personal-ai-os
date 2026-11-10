@@ -69,6 +69,10 @@ All notable changes are recorded here. The format follows
   private, link-local or metadata address, so an approved public page can no
   longer send the call to a local model server or a cloud metadata service.
   Reported by Matt Abate (@mattabate).
+- A tool result can no longer end its own quote with a closing tag spelled in
+  look-alike characters (a fullwidth `／`, a Cyrillic `о`) or open a forged
+  trusted one. The opening tag now names an end mark, a hash of the result,
+  and only a closing tag carrying that mark ends the quote.
 
 ## [0.3.0] - 2026-10-27
 

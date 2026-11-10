@@ -13,18 +13,26 @@ real text (Odia, Devanagari and Persian need ZWJ and ZWNJ, emoji need ZWJ and
 U+FE0F), so they are kept, and the patterns look through them instead. Only
 the Unicode tag block is removed: it renders as nothing and can spell a whole
 hidden prompt.
+
+Defusing catches the closing tags it knows, but Unicode has thousands of
+characters that look like ``/`` or a Latin letter. So the opening tag also
+names the quote's end mark, a hash of the quoted text, and only a closing tag
+carrying that mark ends it. Text cannot carry the mark of a quote that holds
+it: that is finding a fixed point of SHA-256 cut to 64 bits. The mark depends
+on the text alone, so the same result is quoted the same way every time.
 """
 
 from __future__ import annotations
 
 import functools
+import hashlib
 import html
 import re
 import sys
 import unicodedata
 from typing import Final
 
-CLOSE: Final = "</tool_result>"
+END_MARK_HEX: Final = 16
 _TAG_BLOCK: Final = re.compile(r"[\U000e0000-\U000e007f]")
 _VARIATION_SELECTORS: Final = (range(0xFE00, 0xFE10), range(0xE0100, 0xE01F0))
 # Chat templates mark turns with <|...|> tokens; text spelled the same way
@@ -56,7 +64,18 @@ def quote(name: str, result: str) -> str:
     """Return ``result`` wrapped as the untrusted output of the tool ``name``."""
     shown = _TAG_BLOCK.sub("", result)
     safe = _CONTROL.sub("< |", _closing().sub(r"<\\/\1", shown))
-    return f'<tool_result name="{html.escape(name)}" trusted="false">\n{safe}\n{CLOSE}'
+    end = _end_mark(safe)
+    return (
+        f'<tool_result name="{html.escape(name)}" trusted="false" end="{end}">\n'
+        f'{safe}\n</tool_result end="{end}">'
+    )
+
+
+def _end_mark(text: str) -> str:
+    """Return the mark that ends the quote of ``text``."""
+    # A tool can return a lone surrogate (decoded JSON), which strict UTF-8 refuses.
+    digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+    return digest[:END_MARK_HEX]
 
 
 def flags(result: str) -> tuple[str, ...]:
