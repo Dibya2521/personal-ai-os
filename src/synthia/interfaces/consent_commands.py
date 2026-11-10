@@ -2,44 +2,104 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, assert_never
 
 from synthia.interfaces.key_commands import require_provider
-from synthia.kernel.consent import ConsentBook, Provider, Scope
+from synthia.interfaces.mcp_hosts import HOSTS_FILE, HostEntry
+from synthia.kernel.consent import ConsentBook, Host, Provider, Scope
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from synthia.kernel.consent import Consent
 
 NOT_DECIDED: Final = "not decided, stays on this machine"
 NEXT_REQUEST: Final = "; a running chat follows it from its next request"
 
 
-def consent_lines(book: ConsentBook, providers: Mapping[str, Provider]) -> list[str]:
+def _label(receiver: Provider | Host) -> str:
+    match receiver:
+        case Provider():
+            return f"{receiver.name} ({receiver.url})"
+        case Host():
+            return f"host {receiver.name}"
+        case _:
+            assert_never(receiver)
+
+
+def consent_lines(
+    book: ConsentBook,
+    providers: Mapping[str, Provider],
+    hosts: Mapping[str, HostEntry],
+) -> list[str]:
     """Return one line per receiver and scope saying what was decided, and when.
 
     ``providers`` maps each configured provider's name to its receiver. A
     decision for an address no longer configured gets a line too, so it can be
-    seen and revoked.
+    seen and revoked. Each host in ``hosts`` (``mcp_hosts.toml``) or in the
+    book also gets a line saying what it may see; a host is decided only for
+    private text.
 
     Raises:
         ConsentError: If the consent file cannot be read or is damaged.
     """
     decided = {(c.receiver, c.scope): c for c in book.consents()}
     receivers = list(
-        dict.fromkeys([*providers.values(), *(receiver for receiver, _ in decided)])
+        dict.fromkeys(
+            [
+                *providers.values(),
+                *(Host(name=name) for name in hosts),
+                *(receiver for receiver, _ in decided),
+            ]
+        )
     )
     lines: list[str] = []
     for receiver in receivers:
-        for scope in Scope:
-            where = f"{receiver.name} ({receiver.url}) {scope}"
-            consent = decided.get((receiver, scope))
-            if consent is None:
-                lines.append(f"{where}: {NOT_DECIDED}")
-                continue
-            answer = "granted" if consent.granted else "refused"
-            when = consent.decided_at.astimezone().strftime("%Y-%m-%d %H:%M")
-            lines.append(f"{where}: {answer} {when} ({consent.by})")
+        if isinstance(receiver, Host):
+            lines.append(_sees(receiver, hosts.get(receiver.name, HostEntry())))
+        scopes = (Scope.PRIVATE,) if isinstance(receiver, Host) else tuple(Scope)
+        lines.extend(
+            _decided(f"{_label(receiver)} {scope}", decided.get((receiver, scope)))
+            for scope in scopes
+        )
     return lines
+
+
+def _sees(host: Host, entry: HostEntry) -> str:
+    collections = ", ".join(entry.collections) or "none"
+    memory = "yes" if entry.memory else "no"
+    return f"host {host.name} sees: collections {collections}; memory {memory}"
+
+
+def _decided(where: str, consent: Consent | None) -> str:
+    if consent is None:
+        return f"{where}: {NOT_DECIDED}"
+    answer = "granted" if consent.granted else "refused"
+    when = consent.decided_at.astimezone().strftime("%Y-%m-%d %H:%M")
+    return f"{where}: {answer} {when} ({consent.by})"
+
+
+def grant_host(book: ConsentBook, host: Host) -> str:
+    """Let private passages and turns go to ``host``; say what changed.
+
+    Raises:
+        ConsentError: If the consent file is damaged or cannot be written.
+    """
+    book.decide(host, Scope.PRIVATE, granted=True, by="cli")
+    return (
+        f"granted: private memory and file passages may go to host {host.name}, "
+        f"within what {HOSTS_FILE} shares with it, from its next call"
+    )
+
+
+def revoke_host(book: ConsentBook, host: Host) -> str:
+    """Keep private passages and turns from ``host``; say what changed.
+
+    Raises:
+        ConsentError: If the consent file is damaged or cannot be written.
+    """
+    book.decide(host, Scope.PRIVATE, granted=False, by="cli")
+    return f"revoked: no private text goes to host {host.name}, from its next call"
 
 
 def grant(

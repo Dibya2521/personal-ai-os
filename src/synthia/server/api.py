@@ -43,11 +43,15 @@ Methods, client to daemon:
   ``chunks``, ``cut``, ``embedded``), ``unavailable`` sources, ``seconds``
   and ``error`` null; a pass that failed returns ``error`` alone.
 - ``knowledge_search`` {``query``, ``limit``: 1 to 50, default 6,
-  ``variant``, ``deep``} returns ``passages`` best first, each with its
-  ``citation`` (``source/path:start-end``), ``title``, ``header``, ``body``,
-  ``score`` and ``private``, and ``withheld``. Private sources are searched:
-  the client is the person's own. With ``deep`` the local model first
-  rewrites the query (:mod:`synthia.knowledge.deep`), and the result also
+  ``variant``, ``deep``, ``private``, ``sources``} returns ``passages`` best
+  first, each with its ``citation`` (``source/path:start-end``), ``title``,
+  ``header``, ``body``, ``score`` and ``private``, and ``withheld``. Private
+  sources are searched unless ``private`` is false (default true: the client
+  is the person's own); then their passages are left out and counted in
+  ``withheld``. ``sources``, a list of source names, limits the search to
+  them; other sources are neither searched nor counted. With ``deep`` the
+  local model first rewrites the query (:mod:`synthia.knowledge.deep`), and
+  the result also
   holds ``expansion`` {``queries``, ``passage``}, ``seconds`` {``expand``,
   ``search``} and ``note``; a model whose reply never parses leaves the
   plain search, ``expansion`` null and a ``note`` saying so. A variant is
@@ -55,6 +59,14 @@ Methods, client to daemon:
   installed included, is error ``-32001``. A daemon with no embedding model
   has no index and answers each of these with error ``-32004``; a folder
   knowledge refuses is error ``-32005`` with the reason.
+- ``memory_search`` {``query``: up to 2000 characters, empty for the newest,
+  ``since``, ``until``: days ``YYYY-MM-DD`` on this machine's clock, ``limit``:
+  1 to 8, ``private``} returns ``turns`` best first, each with ``at`` (ISO
+  8601), ``conversation``, ``turn``, ``question``, ``answer``, ``tools`` (the
+  names run) and ``confined`` (it came from a chat that held private text),
+  and ``withheld``: with ``private`` false (default true) confined turns are
+  left out and counted there. A daemon whose memory could not be opened
+  answers error ``-32006``.
 - ``stop`` {} stops the daemon.
 
 Request, daemon to client: ``approve`` {``tool``, ``arguments``, ``confined``}
@@ -86,8 +98,10 @@ from synthia.gateway.errors import GatewayError
 from synthia.gateway.types import Reasoning
 from synthia.kernel.jsonrpc import ConnectionClosedError, Peer, RpcError
 from synthia.knowledge.deep import NO_REWRITES, deep_search
+from synthia.knowledge.model import MAX_SOURCE_NAME, MAX_SOURCES
 from synthia.knowledge.retrieve import Variant, VariantError
 from synthia.knowledge.service import SEARCH_LIMIT, KnowledgeError
+from synthia.memory.recall import MAX_FOUND, Day, day_range, local_zone
 from synthia.server.host import CURRENT_ROUTES
 from synthia.server.session import ImageError, TurnReport
 
@@ -101,6 +115,7 @@ if TYPE_CHECKING:
     from synthia.knowledge.deep import Deep
     from synthia.knowledge.model import Source
     from synthia.knowledge.retrieve import Found, Passage
+    from synthia.memory.store import Remembered
     from synthia.server.conversation import Reply
     from synthia.server.host import Host
     from synthia.server.session import PlanMark
@@ -119,7 +134,10 @@ NOT_INDEXING: Final = (
     "install one with `synthia models install`"
 )
 KNOWLEDGE_REFUSED: Final = -32005
+NO_MEMORY: Final = -32006
+NOT_REMEMBERING: Final = "this daemon remembers nothing: its memory could not be opened"
 MAX_SEARCH_LIMIT: Final = 50
+MAX_QUERY_CHARS: Final = 2000
 APPROVE: Final = "approve"
 CONSENT: Final = "consent"
 
@@ -209,12 +227,31 @@ class RootParams(_Params):
 
 
 class SearchParams(_Params):
-    """A question, how many passages to return, the ranking by name, and how deep."""
+    """A question, how many passages to return, the ranking by name, and how deep.
+
+    ``private`` False leaves private passages out; ``sources`` set searches only
+    those sources, by name.
+    """
 
     query: str = Field(min_length=1)
     limit: int = Field(default=SEARCH_LIMIT, ge=1, le=MAX_SEARCH_LIMIT)
     variant: str | None = None
     deep: bool = False
+    private: bool = True
+    sources: (
+        frozenset[Annotated[str, Field(min_length=1, max_length=MAX_SOURCE_NAME)]]
+        | None
+    ) = Field(default=None, max_length=MAX_SOURCES)
+
+
+class MemorySearchParams(_Params):
+    """Words to look for in earlier turns, the days to look in, and how many."""
+
+    query: str = Field(max_length=MAX_QUERY_CHARS)
+    since: Day | None = None
+    until: Day | None = None
+    limit: int = Field(default=MAX_FOUND, ge=1, le=MAX_FOUND)
+    private: bool = True
 
 
 def checked[P: _Params](kind: type[P], params: Params) -> P:
@@ -309,6 +346,19 @@ def passage_of(passage: Passage) -> dict[str, object]:
     }
 
 
+def turn_of(turn: Remembered) -> dict[str, object]:
+    """Return a remembered turn as a client shows it."""
+    return {
+        "at": turn.at.isoformat(),
+        "conversation": turn.conversation,
+        "turn": turn.id,
+        "question": turn.question,
+        "answer": turn.answer,
+        "tools": [use.name for use in turn.tools],
+        "confined": turn.confined,
+    }
+
+
 def found_of(found: Found) -> dict[str, object]:
     """Return the passages a search found, and how many it withheld."""
     return {
@@ -362,6 +412,7 @@ class Served:
         self._local_state = host.local_state
         self._learning = host.learning
         self._knowledge = host.knowledge
+        self._memory = host.memory
         self._gateway_model = host.gateway.model
         self._reindexing = host.reindexing
         self._activity = host.activity
@@ -396,6 +447,7 @@ class Served:
             "knowledge_sources": self._knowledge_sources,
             "knowledge_index": self._knowledge_index,
             "knowledge_search": self._knowledge_search,
+            "memory_search": self._memory_search,
             "stop": self._stop,
         }
 
@@ -515,16 +567,37 @@ class Served:
                     asked.query,
                     limit=asked.limit,
                     variant=variant,
+                    private=asked.private,
+                    sources=asked.sources,
                 )
                 return deep_of(deep)
             found = await knowledge.search(
-                asked.query, limit=asked.limit, variant=variant, private=True
+                asked.query,
+                limit=asked.limit,
+                variant=variant,
+                private=asked.private,
+                sources=asked.sources,
             )
         except VariantError as error:
             raise RpcError(INVALID_PARAMS, f"variant: {error}") from None
         except GatewayError as error:
             raise RpcError(ANSWER_FAILED, f"deep search failed: {error}") from None
         return found_of(found)
+
+    async def _memory_search(self, params: Params) -> object:
+        asked = checked(MemorySearchParams, params)
+        if self._memory is None:
+            raise RpcError(NO_MEMORY, NOT_REMEMBERING)
+        since, until = day_range(asked.since, asked.until, local_zone())
+        found = await self._memory.find(
+            asked.query, since=since, until=until, limit=asked.limit
+        )
+        turns = [recalled.turn for recalled in found]
+        shown = [t for t in turns if asked.private or not t.confined]
+        return {
+            "turns": [turn_of(turn) for turn in shown],
+            "withheld": len(turns) - len(shown),
+        }
 
     async def _stop(self, params: Params) -> object:
         checked(EmptyParams, params)

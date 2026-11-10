@@ -6,11 +6,13 @@ from typer.testing import CliRunner
 
 from synthia.interfaces.chat import consent_question, terminal_consent
 from synthia.interfaces.cli import app
-from synthia.kernel.consent import CONSENT_FILE, ConsentBook, Provider, Scope
+from synthia.interfaces.mcp_hosts import HOSTS_FILE
+from synthia.kernel.consent import CONSENT_FILE, ConsentBook, Host, Provider, Scope
 from tests.consenting import OPENROUTER
 
 runner = CliRunner()
 GONE = Provider(name="gone", url="https://gone.example/v1")
+CODEX = Host(name="codex")
 LISTED = f"openrouter ({OPENROUTER.url}) chat"
 LISTED_PRIVATE = f"openrouter ({OPENROUTER.url}) private"
 
@@ -179,6 +181,55 @@ def test_a_damaged_file_stops_every_command(home: Path) -> None:
     assert [r.exit_code for r in results] == [2, 2, 2]
     assert all("damaged" in r.output for r in results)
     assert (home / CONSENT_FILE).read_bytes() == b"not json"
+
+
+def test_a_host_is_granted_private_text_listed_and_revoked(home: Path) -> None:
+    (home / HOSTS_FILE).write_text(
+        '[hosts.codex]\ncollections = ["notes", "code"]\n', encoding="utf-8"
+    )
+
+    granted = runner.invoke(app, ["consent", "grant", "--host", "codex", "--private"])
+    after_grant = ConsentBook(home).allows(CODEX, Scope.PRIVATE)
+    listed = runner.invoke(app, ["consent", "list"]).output.splitlines()
+    revoked = runner.invoke(app, ["consent", "revoke", "--host", "codex"])
+
+    assert (granted.exit_code, revoked.exit_code) == (0, 0), granted.output
+    assert "private memory and file passages may go to host codex" in granted.output
+    assert after_grant
+    assert "host codex sees: collections notes, code; memory no" in listed
+    assert any(line.startswith("host codex private: granted ") for line in listed)
+    assert not any(line.startswith("host codex chat") for line in listed)
+    assert "revoked: no private text goes to host codex" in revoked.output
+    assert ConsentBook(home).decision(CODEX, Scope.PRIVATE) is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["grant", "--host", "codex"],
+        ["grant", "openrouter", "--host", "codex", "--private"],
+        ["grant"],
+        ["revoke"],
+        ["grant", "--host", "Bad Name", "--private"],
+    ],
+)
+def test_a_host_grant_needs_private_and_exactly_one_receiver(
+    home: Path, command: list[str]
+) -> None:
+    result = runner.invoke(app, ["consent", *command])
+
+    assert result.exit_code == 2
+    assert "error: " in result.output
+    assert not (home / CONSENT_FILE).exists()
+
+
+def test_a_broken_hosts_file_stops_the_list(home: Path) -> None:
+    (home / HOSTS_FILE).write_text("[hosts.codex\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["consent", "list"])
+
+    assert result.exit_code == 2
+    assert "not a valid list of MCP hosts" in result.output
 
 
 @pytest.mark.parametrize(

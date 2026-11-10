@@ -90,7 +90,13 @@ async def test_an_error_answer_is_raised_with_its_code(
 async def test_messages_that_are_not_answers_to_us_are_skipped() -> None:
     wire = Wire()
     task = await asked(wire, "a")
-    for junk in (b"not json", b"[1, 2]", b'{"jsonrpc": "2.0", "id": 99}'):
+    nested_past_the_stack = b"[" * 100_000
+    for junk in (
+        b"not json",
+        b"[1, 2]",
+        b'{"jsonrpc": "2.0", "id": 99}',
+        nested_past_the_stack,
+    ):
         wire.peer.receive(junk)
     wire.answer({"id": "1", "result": "a string id is not ours"})
     wire.answer({"id": 1, "result": "ok"})

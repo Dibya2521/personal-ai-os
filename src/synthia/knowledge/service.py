@@ -259,13 +259,15 @@ class Knowledge:
         limit: int = SEARCH_LIMIT,
         variant: Variant | None = None,
         private: bool = True,
+        sources: frozenset[str] | None = None,
         also: Sequence[str] = (),
         merge: Merge = Merge.BEST,
     ) -> Found:
         """Return up to ``limit`` passages for ``query``, best first.
 
         ``variant`` None is the default ranking. With ``private`` False,
-        passages of private sources are left out and counted. The queries in
+        passages of private sources are left out and counted. With
+        ``sources`` set, other sources are not searched at all. The queries in
         ``also`` are searched too and their rankings joined by ``merge``, as
         :meth:`Ranker.find` describes.
 
@@ -277,7 +279,13 @@ class Knowledge:
             raise ValueError(message)
         chosen = DEFAULT_VARIANT if variant is None else variant
         return await self._ranker.find(
-            query, limit=limit, variant=chosen, private=private, also=also, merge=merge
+            query,
+            limit=limit,
+            variant=chosen,
+            private=private,
+            sources=sources,
+            also=also,
+            merge=merge,
         )
 
     def check_variant(self, variant: Variant | None) -> None:

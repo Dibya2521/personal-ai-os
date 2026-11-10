@@ -438,6 +438,25 @@ async def test_withheld_counts_private_passages_among_the_best_limit(
     assert not any(p.private for p in found.passages)
 
 
+async def test_a_search_named_sources_finds_only_theirs(with_diary: Knowledge) -> None:
+    found = await with_diary.search("pet", limit=5, sources=frozenset({"notes"}))
+
+    assert citations(found) == [CAT_AT, SERVER_AT, SISTER_AT]
+    assert found.withheld == 0
+
+
+@pytest.mark.parametrize(("sources", "withheld"), [({"notes"}, 0), ({"diary"}, 2)])
+async def test_withheld_counts_only_the_named_sources(
+    with_diary: Knowledge, sources: set[str], withheld: int
+) -> None:
+    found = await with_diary.search(
+        "pet", limit=5, private=False, sources=frozenset(sources)
+    )
+
+    assert not any(p.source == "diary" for p in found.passages)
+    assert found.withheld == withheld
+
+
 async def test_only_private_passages_show_none_and_count_them(
     tmp_path: Path, db: Path
 ) -> None:

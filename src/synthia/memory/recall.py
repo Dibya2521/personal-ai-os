@@ -35,6 +35,10 @@ MAX_FOUND: Final = 8
 # Eight turns of two previews each stay near 6,000 characters: room for the
 # answer in a 32,768-token window.
 MAX_PREVIEW_CHARS: Final = 300
+FIRST_DAY: Final = date(1900, 1, 1)
+LAST_DAY: Final = date(9998, 12, 31)
+type Day = Annotated[date, Field(ge=FIRST_DAY, le=LAST_DAY)]
+"""A day a search may name; nearer year 1 or 9999 a time zone's offset overflows."""
 NOTHING_FOUND: Final = "nothing found in earlier conversations"
 RECALLED_PRIVATE: Final = "an earlier private conversation was recalled"
 
@@ -67,11 +71,25 @@ def surfaced(
     return shown
 
 
-def _preview(text: str) -> str:
+def preview(text: str) -> str:
+    """Return ``text`` on one line, cut to ``MAX_PREVIEW_CHARS``."""
     flat = " ".join(text.split())
     if len(flat) <= MAX_PREVIEW_CHARS:
         return flat
     return flat[:MAX_PREVIEW_CHARS] + "..."
+
+
+def day_range(
+    since: date | None, until: date | None, zone: tzinfo | None
+) -> tuple[datetime | None, datetime | None]:
+    """Return the start of day ``since`` and the end of day ``until`` in ``zone``."""
+    start = None if since is None else datetime.combine(since, time(), zone)
+    end = (
+        None
+        if until is None
+        else datetime.combine(until + timedelta(days=1), time(), zone)
+    )
+    return start, end
 
 
 def shown(turn: Remembered, zone: tzinfo | None) -> str:
@@ -79,8 +97,8 @@ def shown(turn: Remembered, zone: tzinfo | None) -> str:
     at = turn.at.astimezone(zone)
     lines = [
         f"{at:%A %Y-%m-%d %H:%M} (conversation {turn.conversation}, turn {turn.id})",
-        f"  person: {_preview(turn.question)}",
-        f"  SYNTHIA: {_preview(turn.answer)}",
+        f"  person: {preview(turn.question)}",
+        f"  SYNTHIA: {preview(turn.answer)}",
     ]
     if turn.tools:
         lines.append(f"  tools used: {', '.join(use.name for use in turn.tools)}")
@@ -107,11 +125,11 @@ def memory_tool(
             ),
         ],
         since: Annotated[
-            date | None,
+            Day | None,
             Field(description="the first day to include, YYYY-MM-DD"),
         ] = None,
         until: Annotated[
-            date | None,
+            Day | None,
             Field(description="the last day to include, YYYY-MM-DD"),
         ] = None,
     ) -> str:
@@ -122,12 +140,7 @@ def memory_tool(
         first. Returns up to eight turns, best match first, each with its day.
         """
         local = zone()
-        start = None if since is None else datetime.combine(since, time(), local)
-        end = (
-            None
-            if until is None
-            else datetime.combine(until + timedelta(days=1), time(), local)
-        )
+        start, end = day_range(since, until, local)
         found = await recall.find(query, since=start, until=end, limit=MAX_FOUND)
         turns = surfaced([r.turn for r in found], MAX_FOUND, can_keep_private)
         if not turns:

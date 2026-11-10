@@ -1,14 +1,16 @@
 """The person's decisions about what may leave this machine, and for whom.
 
-Each decision is a :class:`Consent`: a receiver (a remote provider), a scope
+Each decision is a :class:`Consent`: a receiver (a remote provider, or another
+agent that runs SYNTHIA as its MCP server), a scope
 (the conversation's text, or private memory and knowledge passages), yes or
 no, when, and whether it was answered in a chat or with ``synthia consent``.
 They are kept in ``SYNTHIA_HOME/consent.json``, the newest decision for a
 receiver and scope replacing the one before. No decision means no: the request
 stays local.
 
-A receiver is a provider's name and the address its requests go to, so a yes
-given to one address does not follow the name to another.
+A provider is its name and the address its requests go to, so a yes given to
+one address does not follow the name to another. A host is the name it was
+installed under; a provider and a host of one name are different receivers.
 """
 
 from __future__ import annotations
@@ -66,12 +68,24 @@ class Provider(BaseModel):
     url: Annotated[str, Field(min_length=1, max_length=MAX_URL_LENGTH)]
 
 
+class Host(BaseModel):
+    """Another agent running SYNTHIA as its MCP server, by its installed name."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    kind: Literal["host"] = "host"
+    name: Annotated[str, Field(pattern=PROVIDER_NAME)]
+
+
+type Receiver = Annotated[Provider | Host, Field(discriminator="kind")]
+
+
 class Consent(BaseModel):
     """One decision: may ``scope`` go to ``receiver``."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    receiver: Provider
+    receiver: Receiver
     scope: Scope
     granted: bool
     decided_at: AwareDatetime
@@ -132,7 +146,7 @@ class ConsentBook:
             )
             raise ConsentError(message) from None
 
-    def decision(self, receiver: Provider, scope: Scope) -> bool | None:
+    def decision(self, receiver: Provider | Host, scope: Scope) -> bool | None:
         """Return the recorded answer for ``scope`` to ``receiver``, None if none.
 
         Raises:
@@ -143,7 +157,7 @@ class ConsentBook:
                 return consent.granted
         return None
 
-    def granted(self, receiver: Provider, scope: Scope) -> bool:
+    def granted(self, receiver: Provider | Host, scope: Scope) -> bool:
         """Return whether ``scope`` may go to ``receiver``.
 
         Raises:
@@ -151,7 +165,7 @@ class ConsentBook:
         """
         return self.decision(receiver, scope) is True
 
-    def allows(self, receiver: Provider, scope: Scope) -> bool:
+    def allows(self, receiver: Provider | Host, scope: Scope) -> bool:
         """Return whether ``scope`` may go to ``receiver``; a damaged file is no."""
         try:
             return self.granted(receiver, scope)
@@ -161,7 +175,7 @@ class ConsentBook:
 
     def decide(
         self,
-        receiver: Provider,
+        receiver: Provider | Host,
         scope: Scope,
         *,
         granted: bool,
@@ -193,14 +207,17 @@ class ConsentBook:
         current: Provider | None = None,
         by: Literal["chat", "cli"],
     ) -> tuple[Consent, ...]:
-        """Refuse ``scope`` to every address ``name`` was decided for, and ``current``.
+        """Refuse ``scope`` to every address of provider ``name``, and ``current``.
 
         Raises:
             ConsentError: If the file is damaged or cannot be written.
         """
         earlier = self.consents()
-        receivers = dict.fromkeys(
-            c.receiver for c in earlier if (c.receiver.name, c.scope) == (name, scope)
+        receivers: dict[Provider | Host, None] = dict.fromkeys(
+            c.receiver
+            for c in earlier
+            if isinstance(c.receiver, Provider)
+            and (c.receiver.name, c.scope) == (name, scope)
         )
         if current is not None:
             receivers[current] = None

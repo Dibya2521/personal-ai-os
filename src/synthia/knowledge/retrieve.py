@@ -280,10 +280,16 @@ class Found:
 
 
 def _shown(
-    rows: Sequence[Row], scores: Mapping[int, float], *, limit: int, private: bool
+    rows: Sequence[Row],
+    scores: Mapping[int, float],
+    *,
+    limit: int,
+    private: bool,
+    sources: frozenset[str] | None,
 ) -> Found:
-    allowed = [row for row in rows if private or not row.private]
-    withheld = 0 if private else sum(row.private for row in rows[:limit])
+    visible = [row for row in rows if sources is None or row.source_name in sources]
+    allowed = [row for row in visible if private or not row.private]
+    withheld = 0 if private else sum(row.private for row in visible[:limit])
     return Found(
         tuple(
             Passage(
@@ -337,6 +343,7 @@ class Ranker:
         limit: int,
         variant: Variant,
         private: bool,
+        sources: frozenset[str] | None = None,
         also: Sequence[str] = (),
         merge: Merge = Merge.BEST,
     ) -> Found:
@@ -345,7 +352,9 @@ class Ranker:
         A query with no word the full-text index can match finds nothing,
         whatever the variant. A chunk removed since it was scored is left
         out. With ``private`` False, private passages are left out and
-        counted in :attr:`Found.withheld`. A reranked variant reorders the
+        counted in :attr:`Found.withheld`. With ``sources`` set, only those
+        sources' passages are found, and no other source is counted in
+        ``withheld``. A reranked variant reorders the
         first ``top`` chunks, private ones included, by the reranker's
         scores, which then are their passages' scores.
 
@@ -371,7 +380,7 @@ class Ranker:
         rows = await self._store.rows([ChunkId(chunk) for chunk in _ranked(scores)])
         if encoder is not None and variant.rerank is not None:
             rows = await _reranked(query, rows, scores, encoder, variant.rerank.top)
-        return _shown(rows, scores, limit=limit, private=private)
+        return _shown(rows, scores, limit=limit, private=private, sources=sources)
 
     async def _scores(
         self, query: str, variant: Variant, count: int

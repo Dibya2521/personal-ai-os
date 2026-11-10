@@ -43,6 +43,18 @@ All notable changes are recorded here. The format follows
   it: asked when nothing is saved, and after a saved no the chat starts local
   and says so, without asking again. The default, `local`, starts every chat
   local.
+- `synthia mcp serve --host <name>` lets another agent (Claude Code, Claude
+  Desktop, Codex) use SYNTHIA as an MCP server over stdio. It offers two
+  read-only tools, `knowledge_search` and `memory_search`, and nothing that
+  reaches outside or changes anything. A host sees only what the person lists
+  for it in `SYNTHIA_HOME/mcp_hosts.toml` (`[hosts.<name>]` with `collections`,
+  the knowledge sources by name, and `memory = true`); a host not listed sees
+  nothing. Private passages, and turns of chats that held private text, go to
+  a host only after `synthia consent grant --host <name> --private` on the
+  person's own terminal, never asked through the host; `synthia consent revoke
+  --host <name>` takes them back from the next call, and `synthia consent list`
+  shows what each host sees. The searches run in the daemon, started at the
+  first one.
 
 ### Fixed
 

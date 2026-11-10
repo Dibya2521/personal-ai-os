@@ -76,7 +76,8 @@ class Peer:
         """Take one whole message from the other side."""
         try:
             parsed: object = json.loads(message)
-        except ValueError:
+        except (ValueError, RecursionError):
+            # Nesting a few thousand deep overflows the decoder's stack.
             logger.warning("skipped a message that is not JSON: %r", message[:200])
             return
         if not isinstance(parsed, dict):

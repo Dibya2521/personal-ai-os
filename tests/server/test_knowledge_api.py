@@ -1,4 +1,5 @@
 import asyncio
+import datetime as dt
 import json
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -25,13 +26,16 @@ from synthia.kernel.config import Settings
 from synthia.kernel.jsonrpc import RpcError
 from synthia.knowledge.deep import NO_LOCAL_MODEL, NO_REWRITES
 from synthia.knowledge.model import SourceKind
+from synthia.memory.store import MEMORY_FILE, MemoryStore, Turn
 from synthia.persona.library import PersonaLibrary
 from synthia.server.api import (
     ANSWER_FAILED,
     INVALID_PARAMS,
     KNOWLEDGE_REFUSED,
     NO_KNOWLEDGE,
+    NO_MEMORY,
     NOT_INDEXING,
+    NOT_REMEMBERING,
 )
 from synthia.server.daemon import serve
 from synthia.server.host import Host, publish_route
@@ -158,6 +162,84 @@ async def test_what_knowledge_or_the_params_refuse_is_an_error_with_its_code(
     assert [(e.code, str(e)) for e in relative] == 2 * [
         (INVALID_PARAMS, "root: Value error, must be an absolute path")
     ]
+
+
+async def test_a_search_can_leave_out_private_sources_and_keep_to_named_ones(
+    tmp_path: Path, notes: Path
+) -> None:
+    public = planted(tmp_path / "public", {"bird.txt": "a kestrel over the field\n"})
+    asked: dict[str, object] = {"query": "kestrel", "variant": "words"}
+    narrowed: list[dict[str, object]] = [
+        {"sources": ["public"]},
+        {"private": False},
+        {"private": False, "sources": ["notes"]},
+    ]
+    with private_daemon(keyed(tmp_path), embedder=toy_embedder):
+        await ask_daemon(
+            tmp_path, "knowledge_add", {"root": str(notes), "private": True}
+        )
+        await ask_daemon(tmp_path, "knowledge_add", {"root": str(public)})
+        await ask_daemon(tmp_path, "knowledge_index", {})
+        searches = [
+            searched_from(await ask_daemon(tmp_path, "knowledge_search", asked | more))
+            for more in narrowed
+        ]
+        too_many = await refused(
+            tmp_path,
+            "knowledge_search",
+            asked | {"sources": [str(n) for n in range(257)]},
+        )
+
+    assert [([p.citation for p in s.passages], s.withheld) for s in searches] == [
+        (["public/bird.txt:1"], 0),
+        (["public/bird.txt:1"], 1),
+        ([], 1),
+    ]
+    assert too_many.code == INVALID_PARAMS
+
+
+async def test_memory_is_searched_with_confined_turns_left_out_when_asked(
+    tmp_path: Path,
+) -> None:
+    store = MemoryStore(tmp_path / MEMORY_FILE)
+    for day, confined in ((1, False), (5, True)):
+        at = dt.datetime(2026, 11, day, 12, tzinfo=dt.UTC)
+        turn = Turn(
+            "where is the kestrel",
+            f"on day {day}",
+            at,
+            "synthia",
+            "local",
+            "m",
+            confined=confined,
+        )
+        await store.add_turn(await store.begin_conversation("synthia", at), turn)
+    asked: list[dict[str, object]] = [
+        {"query": "kestrel"},
+        {"query": "kestrel", "private": False},
+        {"query": "kestrel", "since": "2026-11-03"},
+    ]
+    with private_daemon(keyed(tmp_path), embedder=toy_embedder):
+        searches = [
+            cast("dict[str, object]", await ask_daemon(tmp_path, "memory_search", a))
+            for a in asked
+        ]
+
+    answers = [
+        [t["answer"] for t in cast("list[dict[str, object]]", s["turns"])]
+        for s in searches
+    ]
+    assert sorted(cast("list[str]", answers[0])) == ["on day 1", "on day 5"]
+    assert answers[1:] == [["on day 1"], ["on day 5"]]
+    assert [s["withheld"] for s in searches] == [0, 1, 0]
+
+
+async def test_a_daemon_whose_memory_cannot_open_says_so(tmp_path: Path) -> None:
+    (tmp_path / MEMORY_FILE).mkdir()
+    with private_daemon(keyed(tmp_path), embedder=toy_embedder):
+        error = await refused(tmp_path, "memory_search", {"query": "kestrel"})
+
+    assert (error.code, str(error)) == (NO_MEMORY, NOT_REMEMBERING)
 
 
 async def indexed_daemon_search(

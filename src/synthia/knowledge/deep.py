@@ -187,12 +187,13 @@ async def deep_search(  # noqa: PLR0913 - a search's whole request, and its cloc
     limit: int = SEARCH_LIMIT,
     variant: Variant | None = None,
     private: bool = True,
+    sources: frozenset[str] | None = None,
     merge: Merge = Merge.BEST,
     clock: Callable[[], float] = time.perf_counter,
 ) -> Deep:
     """Search ``knowledge`` for ``question`` and for what ``model`` expands it to.
 
-    ``limit``, ``variant`` and ``private`` are as :meth:`Knowledge.search`
+    ``limit``, ``variant``, ``private`` and ``sources`` are as :meth:`Knowledge.search`
     takes them; ``merge`` joins the rankings. ``variant`` is checked before
     the model is asked, so a wrong one costs no generation.
 
@@ -215,6 +216,7 @@ async def deep_search(  # noqa: PLR0913 - a search's whole request, and its cloc
         limit=limit,
         variant=variant,
         private=private,
+        sources=sources,
         also=() if expansion is None else expansion.also(),
         merge=merge,
     )

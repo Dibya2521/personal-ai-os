@@ -14,6 +14,7 @@ from synthia.kernel.consent import (
     MAX_CONSENTS,
     ConsentBook,
     ConsentError,
+    Host,
     Provider,
     Scope,
 )
@@ -109,6 +110,19 @@ def test_a_revoke_refuses_every_address_of_the_name(tmp_path: Path) -> None:
     assert len(consents.consents()) == 5
 
 
+def test_a_host_and_a_provider_of_one_name_are_decided_apart(tmp_path: Path) -> None:
+    consents = book(tmp_path)
+    host = Host(name="openrouter")
+    consents.decide(host, Scope.PRIVATE, granted=True, by="cli")
+    consents.decide(OPENROUTER, Scope.PRIVATE, granted=True, by="cli")
+
+    consents.revoke("openrouter", Scope.PRIVATE, by="cli")
+
+    assert book(tmp_path).decision(host, Scope.PRIVATE) is True
+    assert book(tmp_path).decision(OPENROUTER, Scope.PRIVATE) is False
+    assert book(tmp_path).decision(Host(name="codex"), Scope.PRIVATE) is None
+
+
 def test_revoking_a_name_never_decided_writes_nothing(tmp_path: Path) -> None:
     assert book(tmp_path).revoke("openrouter", Scope.CHAT, by="cli") == ()
     assert not (tmp_path / CONSENT_FILE).exists()
@@ -118,7 +132,7 @@ def test_a_full_book_refuses_one_more_decision(tmp_path: Path) -> None:
     (tmp_path / CONSENT_FILE).write_bytes(
         file_of(
             *(
-                record(receiver={"name": f"p{i}", "url": OPENROUTER.url})
+                record(receiver=OPENROUTER.model_dump() | {"name": f"p{i}"})
                 for i in range(MAX_CONSENTS)
             )
         )
@@ -156,6 +170,10 @@ DAMAGED = {
         record(receiver={"kind": "provider", "name": "-x", "url": "u"})
     ),
     "no address": file_of(record(receiver={"kind": "provider", "name": "openrouter"})),
+    "no kind": file_of(record(receiver={"name": "openrouter", "url": OPENROUTER.url})),
+    "a host with an address": file_of(
+        record(receiver={"kind": "host", "name": "codex", "url": OPENROUTER.url})
+    ),
     "naive time": file_of(record(decided_at="2026-11-03T09:30:00")),
     "granted as text": file_of(record(granted="true")),
     "granted as a number": file_of(record(granted=1)),

@@ -7,10 +7,11 @@ import json
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, NoReturn
 
 import httpx
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
 
@@ -39,6 +40,8 @@ from synthia.interfaces.daemon_client import (
     sources_from,
     stop_running,
 )
+from synthia.interfaces.mcp_hosts import HOSTS_FILE, load_hosts
+from synthia.interfaces.mcp_server import serve_host
 from synthia.interfaces.trace_view import build_tree, summary
 from synthia.interfaces.usage_report import budget_report
 from synthia.kernel.config import (
@@ -49,7 +52,7 @@ from synthia.kernel.config import (
     load_settings,
     unknown_variables,
 )
-from synthia.kernel.consent import ConsentBook, ConsentError, Provider, Scope
+from synthia.kernel.consent import ConsentBook, ConsentError, Host, Provider, Scope
 from synthia.kernel.errors import ConfigError, SynthiaError
 from synthia.kernel.jsonrpc import RpcError
 from synthia.kernel.keys import KeyStore, SystemCredentials
@@ -101,12 +104,21 @@ keys_app = typer.Typer(
 app.add_typer(keys_app, name="keys")
 
 consent_app = typer.Typer(
-    help="Decide which remote providers may receive what you type in chats.",
+    help="Decide which remote providers may receive what you type in chats, and "
+    "which agents using SYNTHIA may receive private text.",
     no_args_is_help=True,
 )
 app.add_typer(consent_app, name="consent")
 
+mcp_app = typer.Typer(
+    help="Let another agent (Claude Code, Claude Desktop, Codex) search what "
+    "SYNTHIA holds.",
+    no_args_is_help=True,
+)
+app.add_typer(mcp_app, name="mcp")
+
 CHAT_LOG = Path("logs") / "synthia.log"
+MCP_LOG = Path("logs") / "mcp-serve.log"
 SHOWN_BODY_LINES = 8
 INDENT = "    "
 SECONDS_PER_MINUTE = 60
@@ -637,16 +649,49 @@ def keys_remove(
     typer.echo(said)
 
 
+@mcp_app.command("serve")
+def mcp_serve(
+    *,
+    host: Annotated[
+        str,
+        typer.Option(
+            help="The name the agent was installed under; SYNTHIA_HOME/mcp_hosts.toml "
+            "and synthia consent decide what it may see."
+        ),
+    ],
+) -> None:
+    """Serve knowledge_search and memory_search to an agent over stdio (MCP).
+
+    The agent starts this itself. Both tools only read, on this machine; a host
+    sees the collections and memory mcp_hosts.toml lists for it, and private
+    text only after synthia consent grant --host <host> --private. The daemon
+    runs the searches and is started at the first one. Standard output carries
+    only MCP messages; logs go to SYNTHIA_HOME/logs/mcp-serve.log.
+    """
+    settings = _settings(stored_keys=False)
+    receiver = _host(host)
+    stdout = sys.stdout.buffer
+
+    def write(data: bytes) -> None:
+        stdout.write(data)
+        stdout.flush()
+
+    with logging_to(settings, settings.home / MCP_LOG):
+        asyncio.run(serve_host(settings.home, receiver, sys.stdin.buffer, write))
+
+
 @consent_app.command("list")
 def consent_list() -> None:
-    """Say, for each provider, whether chats may go to it and when that was decided.
+    """Say, for each provider and host, what may go to it and when that was decided.
 
-    Exits 2 when the consent file cannot be read or is damaged.
+    Exits 2 when the consent file or mcp_hosts.toml cannot be read or is damaged.
     """
     settings = _settings(stored_keys=False)
     try:
         lines = consent_commands.consent_lines(
-            ConsentBook(settings.home), _receivers(settings)
+            ConsentBook(settings.home),
+            _receivers(settings),
+            load_hosts(settings.home / HOSTS_FILE),
         )
     except ConfigError as error:
         typer.echo(f"error: {error}", err=True)
@@ -658,26 +703,40 @@ def consent_list() -> None:
 @consent_app.command("grant")
 def consent_grant(
     provider: Annotated[
-        str, typer.Argument(help="The provider, as synthia providers names it.")
-    ],
+        str | None,
+        typer.Argument(help="The provider, as synthia providers names it."),
+    ] = None,
     *,
+    host: Annotated[
+        str | None,
+        typer.Option(
+            help="An agent running SYNTHIA as its MCP server, instead of a "
+            "provider; needs --private."
+        ),
+    ] = None,
     private: Annotated[
         bool,
         typer.Option(
             "--private",
-            help="Also let private memory and file passages go with the chat.",
+            help="Also let private memory and file passages go with the chat; "
+            "for a host, let them go to it.",
         ),
     ] = False,
 ) -> None:
-    """Let chats go to a provider once remote is on.
+    """Let chats go to a provider once remote is on, or private text to a host.
 
     Exits 2 when the provider is unknown or the consent file cannot be written.
     """
     settings = _settings(stored_keys=False)
+    book = ConsentBook(settings.home)
+    chosen = _chosen(provider, host, private=private)
     try:
-        said = consent_commands.grant(
-            ConsentBook(settings.home), provider, _receivers(settings), private=private
-        )
+        if isinstance(chosen, Host):
+            said = consent_commands.grant_host(book, chosen)
+        else:
+            said = consent_commands.grant(
+                book, chosen, _receivers(settings), private=private
+            )
     except ConfigError as error:
         typer.echo(f"error: {error}", err=True)
         raise typer.Exit(doctor_checks.Status.FAIL) from None
@@ -686,8 +745,14 @@ def consent_grant(
 
 @consent_app.command("revoke")
 def consent_revoke(
-    provider: Annotated[str, typer.Argument(help="The provider to keep chats from.")],
+    provider: Annotated[
+        str | None, typer.Argument(help="The provider to keep chats from.")
+    ] = None,
     *,
+    host: Annotated[
+        str | None,
+        typer.Option(help="An agent to keep private text from, instead of a provider."),
+    ] = None,
     private: Annotated[
         bool,
         typer.Option(
@@ -695,11 +760,14 @@ def consent_revoke(
         ),
     ] = False,
 ) -> None:
-    """Keep every chat away from a provider, from its next request.
+    """Keep every chat away from a provider, or private text from a host.
 
+    Takes effect from the provider's next request or the host's next call.
     Exits 2 when the consent file cannot be written.
     """
     settings = _settings(stored_keys=False)
+    chosen = _chosen(provider, host, private=True)
+    book = ConsentBook(settings.home)
     try:
         receivers = _receivers(settings)
     except ConfigError:
@@ -707,8 +775,10 @@ def consent_revoke(
         # the consent file is still refused.
         receivers = {}
     try:
-        said = consent_commands.revoke(
-            ConsentBook(settings.home), provider, receivers, private=private
+        said = (
+            consent_commands.revoke_host(book, chosen)
+            if isinstance(chosen, Host)
+            else consent_commands.revoke(book, chosen, receivers, private=private)
         )
     except ConfigError as error:
         typer.echo(f"error: {error}", err=True)
@@ -744,6 +814,36 @@ def _receivers(settings: Settings) -> dict[str, Provider]:
         name: provider.receiver
         for name, provider in load_providers(settings.home).items()
     }
+
+
+def _fail(message: str) -> NoReturn:
+    typer.echo(f"error: {message}", err=True)
+    raise typer.Exit(doctor_checks.Status.FAIL)
+
+
+def _host(name: str, *, private: bool = True) -> Host:
+    """Return the host ``name``; exit 2 on a bad name, or without ``private``."""
+    if not private:
+        _fail(
+            "a host is granted only private text, so add --private; what it may "
+            f"see otherwise is set in SYNTHIA_HOME/{HOSTS_FILE}"
+        )
+    try:
+        return Host(name=name)
+    except ValidationError:
+        _fail(
+            "a host name is 1 to 32 lower-case letters, digits and hyphens, "
+            "starting with a letter or digit"
+        )
+
+
+def _chosen(provider: str | None, host: str | None, *, private: bool) -> str | Host:
+    """Return the provider named, or the host; exit 2 unless exactly one is named."""
+    if host is not None and provider is None:
+        return _host(host, private=private)
+    if provider is not None and host is None:
+        return provider
+    _fail("name a provider, or a host with --host, not both")
 
 
 def _settings(*, stored_keys: bool = True) -> Settings:

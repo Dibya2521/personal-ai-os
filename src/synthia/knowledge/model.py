@@ -15,6 +15,10 @@ if TYPE_CHECKING:
     from pathlib import Path, PurePosixPath
 
 NOTE_SUFFIXES: Final = (".md", ".markdown")
+# A source is named after its folder, and a folder name is at most 255 characters.
+MAX_SOURCE_NAME: Final = 255
+MAX_SOURCES: Final = 256
+"""The most sources one search or one host may name."""
 
 SourceId = NewType("SourceId", int)
 DocumentId = NewType("DocumentId", int)
