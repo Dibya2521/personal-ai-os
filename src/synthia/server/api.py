@@ -67,6 +67,15 @@ Methods, client to daemon:
   and ``withheld``: with ``private`` false (default true) confined turns are
   left out and counted there. A daemon whose memory could not be opened
   answers error ``-32006``.
+- ``host_chat`` {``text``: 1 to 8000 characters, ``sources``, ``private``,
+  ``memory``} answers another agent's message in a conversation of its own,
+  closed once answered, and returns ``answer`` and the ``sources`` it cited.
+  That conversation reads only the clock, the calculator, the named
+  ``sources`` (none when empty) and, with ``memory``, earlier conversations;
+  private passages and turns of private chats only with ``private``. Nothing
+  in it is remembered or traced, nothing it asks is put to the client, and
+  it runs only on the local model, within the agent's deadline. An answer
+  that failed, or a local model that cannot answer, is error ``-32001``.
 - ``stop`` {} stops the daemon.
 
 Request, daemon to client: ``approve`` {``tool``, ``arguments``, ``confined``}
@@ -94,22 +103,21 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationErr
 from synthia import __version__
 from synthia.agent.loop import ToolFinished
 from synthia.agent.plan import PlanAnswerBegun, Planned, PlanStepBegun
-from synthia.gateway.errors import GatewayError
-from synthia.gateway.types import Reasoning
+from synthia.gateway.errors import GatewayError, LocalUnavailableError
+from synthia.gateway.types import ChatChunk, Reasoning
 from synthia.kernel.jsonrpc import ConnectionClosedError, Peer, RpcError
 from synthia.knowledge.deep import NO_REWRITES, deep_search
 from synthia.knowledge.model import MAX_SOURCE_NAME, MAX_SOURCES
 from synthia.knowledge.retrieve import Variant, VariantError
 from synthia.knowledge.service import SEARCH_LIMIT, KnowledgeError
 from synthia.memory.recall import MAX_FOUND, Day, day_range, local_zone
-from synthia.server.host import CURRENT_ROUTES
+from synthia.server.host import CURRENT_ROUTES, Shared
 from synthia.server.session import ImageError, TurnReport
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from synthia.agent.tools import Tool
-    from synthia.gateway.types import ChatChunk
     from synthia.kernel.consent import Provider
     from synthia.kernel.jsonrpc import Method, Params
     from synthia.knowledge.deep import Deep
@@ -138,6 +146,7 @@ NO_MEMORY: Final = -32006
 NOT_REMEMBERING: Final = "this daemon remembers nothing: its memory could not be opened"
 MAX_SEARCH_LIMIT: Final = 50
 MAX_QUERY_CHARS: Final = 2000
+MAX_CHAT_CHARS: Final = 8000
 APPROVE: Final = "approve"
 CONSENT: Final = "consent"
 
@@ -252,6 +261,17 @@ class MemorySearchParams(_Params):
     until: Day | None = None
     limit: int = Field(default=MAX_FOUND, ge=1, le=MAX_FOUND)
     private: bool = True
+
+
+class HostChatParams(_Params):
+    """Another agent's message, and what the conversation answering it may read."""
+
+    text: str = Field(min_length=1, max_length=MAX_CHAT_CHARS)
+    sources: frozenset[
+        Annotated[str, Field(min_length=1, max_length=MAX_SOURCE_NAME)]
+    ] = Field(default=frozenset(), max_length=MAX_SOURCES)
+    private: bool = False
+    memory: bool = False
 
 
 def checked[P: _Params](kind: type[P], params: Params) -> P:
@@ -406,6 +426,7 @@ class Served:
     ) -> None:
         self.peer = Peer(send, methods=self._methods())
         self.conversation = host.conversation(self._approve, self._ask_consent)
+        self._host = host
         self._on_stop = on_stop
         self._sessions = sessions
         self._warnings = host.warnings
@@ -448,6 +469,7 @@ class Served:
             "knowledge_index": self._knowledge_index,
             "knowledge_search": self._knowledge_search,
             "memory_search": self._memory_search,
+            "host_chat": self._host_chat,
             "stop": self._stop,
         }
 
@@ -597,6 +619,38 @@ class Served:
         return {
             "turns": [turn_of(turn) for turn in shown],
             "withheld": len(turns) - len(shown),
+        }
+
+    async def _host_chat(self, params: Params) -> object:
+        asked = checked(HostChatParams, params)
+        shared = Shared(asked.sources, private=asked.private, memory=asked.memory)
+        talk = self._host.limited_conversation(shared)
+        answer: list[str] = []
+        report: TurnReport | None = None
+        try:
+            with self._activity.turn():
+                CURRENT_ROUTES.set(talk.session.routes)
+                async with aclosing(talk.turn(asked.text)) as steps:
+                    async for step in steps:
+                        if isinstance(step, TurnReport):
+                            report = step
+                        elif isinstance(step, ToolFinished):
+                            # Words before a tool call are not the answer.
+                            answer.clear()
+                        elif isinstance(step, ChatChunk):
+                            answer.append(step.text)
+        except LocalUnavailableError as error:
+            message = (
+                f"no answer: chat runs only on this machine's local model: {error}"
+            )
+            raise RpcError(ANSWER_FAILED, message) from None
+        except GatewayError as error:
+            raise RpcError(ANSWER_FAILED, f"no answer: {error}") from None
+        finally:
+            await talk.close()
+        return {
+            "answer": "".join(answer),
+            "sources": [] if report is None else list(report.sources),
         }
 
     async def _stop(self, params: Params) -> object:

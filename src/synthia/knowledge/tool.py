@@ -97,13 +97,18 @@ def _result(found: Found, links: Mapping[ChunkId, Sequence[LinkTarget]]) -> str:
 
 
 def knowledge_tool(
-    knowledge: Knowledge, *, can_keep_private: Callable[[], bool], model: ChatModel
+    knowledge: Knowledge,
+    *,
+    can_keep_private: Callable[[], bool],
+    model: ChatModel,
+    sources: frozenset[str] | None = None,
 ) -> FunctionTool:
     """Return the tool that searches ``knowledge``.
 
     ``can_keep_private`` says whether the chat could go on once it holds
     private text, which decides whether private passages are shown. ``model``, the
-    gateway's, writes a deep search's rewrites.
+    gateway's, writes a deep search's rewrites. ``sources`` set, only those
+    sources are searched.
     """
 
     async def search_knowledge(
@@ -115,12 +120,14 @@ def knowledge_tool(
         show_private = latch is not None and can_keep_private()
         note = ""
         if DEEP.get():
-            deep = await deep_search(knowledge, model, query, private=show_private)
+            deep = await deep_search(
+                knowledge, model, query, private=show_private, sources=sources
+            )
             found = deep.found
             if deep.expansion is None:
                 note = f"\n\n{NO_REWRITES}"
         else:
-            found = await knowledge.search(query, private=show_private)
+            found = await knowledge.search(query, private=show_private, sources=sources)
         private = dict.fromkeys(p.source for p in found.passages if p.private)
         if latch is not None and private:
             latch.confine(_private_read(list(private)))

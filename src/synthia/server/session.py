@@ -212,6 +212,7 @@ class ChatSession:
         trace: Trace | None = None,
         memory: Remembering | None = None,
         summarizer: Summarizer | None = None,
+        limits: Limits = CHAT_LIMITS,
     ) -> None:
         """Start an empty conversation as ``persona``.
 
@@ -221,7 +222,8 @@ class ChatSession:
         records every step of every turn, including turns that fail;
         ``memory`` keeps each finished turn. Turns that no longer fit in the
         model's window leave it, and ``summarizer`` folds them into a summary
-        the model keeps seeing; without one they are only dropped.
+        the model keeps seeing; without one they are only dropped. ``limits``
+        bound each turn's run; a chat's has no deadline.
 
         Raises:
             PersonaError: If there is no such persona.
@@ -232,6 +234,7 @@ class ChatSession:
         self._approver = approver
         self._trace = trace
         self._summarizer = summarizer
+        self._limits = limits
         self.memory = memory
         self.window = ContextWindow(model.info.context_window)
         self.summary = ""
@@ -520,7 +523,7 @@ class ChatSession:
         agent = Agent(
             self._model,
             self.tools,
-            CHAT_LIMITS,
+            self._limits,
             policy=self.policy,
             approver=self._approver,
         )

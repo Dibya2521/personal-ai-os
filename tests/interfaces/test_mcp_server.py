@@ -24,10 +24,13 @@ from synthia.interfaces.mcp_hosts import (
     policy_of,
 )
 from synthia.interfaces.mcp_server import (
+    CHAT,
+    HOST_CHAT,
     INVALID_PARAMS,
     INVALID_REQUEST,
     KNOWLEDGE_SEARCH,
     MAX_CALLS_IN_FLIGHT,
+    MAX_CHATS_IN_FLIGHT,
     MAX_REQUEST_BYTES,
     MAX_RUNNING_CALLS,
     MEMORY_SEARCH,
@@ -47,6 +50,7 @@ from synthia.mcp.client import (
     McpServer,
     ServerConfig,
 )
+from synthia.server.api import MAX_CHAT_CHARS
 from tests.timing import HANG_TIMEOUT_S
 
 CODEX = Host(name="codex")
@@ -114,16 +118,20 @@ async def test_initialize_answers_the_hosts_version_when_it_speaks_it() -> None:
     assert known["capabilities"] == {"tools": {"listChanged": False}}
 
 
-async def test_only_the_two_read_only_searches_are_listed() -> None:
+async def test_only_the_two_searches_and_chat_are_listed() -> None:
     listed = cast(
         "dict[str, list[dict[str, object]]]",
         await Exposure(fixed(), StandIn()).methods()["tools/list"]({}),
     )
 
     names = [tool["name"] for tool in listed["tools"]]
-    assert names == [KNOWLEDGE_SEARCH, MEMORY_SEARCH]
-    schema = cast("dict[str, dict[str, object]]", listed["tools"][0]["inputSchema"])
-    assert set(schema["properties"]) == {"query", "limit"}
+    assert names == [KNOWLEDGE_SEARCH, MEMORY_SEARCH, CHAT]
+    schemas = [
+        cast("dict[str, dict[str, object]]", tool["inputSchema"])
+        for tool in listed["tools"]
+    ]
+    assert set(schemas[0]["properties"]) == {"query", "limit"}
+    assert set(schemas[2]["properties"]) == {"message"}
 
 
 @pytest.mark.parametrize(
@@ -140,6 +148,10 @@ async def test_only_the_two_read_only_searches_are_listed() -> None:
         (MEMORY_SEARCH, {"since": "last week"}),
         (MEMORY_SEARCH, {"until": "9999-12-31"}),
         (MEMORY_SEARCH, {"since": "0001-01-01"}),
+        (CHAT, {"message": ""}),
+        (CHAT, {"message": "x" * (MAX_CHAT_CHARS + 1)}),
+        (CHAT, {"message": "hi", "sources": ["diary"]}),
+        (CHAT, {"message": "hi", "private": True}),
     ],
 )
 async def test_another_tool_or_bad_arguments_are_refused_before_the_daemon(
@@ -205,6 +217,113 @@ async def test_a_private_grant_asks_for_private_passages() -> None:
     ((_, params),) = daemon.asked
     assert params["private"] is True
     assert "nothing found" in text_of(result)
+
+
+async def test_chat_is_answered_seeing_only_what_the_host_is_shown() -> None:
+    daemon = StandIn(
+        {HOST_CHAT: {"answer": " Miso is your cat. ", "sources": ["notes/a.md:1-2"]}}
+    )
+    exposure = Exposure(fixed(collections=("notes", "code"), memory=True), daemon)
+
+    result = await call(exposure, CHAT, {"message": "what is my cat called?"})
+
+    assert daemon.asked == [
+        (
+            HOST_CHAT,
+            {
+                "text": "what is my cat called?",
+                "sources": ["code", "notes"],
+                "private": False,
+                "memory": True,
+            },
+        )
+    ]
+    assert result["isError"] is False
+    assert text_of(result).split("\n")[1:5] == [
+        "Miso is your cat.",
+        "",
+        "sources:",
+        "- notes/a.md:1-2",
+    ]
+
+
+async def test_a_chat_with_nothing_shared_still_runs_and_sees_nothing() -> None:
+    daemon = StandIn({HOST_CHAT: {"answer": "", "sources": []}})
+    exposure = Exposure(fixed(private=True), daemon)
+
+    result = await call(exposure, CHAT, {"message": "hello"})
+
+    ((_, params),) = daemon.asked
+    assert params == {"text": "hello", "sources": [], "private": True, "memory": False}
+    assert text_of(result).split("\n")[1] == "no answer"
+
+
+async def test_chats_wait_in_their_own_lane_and_every_search_stays_free() -> None:
+    release = asyncio.Event()
+    chatting: list[str] = []
+
+    class SlowChat(StandIn):
+        async def request(self, method: str, params: Params) -> object:
+            if method == HOST_CHAT:
+                chatting.append(method)
+                await release.wait()
+            return await super().request(method, params)
+
+    daemon = SlowChat(
+        {
+            HOST_CHAT: {"answer": "hi", "sources": []},
+            KNOWLEDGE_SEARCH: {"passages": [], "withheld": 0},
+        }
+    )
+    exposure = Exposure(fixed(collections=("notes",)), daemon)
+
+    chats = [
+        asyncio.create_task(call(exposure, CHAT, {"message": "hi"}))
+        for _ in range(MAX_CHATS_IN_FLIGHT)
+    ]
+    for _ in range(20):
+        await asyncio.sleep(0)
+    with pytest.raises(RpcError) as busy:
+        await asyncio.wait_for(call(exposure, CHAT, {"message": "hi"}), 5)
+    searches = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                call(exposure, KNOWLEDGE_SEARCH, {"query": "cat"})
+                for _ in range(MAX_CALLS_IN_FLIGHT)
+            )
+        ),
+        5,
+    )
+    chats_running = list(chatting)
+    release.set()
+    await asyncio.wait_for(asyncio.gather(*chats), HANG_TIMEOUT_S)
+
+    assert busy.value.code == SERVER_BUSY
+    assert "2 chats are already waiting or running" in str(busy.value)
+    assert all(search["isError"] is False for search in searches)
+    assert chats_running == [HOST_CHAT]
+
+
+@pytest.mark.parametrize(
+    ("name", "method", "arguments", "reply"),
+    [
+        (CHAT, HOST_CHAT, {"message": "hi"}, {"sources": "ab"}),
+        (CHAT, HOST_CHAT, {"message": "hi"}, ["hi"]),
+        (MEMORY_SEARCH, MEMORY_SEARCH, {"query": "cat"}, {"turns": "x", "withheld": 0}),
+        (MEMORY_SEARCH, MEMORY_SEARCH, {"query": "cat"}, {"turns": [], "withheld": -1}),
+    ],
+)
+async def test_a_daemon_reply_of_another_shape_is_a_tool_error(
+    name: str, method: str, arguments: object, reply: object
+) -> None:
+    exposure = Exposure(fixed(memory=True), StandIn({method: reply}))
+
+    result = await call(exposure, name, arguments)
+
+    assert result["isError"] is True
+    assert text_of(result) == (
+        f"{name} failed: the daemon answered in a shape this server does not know"
+    )
 
 
 async def test_memory_turns_are_shown_by_day_with_confined_ones_counted() -> None:
@@ -469,7 +588,7 @@ async def test_calls_that_find_no_daemon_start_one_together(
     assert starts == [tmp_path]
 
 
-async def test_our_own_client_sees_two_tools_and_nothing_else_runs(
+async def test_our_own_client_sees_three_tools_and_nothing_else_runs(
     tmp_path: Path,
 ) -> None:
     config = ServerConfig(
@@ -489,6 +608,10 @@ async def test_our_own_client_sees_two_tools_and_nothing_else_runs(
     finally:
         await asyncio.wait_for(server.stop(), HANG_TIMEOUT_S)
 
-    assert names == ["synthia__knowledge_search", "synthia__memory_search"]
+    assert names == [
+        "synthia__knowledge_search",
+        "synthia__memory_search",
+        "synthia__chat",
+    ]
     assert "no collection is shared with codex" in found
     assert not (tmp_path / "daemon.json").exists()

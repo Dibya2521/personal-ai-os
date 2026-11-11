@@ -660,13 +660,14 @@ def mcp_serve(
         ),
     ],
 ) -> None:
-    """Serve knowledge_search and memory_search to an agent over stdio (MCP).
+    """Serve knowledge_search, memory_search and chat to an agent over stdio (MCP).
 
-    The agent starts this itself. Both tools only read, on this machine; a host
+    The agent starts this itself. Every tool only reads, on this machine; a host
     sees the collections and memory mcp_hosts.toml lists for it, and private
-    text only after synthia consent grant --host <host> --private. The daemon
-    runs the searches and is started at the first one. Standard output carries
-    only MCP messages; logs go to SYNTHIA_HOME/logs/mcp-serve.log.
+    text only after synthia consent grant --host <host> --private. chat is
+    answered from only what the host may see, and is never remembered. The
+    daemon runs the calls and is started at the first one. Standard output
+    carries only MCP messages; logs go to SYNTHIA_HOME/logs/mcp-serve.log.
     """
     settings = _settings(stored_keys=False)
     receiver = _host(host)

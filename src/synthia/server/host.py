@@ -24,13 +24,17 @@ from typing import TYPE_CHECKING, Final
 
 import httpx
 
+from synthia.agent.loop import Limits
+from synthia.agent.tools import Toolbox
 from synthia.agent.trace import IndexCounts, Trace
 from synthia.kernel.errors import ConfigError
 from synthia.knowledge.service import Knowledge
 from synthia.knowledge.store import KNOWLEDGE_FILE
+from synthia.knowledge.tool import knowledge_tool
 from synthia.mcp.client import MCP_CONFIG, MCP_LOGS, McpServers, load_config
 from synthia.memory.facts import FactKeeper, FactLearning
 from synthia.memory.hybrid import Recall
+from synthia.memory.recall import memory_tool
 from synthia.memory.remembering import Remembering
 from synthia.memory.store import MEMORY_FILE, MemoryStore
 from synthia.memory.summary import summarize
@@ -41,6 +45,7 @@ from synthia.server.conversation import AskConsent, Conversation, never_asked
 from synthia.server.session import ChatSession, LastRoute
 from synthia.server.upkeep import Activity
 from synthia.tools import local_tools, outside_tools
+from synthia.tools.basic import calculator_tool, clock_tool
 
 if TYPE_CHECKING:
     from collections.abc import (
@@ -52,7 +57,7 @@ if TYPE_CHECKING:
     )
 
     from synthia.agent.policy import Approver
-    from synthia.agent.tools import Tool, Toolbox
+    from synthia.agent.tools import Tool
     from synthia.gateway.assemble import Gateway
     from synthia.gateway.protocol import ChatModel
     from synthia.kernel.bus import Event
@@ -68,6 +73,8 @@ PERSONAS_DIR: Final = Path("personas")
 # OpenRouter sends keep-alive comments while a model thinks, so a minute of
 # silence mid-stream means the connection is gone, not that the model is slow.
 TIMEOUT: Final = httpx.Timeout(60.0, connect=10.0)
+# Nobody watches another agent's chat to stop it, so the agent's own deadline holds.
+HOST_CHAT_LIMITS: Final = Limits()
 CURRENT_ROUTES: Final[ContextVar[LastRoute | None]] = ContextVar(
     "current_routes", default=None
 )
@@ -310,3 +317,52 @@ class Host:
             ),
         )
         return Conversation(session, self.gateway, ask_consent)
+
+    def limited_conversation(self, shared: Shared) -> Conversation:
+        """Return a new conversation for another agent, seeing only ``shared``.
+
+        It may only read: the clock, the calculator, the shared sources and,
+        when shared, memory, so no call ever needs a yes. Nothing it says is
+        remembered, learned from or traced, so another agent cannot plant a
+        fact or fill the disk. It starts local and nothing turns remote on.
+        """
+        router = self.gateway.router
+
+        def can_keep_private() -> bool:
+            return shared.private and router.can_keep_private
+
+        tools = Toolbox((clock_tool(), calculator_tool()))
+        if self.knowledge is not None and shared.sources:
+            tools.add(
+                knowledge_tool(
+                    self.knowledge,
+                    can_keep_private=can_keep_private,
+                    model=self.gateway.model,
+                    sources=shared.sources,
+                )
+            )
+        if self.memory is not None and shared.memory:
+            tools.add(memory_tool(self.memory, can_keep_private=can_keep_private))
+        session = ChatSession(
+            self.gateway.model,
+            self.library,
+            self.persona,
+            LastRoute(),
+            tools=tools,
+            limits=HOST_CHAT_LIMITS,
+        )
+        return Conversation(session, self.gateway)
+
+
+@dataclass(frozen=True, slots=True)
+class Shared:
+    """What another agent's conversation may read.
+
+    ``sources`` are the knowledge sources by name, none searched when empty;
+    ``private`` lets private passages and turns of private chats be shown;
+    ``memory`` lets earlier conversations be searched.
+    """
+
+    sources: frozenset[str] = frozenset()
+    private: bool = False
+    memory: bool = False

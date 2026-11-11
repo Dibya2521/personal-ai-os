@@ -2,9 +2,13 @@
 
 ``synthia mcp serve --host <name>`` speaks MCP (protocol 2025-06-18) over
 stdio, one JSON-RPC message per line, to the agent that started it (Claude
-Code, Claude Desktop, Codex). It offers two tools, both read-only and both on
-this machine: ``knowledge_search`` and ``memory_search``. No tool that reaches
-outside or changes anything is offered, so nothing a host asks can run one.
+Code, Claude Desktop, Codex). It offers three tools, all read-only and all on
+this machine: ``knowledge_search``, ``memory_search`` and ``chat``. No tool that
+reaches outside or changes anything is offered, so nothing a host asks can run
+one. ``chat`` is answered by SYNTHIA in a conversation of its own that sees
+only what the searches would show this host, and runs no other tool; nothing
+said in it is remembered. It runs only on the local model, one chat at a time
+with one more waiting, in a lane of its own so the searches never wait on it.
 
 What a host sees is the person's decision, read again at every call so a
 change takes effect on the next one:
@@ -22,7 +26,7 @@ The host's name is the one the person installed it under; it chooses the
 rules above, and is not a proof of who is asking (any program of the person's
 could pass it, and could read ``SYNTHIA_HOME`` itself).
 
-The searches run in the daemon, the one owner of the index and the memory,
+The calls run in the daemon, the one owner of the index and the memory,
 which is started on the first call that needs it. A request line longer than
 :data:`MAX_REQUEST_BYTES`, or one that is not a JSON object, is answered with
 an error and the server keeps serving. Results are cut to
@@ -38,7 +42,7 @@ import logging
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, BinaryIO, Final, Protocol, cast
+from typing import TYPE_CHECKING, BinaryIO, Final, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from websockets.exceptions import WebSocketException
@@ -57,7 +61,7 @@ from synthia.kernel.jsonrpc import ConnectionClosedError, Peer, RpcError
 from synthia.knowledge.tool import MAX_BODY_CHARS
 from synthia.mcp.client import MAX_RESULT_CHARS, PROTOCOL_VERSION, SUPPORTED_VERSIONS
 from synthia.memory.recall import MAX_FOUND, Day, preview
-from synthia.server.api import MAX_QUERY_CHARS
+from synthia.server.api import MAX_CHAT_CHARS, MAX_QUERY_CHARS
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -73,11 +77,18 @@ MAX_REQUEST_BYTES: Final = 1_048_576
 MAX_RUNNING_CALLS: Final = 4
 # Each waiting call holds its request, so past this many a call is refused.
 MAX_CALLS_IN_FLIGHT: Final = 16
+# One model answers every chat, so a second would only queue behind the first;
+# chats have their own lane, so one that takes minutes leaves every search free.
+MAX_RUNNING_CHATS: Final = 1
+MAX_CHATS_IN_FLIGHT: Final = 2
 SERVER_BUSY: Final = -32000
 MAX_KNOWLEDGE_LIMIT: Final = 20
 KNOWLEDGE_LIMIT: Final = 6
 KNOWLEDGE_SEARCH: Final = "knowledge_search"
 MEMORY_SEARCH: Final = "memory_search"
+CHAT: Final = "chat"
+HOST_CHAT: Final = "host_chat"
+NO_ANSWER: Final = "no answer"
 PARSE_ERROR: Final = -32700
 INVALID_REQUEST: Final = -32600
 INVALID_PARAMS: Final = -32602
@@ -202,6 +213,23 @@ class MemoryArguments(_Arguments):
     )
 
 
+class ChatArguments(_Arguments):
+    """What ``chat`` takes."""
+
+    message: str = Field(
+        min_length=1,
+        max_length=MAX_CHAT_CHARS,
+        description="what to ask or tell SYNTHIA, in any words",
+    )
+
+
+type _Any = (
+    ExposedTool[KnowledgeArguments]
+    | ExposedTool[MemoryArguments]
+    | ExposedTool[ChatArguments]
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ExposedTool[A: _Arguments]:
     """A tool the server offers: its name, what it says it does, and its handler."""
@@ -266,8 +294,8 @@ class Exposure:
     def __init__(self, policy: Callable[[], HostPolicy], daemon: Daemon) -> None:
         self._policy = policy
         self._daemon = daemon
-        self._calls = asyncio.Semaphore(MAX_RUNNING_CALLS)
-        self._in_flight = 0
+        self._searches = _Lane("calls", MAX_RUNNING_CALLS, MAX_CALLS_IN_FLIGHT)
+        self._chats = _Lane("chats", MAX_RUNNING_CHATS, MAX_CHATS_IN_FLIGHT)
         knowledge = ExposedTool(
             KNOWLEDGE_SEARCH,
             "Search the person's own files (notes, documents and code) that "
@@ -283,9 +311,18 @@ class Exposure:
             MemoryArguments,
             self._memory,
         )
-        self.tools: dict[
-            str, ExposedTool[KnowledgeArguments] | ExposedTool[MemoryArguments]
-        ] = {knowledge.name: knowledge, memory.name: memory}
+        chat = ExposedTool(
+            CHAT,
+            "Ask the person's assistant SYNTHIA. It answers on its own from only "
+            "what the person shares with this agent, and cites the files it used.",
+            ChatArguments,
+            self._chat,
+        )
+        self.tools: dict[str, _Any] = {
+            knowledge.name: knowledge,
+            memory.name: memory,
+            chat.name: chat,
+        }
 
     def methods(self) -> dict[str, Method]:
         """Return the methods a :class:`Peer` serves."""
@@ -314,16 +351,11 @@ class Exposure:
         tool = self.tools.get(name) if isinstance(name, str) else None
         if tool is None:
             raise RpcError(INVALID_PARAMS, f"unknown tool: {name!r}")
-        if self._in_flight >= MAX_CALLS_IN_FLIGHT:
-            message = (
-                f"{MAX_CALLS_IN_FLIGHT} calls are already waiting or running; "
-                "call again once some have answered"
-            )
-            raise RpcError(SERVER_BUSY, message)
+        lane = self._chats if tool.name == CHAT else self._searches
+        lane.claim()
         given = params.get("arguments", {})
-        self._in_flight += 1
         try:
-            async with self._calls:
+            async with lane.slots:
                 # Read once a slot is free: a decision made while it waited holds.
                 text = await tool.run(given, self._policy())
         except ArgumentsError as error:
@@ -331,7 +363,7 @@ class Exposure:
         except (DaemonError, RpcError) as error:
             return _content(f"{tool.name} failed: {error}", error=True)
         finally:
-            self._in_flight -= 1
+            lane.release()
         return _content(quote(tool.name, _cut(text, MAX_RESULT_CHARS)), error=False)
 
     async def _knowledge(self, asked: KnowledgeArguments, policy: HostPolicy) -> str:
@@ -359,8 +391,8 @@ class Exposure:
     async def _memory(self, asked: MemoryArguments, policy: HostPolicy) -> str:
         if not policy.memory:
             return _not_shared("memory", "memory = true", policy.host)
-        result = cast(
-            "dict[str, object]",
+        found = _parsed(
+            MemoryReply,
             await self._daemon.request(
                 MEMORY_SEARCH,
                 {
@@ -372,21 +404,105 @@ class Exposure:
                 },
             ),
         )
-        turns = cast("list[dict[str, object]]", result["turns"])
-        parts = [_turn(turn) for turn in turns]
-        withheld = int(cast("int", result["withheld"]))
-        if withheld:
-            parts.append(_withheld(withheld, "turn", policy.host))
+        parts = [_turn(turn) for turn in found.turns]
+        if found.withheld:
+            parts.append(_withheld(found.withheld, "turn", policy.host))
         return "\n".join(parts) or NOTHING_FOUND
 
+    async def _chat(self, asked: ChatArguments, policy: HostPolicy) -> str:
+        reply = _parsed(
+            ChatReply,
+            await self._daemon.request(
+                HOST_CHAT,
+                {
+                    "text": asked.message,
+                    "sources": sorted(policy.collections),
+                    "private": policy.private,
+                    "memory": policy.memory,
+                },
+            ),
+        )
+        answer = reply.answer.strip() or NO_ANSWER
+        if not reply.sources:
+            return answer
+        cited = "\n".join(f"- {source}" for source in reply.sources)
+        return f"{answer}\n\nsources:\n{cited}"
 
-def _turn(turn: dict[str, object]) -> str:
-    at = dt.datetime.fromisoformat(str(turn["at"])).astimezone()
+
+class _Lane:
+    """One kind of call: how many run at once, and how many may wait or run."""
+
+    def __init__(self, kind: str, running: int, most: int) -> None:
+        self.slots = asyncio.Semaphore(running)
+        self._kind = kind
+        self._most = most
+        self._held = 0
+
+    def claim(self) -> None:
+        """Take a place in the lane, before waiting for a slot.
+
+        Raises:
+            RpcError: ``SERVER_BUSY`` if ``most`` calls already hold one.
+        """
+        if self._held >= self._most:
+            message = (
+                f"{self._most} {self._kind} are already waiting or running; "
+                "call again once some have answered"
+            )
+            raise RpcError(SERVER_BUSY, message)
+        self._held += 1
+
+    def release(self) -> None:
+        """Give the place back."""
+        self._held -= 1
+
+
+class _Reply(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+
+class TurnReply(_Reply):
+    """A remembered turn, as the daemon returns it."""
+
+    at: dt.datetime
+    question: str
+    answer: str
+
+
+class MemoryReply(_Reply):
+    """What the daemon's ``memory_search`` returns."""
+
+    turns: list[TurnReply]
+    withheld: int = Field(ge=0)
+
+
+class ChatReply(_Reply):
+    """What the daemon's ``host_chat`` returns."""
+
+    answer: str
+    sources: list[str]
+
+
+def _parsed[R: _Reply](kind: type[R], reply: object) -> R:
+    """Return ``reply`` as ``kind``.
+
+    Raises:
+        DaemonError: If the daemon answered in another shape.
+    """
+    try:
+        return kind.model_validate(reply)
+    except ValidationError:
+        message = "the daemon answered in a shape this server does not know"
+        raise DaemonError(message) from None
+
+
+def _turn(turn: TurnReply) -> str:
+    at = turn.at.astimezone()
     return "\n".join(
         [
             f"{at:%A %Y-%m-%d %H:%M}",
-            f"  person: {preview(str(turn['question']))}",
-            f"  SYNTHIA: {preview(str(turn['answer']))}",
+            f"  person: {preview(turn.question)}",
+            f"  SYNTHIA: {preview(turn.answer)}",
         ]
     )
 
