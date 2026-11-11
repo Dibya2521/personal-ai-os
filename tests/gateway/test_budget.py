@@ -187,6 +187,25 @@ async def test_concurrent_claims_never_exceed_the_cap(tmp_path: Path) -> None:
     assert sorted(g.used for g in granted) == list(range(1, 51))
 
 
+async def test_one_ledgers_claims_wait_their_turn_however_slow_the_machine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no busy wait at all, a claim that met another at SQLite would fail."""
+    monkeypatch.setattr("synthia.gateway.budget.BUSY_TIMEOUT_S", 0.0)
+    ledger, _ = ledger_at(
+        tmp_path / "gateway.db", datetime(2026, 9, 23, tzinfo=UTC), cap=50
+    )
+
+    results = await asyncio.gather(
+        *(ledger.claim("openrouter") for _ in range(100)), return_exceptions=True
+    )
+
+    assert [r for r in results if isinstance(r, Exception)] == [
+        r for r in results if isinstance(r, BudgetExhaustedError)
+    ]
+    assert sum(isinstance(r, BudgetExhaustedError) for r in results) == 50
+
+
 def test_two_ledgers_on_one_file_share_the_cap_under_contention(
     tmp_path: Path,
 ) -> None:

@@ -10,6 +10,12 @@ every process on the machine (the daemon and a CLI alike). A claim is a single
 ``BEGIN IMMEDIATE`` transaction: it takes the database's write lock before
 reading, so two processes can never both see room for the last request.
 
+A ledger's own writes first queue on a lock of its own. SQLite's busy wait is
+not a queue: a waiting writer retries on a backoff and can keep losing, so
+under load some of a hundred concurrent claims failed after the timeout.
+Queued on the lock they each get their turn, and the busy timeout is left to
+the rarer case of two ledgers, or two processes, writing at once.
+
 Days are UTC days because that is when the provider's counter resets; a local
 midnight would disagree with it for hours every day.
 
@@ -23,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -113,6 +120,7 @@ class BudgetLedger:
         self._caps = dict(caps)
         self._clock = clock
         path.parent.mkdir(parents=True, exist_ok=True)
+        self._writing = threading.Lock()
         connection = self._connect()
         try:
             connection.execute("PRAGMA journal_mode=WAL")
@@ -165,6 +173,12 @@ class BudgetLedger:
     def _claim(self, provider: str) -> BudgetStatus:
         fallback = self._caps[provider]
         day, resets_at = self._today()
+        with self._writing:
+            return self._claim_locked(provider, fallback, day, resets_at)
+
+    def _claim_locked(
+        self, provider: str, fallback: int, day: str, resets_at: datetime
+    ) -> BudgetStatus:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -198,15 +212,16 @@ class BudgetLedger:
             connection.close()
 
     def _set_cap(self, provider: str, cap: int) -> None:
-        connection = self._connect()
-        try:
-            connection.execute(
-                "INSERT INTO remote_caps (provider, cap) VALUES (?, ?) "
-                "ON CONFLICT (provider) DO UPDATE SET cap = excluded.cap",
-                (provider, cap),
-            )
-        finally:
-            connection.close()
+        with self._writing:
+            connection = self._connect()
+            try:
+                connection.execute(
+                    "INSERT INTO remote_caps (provider, cap) VALUES (?, ?) "
+                    "ON CONFLICT (provider) DO UPDATE SET cap = excluded.cap",
+                    (provider, cap),
+                )
+            finally:
+                connection.close()
 
     @staticmethod
     def _cap(connection: sqlite3.Connection, provider: str, fallback: int) -> int:

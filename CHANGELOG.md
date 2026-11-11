@@ -61,6 +61,9 @@ All notable changes are recorded here. The format follows
 - A daemon that does not answer within 90 s of being started is now stopped
   before the error is shown. Before, it kept running unseen, could come up
   later or hang, and each new chat started another one.
+- Many remote requests at once no longer fail with "database is locked" on a
+  busy machine. Their claims on the daily budget now wait their turn instead
+  of giving up after 5 s.
 
 ### Security
 
