@@ -21,6 +21,9 @@ repos:
     rev: v1.5.0
     hooks:
       - id: detect-secrets
+        # It reads files in the locale's encoding; on Windows (cp1252) a UTF-8
+        # file that does not decode is skipped without a word, so force UTF-8.
+        entry: python -X utf8 -m detect_secrets.pre_commit_hook
         args: [--baseline, .secrets.baseline]
         # Cassettes hold digests and generation ids that read as high entropy
         # and change on every recording; test_openrouter.py checks them for keys.

@@ -94,9 +94,9 @@ model ("ignore your instructions"). Every result reaches the model wrapped as
 untrusted data (`synthia/agent/quoting.py`):
 
 ```text
-<tool_result name="read_file" trusted="false" end="3f0c9a7d21b4e865">
+<tool_result name="read_file" trusted="false" end="<16 hex digits>">
 ...the tool's output...
-</tool_result end="3f0c9a7d21b4e865">
+</tool_result end="<16 hex digits>">
 ```
 
 The opening tag names the quote's end mark, a hash of the output, and only a
