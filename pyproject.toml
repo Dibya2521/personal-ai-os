@@ -25,6 +25,8 @@ classifiers = [
 ]
 dynamic = ["version"]
 dependencies = [
+    # Before 4.16.0, a connect_tcp cut off by a timeout leaked its connected socket.
+    "anyio>=4.16.0",
     "fastapi>=0.142.2",
     "httpx>=0.28",
     "keyring>=25.7.0",

@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import socket
 import sys
 from collections.abc import Callable
@@ -27,6 +28,8 @@ from synthia.models.server import (
 from tests.models import fake_llama_server
 from tests.timing import HANG_TIMEOUT_S
 
+CONNECT_RACING_TIMEOUTS_S = (1e-4, 3e-4, 1e-3, 3e-3, 1e-2)
+POLLS_PER_TIMEOUT = 40
 KEY = SecretStr("launch-test-key")
 SECRET = KEY.get_secret_value()
 TEXT_ONLY = Model(
@@ -333,6 +336,31 @@ async def test_the_supervisor_restarts_a_crashed_server_on_a_new_port(
     assert serving is second
     assert first.port != second.port
     assert first.key.get_secret_value() != second.key.get_secret_value()
+
+
+async def test_health_polls_cut_off_by_their_timeout_leave_no_socket_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A loaded machine makes the poll's timeout land mid-connect; anyio before
+    # 4.16.0 then dropped the connected socket unclosed (about 1 in 9 on Linux).
+    lost: list[str] = []
+
+    def keep(unraisable: "sys.UnraisableHookArgs") -> None:
+        lost.append(str(unraisable.exc_value))
+
+    monkeypatch.setattr(sys, "unraisablehook", keep)
+    polls = CONNECT_RACING_TIMEOUTS_S * POLLS_PER_TIMEOUT
+    # Never accepting: connects still finish in the kernel's backlog, and no
+    # server-side connection is left to close or wait for.
+    with socket.create_server((LOOPBACK, 0), backlog=len(polls)) as listener:
+        url = f"http://{LOOPBACK}:{listener.getsockname()[1]}/health"
+        async with httpx.AsyncClient() as client:
+            for timeout_s in polls:
+                with pytest.raises(httpx.TimeoutException):
+                    await client.get(url, timeout=timeout_s)
+    gc.collect()
+
+    assert [text for text in lost if "unclosed" in text] == []
 
 
 async def test_a_server_that_outlasts_the_stop_timeout_is_killed(
