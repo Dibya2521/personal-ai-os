@@ -28,13 +28,37 @@ import functools
 import hashlib
 import html
 import re
-import sys
-import unicodedata
 from typing import Final
 
 END_MARK_HEX: Final = 16
 _TAG_BLOCK: Final = re.compile(r"[\U000e0000-\U000e007f]")
-_VARIATION_SELECTORS: Final = (range(0xFE00, 0xFE10), range(0xE0100, 0xE01F0))
+# Unicode's format characters (category Cf), the same 170 in Unicode 15.0 and
+# 16.0, as inclusive runs. Listed, not scanned: walking all 1.1 million code
+# points at the first quote held a daemon's event loop for 0.15 to 0.33 s.
+FORMAT_CHARACTERS: Final = (
+    (0x00AD, 0x00AD),
+    (0x0600, 0x0605),
+    (0x061C, 0x061C),
+    (0x06DD, 0x06DD),
+    (0x070F, 0x070F),
+    (0x0890, 0x0891),
+    (0x08E2, 0x08E2),
+    (0x180E, 0x180E),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x2064),
+    (0x2066, 0x206F),
+    (0xFEFF, 0xFEFF),
+    (0xFFF9, 0xFFFB),
+    (0x110BD, 0x110BD),
+    (0x110CD, 0x110CD),
+    (0x13430, 0x1343F),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0001, 0xE0001),
+    (0xE0020, 0xE007F),
+)
+_VARIATION_SELECTORS: Final = ((0xFE00, 0xFE0F), (0xE0100, 0xE01EF))
 # Chat templates mark turns with <|...|> tokens; text spelled the same way
 # could be read as one and start a turn of its own.
 _CONTROL: Final = re.compile(r"<\|")
@@ -96,22 +120,11 @@ def flags(result: str) -> tuple[str, ...]:
 
 @functools.cache
 def _hidden_class() -> str:
-    points = [
-        point
-        for point in range(sys.maxunicode + 1)
-        if unicodedata.category(chr(point)) == "Cf"
-    ]
-    points.extend(point for block in _VARIATION_SELECTORS for point in block)
     # As ranges: the same class written as single characters made each pass
     # about 10 times slower.
-    runs: list[tuple[int, int]] = []
-    for point in sorted(points):
-        if runs and point == runs[-1][1] + 1:
-            runs[-1] = (runs[-1][0], point)
-        else:
-            runs.append((point, point))
     return "".join(
-        f"{re.escape(chr(low))}-{re.escape(chr(high))}" for low, high in runs
+        f"{re.escape(chr(low))}-{re.escape(chr(high))}"
+        for low, high in FORMAT_CHARACTERS + _VARIATION_SELECTORS
     )
 
 
