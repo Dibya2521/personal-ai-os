@@ -16,7 +16,12 @@ from synthia.gateway.errors import (
     ProviderError,
     RateLimitedError,
 )
-from synthia.gateway.openai_compat import MAX_ERROR_BODY_BYTES, Dialect, Endpoint
+from synthia.gateway.openai_compat import (
+    MAX_ERROR_BODY_BYTES,
+    MAX_ERROR_MESSAGE,
+    Dialect,
+    Endpoint,
+)
 from synthia.gateway.protocol import collect
 from synthia.gateway.providers import ANTHROPIC, ANTHROPIC_OPUS, load_providers
 from synthia.gateway.types import (
@@ -310,6 +315,17 @@ async def test_an_overload_inside_the_stream_is_a_retryable_provider_error() -> 
 
     assert raised.value.retryable
     assert KEY not in str(raised.value)
+
+
+async def test_a_stream_error_with_the_key_at_the_cut_leaves_no_part_of_it() -> None:
+    padding = "x" * (MAX_ERROR_MESSAGE - len("HTTP 529: ") - len(KEY) + 1)
+    error = {"type": "overloaded_error", "message": padding + KEY}
+    body = sse(start(input_tokens=1), {"type": "error", "error": error})
+
+    with pytest.raises(ProviderError) as raised:
+        await ask(Recorder(body))
+
+    assert KEY[:-1] not in str(raised.value)
 
 
 async def test_a_stream_that_ends_before_message_stop_is_incomplete() -> None:

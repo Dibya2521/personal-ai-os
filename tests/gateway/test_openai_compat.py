@@ -20,6 +20,7 @@ from synthia.gateway.errors import (
 )
 from synthia.gateway.openai_compat import (
     MAX_ERROR_BODY_BYTES,
+    MAX_ERROR_MESSAGE,
     Dialect,
     Endpoint,
     OpenAICompatibleModel,
@@ -27,6 +28,7 @@ from synthia.gateway.openai_compat import (
     error_for,
     parse_chunk,
     retry_after_seconds,
+    scrub,
 )
 from synthia.gateway.protocol import collect
 from synthia.gateway.sse import MAX_EVENT_CHARS
@@ -389,10 +391,10 @@ def test_an_html_error_page_still_gives_a_clean_error() -> None:
     assert str(error) == "HTTP 502"
 
 
-def test_a_very_long_provider_message_is_truncated() -> None:
+def test_a_very_long_provider_message_is_cut_when_made_safe_to_show() -> None:
     error = error_for(400, json.dumps({"error": {"message": "x" * 5000}}).encode(), {})
 
-    assert len(str(error)) < 400
+    assert len(str(scrub(error, None))) == MAX_ERROR_MESSAGE
 
 
 def test_retry_after_in_seconds_and_as_a_date() -> None:
@@ -506,6 +508,45 @@ async def test_a_provider_that_echoes_the_key_never_gets_it_into_the_error() -> 
 
     assert KEY not in str(caught.value)
     assert "Invalid API key" in str(caught.value)
+
+
+async def test_a_mid_stream_error_that_echoes_the_key_never_gets_it_out() -> None:
+    body = sse(delta(content="Hi"), {"error": {"message": f"upstream saw {KEY}"}})
+
+    with pytest.raises(ProviderError) as caught:
+        await collect(model_answering(streaming(body)).stream(HELLO))
+
+    assert KEY not in str(caught.value)
+    assert "upstream saw" in str(caught.value)
+
+
+async def test_a_key_where_the_message_is_cut_leaves_no_part_of_it() -> None:
+    # Placed so a cut at the shown length would fall one character before
+    # the key's end.
+    padding = "x" * (MAX_ERROR_MESSAGE - len("HTTP 401: ") - len(KEY) + 1)
+    body = json.dumps({"error": {"message": padding + KEY}}).encode()
+
+    with pytest.raises(AuthError) as caught:
+        await collect(model_answering(streaming(body, 401)).stream(HELLO))
+
+    assert KEY[:-1] not in str(caught.value)
+    assert len(str(caught.value)) <= MAX_ERROR_MESSAGE
+
+
+async def test_a_keyless_servers_long_message_is_cut_too() -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            streaming(b'{"error": "' + b"x" * 5000 + b'"}', 500)
+        )
+    )
+    local = OpenAICompatibleModel(
+        client=client, endpoint=Endpoint("http://127.0.0.1:8080/v1", "m"), info=INFO
+    )
+
+    with pytest.raises(ProviderError) as caught:
+        await collect(local.stream(HELLO))
+
+    assert len(str(caught.value)) == MAX_ERROR_MESSAGE
 
 
 async def test_an_unreachable_server_is_a_retryable_connection_failure() -> None:

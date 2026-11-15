@@ -53,8 +53,9 @@ if TYPE_CHECKING:
 
 DONE = "[DONE]"
 EVENT_STREAM = "text/event-stream"
-MAX_ERROR_DETAIL = 300
-# An error body is read only for its message, which is cut to MAX_ERROR_DETAIL;
+# "HTTP 503: " and 300 characters of the provider's own message.
+MAX_ERROR_MESSAGE = 310
+# An error body is read only for its message, which is cut to MAX_ERROR_MESSAGE;
 # a body cut here simply fails to parse and the error keeps its HTTP status.
 MAX_ERROR_BODY_BYTES = 64 * 1024
 IDENTITY = "identity"
@@ -239,9 +240,9 @@ def _error_detail(body: object) -> str | None:
         if isinstance(error, dict):
             message = cast("JSON", error).get("message")
             if isinstance(message, str):
-                return message[:MAX_ERROR_DETAIL]
+                return message
         if isinstance(error, str):
-            return error[:MAX_ERROR_DETAIL]
+            return error
     return None
 
 
@@ -346,9 +347,7 @@ class OpenAICompatibleModel:
             ) as response:
                 if response.status_code >= httpx.codes.BAD_REQUEST:
                     body = await read_error_body(response)
-                    raise self._scrub(
-                        error_for(response.status_code, body, response.headers)
-                    )
+                    raise error_for(response.status_code, body, response.headers)
                 expect_event_stream(response)
                 async with aclosing(self._chunks(response)) as chunks:
                     async for chunk in chunks:
@@ -356,6 +355,9 @@ class OpenAICompatibleModel:
         except httpx.TransportError as error:
             message = f"no response from {self._url}: {type(error).__name__}"
             raise ConnectionFailedError(message) from error
+        except GatewayError as error:
+            scrub(error, self._api_key)
+            raise
 
     async def _chunks(self, response: httpx.Response) -> AsyncGenerator[ChatChunk]:
         finished = False
@@ -378,9 +380,6 @@ class OpenAICompatibleModel:
         if not finished:
             message = "the stream ended without a finish reason or [DONE]"
             raise IncompleteResponseError(message)
-
-    def _scrub(self, error: GatewayError) -> GatewayError:
-        return scrub(error, self._api_key)
 
 
 async def read_error_body(response: httpx.Response) -> bytes:
@@ -430,10 +429,14 @@ def _compressed(response: httpx.Response) -> bool:
 
 
 def scrub(error: GatewayError, api_key: SecretStr | None) -> GatewayError:
-    """Remove the API key from a provider's message; some echo it back."""
-    if api_key is None:
-        return error
-    secret = api_key.get_secret_value()
-    if secret and secret in str(error):
-        error.args = (str(error).replace(secret, REDACTED),)
+    """Make a provider's message safe to show: the key removed, then the text cut.
+
+    Some providers echo the key back. It is removed before the message is cut
+    to ``MAX_ERROR_MESSAGE``, so a cut can never leave part of it behind.
+    """
+    message = str(error)
+    secret = api_key.get_secret_value() if api_key is not None else ""
+    if secret:
+        message = message.replace(secret, REDACTED)
+    error.args = (message[:MAX_ERROR_MESSAGE],)
     return error

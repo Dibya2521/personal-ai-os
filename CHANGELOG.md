@@ -98,6 +98,11 @@ All notable changes are recorded here. The format follows
   event took about 256 MB of memory. Requests also ask for an uncompressed
   body and a compressed one is refused unread, because a gzip body is
   inflated before any limit applies: 64 KiB on the wire can become 64 MiB.
+- A provider's error message is now cut only after the API key is removed
+  from it. Before, a key that straddled the 300-character cut kept all but
+  its last character. An OpenAI-compatible provider's error sent in the
+  middle of a stream also had the key left in; every error from either
+  adapter now has it removed.
 
 ## [0.3.0] - 2026-10-27
 
