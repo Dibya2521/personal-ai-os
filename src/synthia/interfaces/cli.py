@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 import sys
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, NoReturn
 
@@ -24,7 +27,12 @@ from synthia.gateway.providers import (
     remote_key,
     select_remote,
 )
-from synthia.interfaces import consent_commands, key_commands, model_commands
+from synthia.interfaces import (
+    consent_commands,
+    host_install,
+    key_commands,
+    model_commands,
+)
 from synthia.interfaces import doctor as doctor_checks
 from synthia.interfaces.chat import run_chat, visible
 from synthia.interfaces.daemon_client import (
@@ -679,6 +687,51 @@ def mcp_serve(
 
     with logging_to(settings, settings.home / MCP_LOG):
         asyncio.run(serve_host(settings.home, receiver, sys.stdin.buffer, write))
+
+
+@app.command()
+def install(
+    *,
+    target: Annotated[
+        host_install.HostTarget,
+        typer.Option("--for", help="The agent to add SYNTHIA to as an MCP server."),
+    ],
+    uninstall: Annotated[
+        bool, typer.Option("--uninstall", help="Remove SYNTHIA from it instead.")
+    ] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask first.")] = False,
+) -> None:
+    """Add SYNTHIA to an agent's MCP servers, or remove it; nothing is shared yet.
+
+    Shows the change and asks first. The old config is kept next to it as
+    <name>.<UTC time>.synthia.bak, every other server is kept, and running it
+    again changes nothing. Exits 2 when the agent's config cannot be changed
+    safely; the file is then left as it is.
+    """
+    try:
+        launch = host_install.ServerLaunch.of(target, executable=sys.executable)
+        change = host_install.plan(target, launch, host_paths(), uninstall=uninstall)
+    except ConfigError as error:
+        _fail(str(error))
+    typer.echo(host_install.shown(change))
+    if isinstance(change, host_install.NoChange):
+        return
+    if not yes and not _ask("make this change?"):
+        typer.echo("nothing changed")
+        return
+    try:
+        host_install.apply(change, run=host_install.run_command, now=datetime.now(UTC))
+    except (ConfigError, OSError) as error:
+        _fail(str(error))
+    for line in host_install.next_steps(target, uninstall=uninstall):
+        typer.echo(line)
+
+
+def host_paths() -> host_install.HostPaths:
+    """Return where this user's agents keep their MCP servers."""
+    return host_install.HostPaths.find(
+        environ=os.environ, home=Path.home(), platform=sys.platform, which=shutil.which
+    )
 
 
 @consent_app.command("list")

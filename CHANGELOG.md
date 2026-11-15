@@ -8,6 +8,16 @@ All notable changes are recorded here. The format follows
 
 ### Added
 
+- `synthia install --for claude-code|claude-desktop|codex` adds SYNTHIA to that
+  agent's MCP servers, and `--uninstall` removes it. It shows the change and
+  asks first (`--yes` skips the question), keeps the old config next to it as
+  `<name>.<UTC time>.synthia.bak`, keeps every other server, and changes
+  nothing on a second run. A config it cannot read as that agent's JSON or
+  TOML is refused and left byte for byte as it was. Claude Code is changed
+  through its own `claude mcp add --scope user`; without `claude` on PATH the
+  exact command is printed instead. Installing shares nothing: what the agent
+  may see is still set in `SYNTHIA_HOME/mcp_hosts.toml` and by
+  `synthia consent grant --host <agent> --private`, as the command prints.
 - `synthia doctor` names the microphone and speaker SYNTHIA would use and the
   sound system they belong to (MME, DirectSound or WASAPI on Windows), and
   warns when PortAudio cannot be loaded or there is no microphone. Voice is
