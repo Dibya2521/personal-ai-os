@@ -30,9 +30,11 @@ from synthia.gateway.errors import (
     MalformedStreamError,
 )
 from synthia.gateway.openai_compat import (
+    PLAIN_BODY,
     Dialect,
     error_for,
     expect_event_stream,
+    read_error_body,
     scrub,
 )
 from synthia.gateway.sse import aiter_events
@@ -537,7 +539,11 @@ class AnthropicModel:
                 "temperature %s not sent: the Anthropic API rejects it",
                 request.temperature,
             )
-        headers = self._headers | {"anthropic-version": API_VERSION}
+        headers = {
+            **self._headers,
+            **PLAIN_BODY,
+            "anthropic-version": API_VERSION,
+        }
         if self._api_key is not None:
             headers["x-api-key"] = self._api_key.get_secret_value()
         payload = build_payload(request, self._model)
@@ -552,7 +558,7 @@ class AnthropicModel:
             ) as response:
                 _refuse_redirect(response)
                 if response.status_code >= httpx.codes.BAD_REQUEST:
-                    body = await response.aread()
+                    body = await read_error_body(response)
                     raise error_for(response.status_code, body, response.headers)
                 expect_event_stream(response)
                 async with aclosing(_chunks(response)) as chunks:

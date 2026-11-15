@@ -16,7 +16,7 @@ from synthia.gateway.errors import (
     ProviderError,
     RateLimitedError,
 )
-from synthia.gateway.openai_compat import Dialect, Endpoint
+from synthia.gateway.openai_compat import MAX_ERROR_BODY_BYTES, Dialect, Endpoint
 from synthia.gateway.protocol import collect
 from synthia.gateway.providers import ANTHROPIC, ANTHROPIC_OPUS, load_providers
 from synthia.gateway.types import (
@@ -33,6 +33,7 @@ from synthia.gateway.types import (
     Usage,
 )
 from synthia.memory.window import message_chars
+from tests.endless_stream import EndlessBody
 
 KEY = "sk-ant-api03-adapter-test-key-000"  # pragma: allowlist secret
 BASE = "https://api.example.test"
@@ -158,6 +159,7 @@ async def test_the_key_goes_in_x_api_key_and_temperature_is_never_sent() -> None
     assert str(sent.url) == f"{BASE}/v1/messages"
     assert sent.headers["x-api-key"] == KEY
     assert sent.headers["anthropic-version"] == "2026-10-21"
+    assert sent.headers["accept-encoding"] == "identity"
     assert "authorization" not in sent.headers
     body = recorder.body()
     assert "temperature" not in body
@@ -315,6 +317,15 @@ async def test_a_stream_that_ends_before_message_stop_is_incomplete() -> None:
 
     with pytest.raises(IncompleteResponseError):
         await ask(Recorder(body))
+
+
+async def test_an_endless_error_body_is_read_only_up_to_its_cap() -> None:
+    body = EndlessBody()
+
+    with pytest.raises(ProviderError, match=r"^HTTP 503$"):
+        await ask(lambda _request: httpx.Response(503, stream=body))
+
+    assert body.pieces_read * len(body.piece) == MAX_ERROR_BODY_BYTES
 
 
 async def test_a_redirect_is_not_followed() -> None:

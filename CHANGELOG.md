@@ -91,6 +91,13 @@ All notable changes are recorded here. The format follows
   look-alike characters (a fullwidth `／`, a Cyrillic `о`) or open a forged
   trusted one. The opening tag now names an end mark, a hash of the result,
   and only a closing tag carrying that mark ends the quote.
+- A remote provider can no longer make SYNTHIA hold unbounded text. An error
+  response is read only up to 64 KiB, enough for its message, and one
+  streamed event may hold at most 8 MiB; past that the stream is refused as
+  malformed. Before, a 64 MB error body was read whole, and a single 64 MB
+  event took about 256 MB of memory. Requests also ask for an uncompressed
+  body and a compressed one is refused unread, because a gzip body is
+  inflated before any limit applies: 64 KiB on the wire can become 64 MiB.
 
 ## [0.3.0] - 2026-10-27
 

@@ -1,11 +1,69 @@
 import time
+import tracemalloc
 from collections.abc import AsyncIterator
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from synthia.gateway.errors import MalformedStreamError
 from synthia.gateway.sse import ServerSentEvent, SSEParser, aiter_events
+
+CAP = 100
+
+
+@pytest.mark.parametrize(
+    "stream",
+    [
+        pytest.param([b"data: " + b"x" * CAP], id="one line never ended"),
+        pytest.param([b"data: x\n"] * CAP, id="many data lines, no blank line"),
+        pytest.param([b": keep-alive\n"] * CAP, id="comments, no blank line"),
+        pytest.param([b"data: " + b"x" * 60, b"x" * 60], id="a line split in two"),
+    ],
+)
+def test_an_event_past_the_cap_is_refused(stream: list[bytes]) -> None:
+    parser = SSEParser(max_event_chars=CAP)
+
+    with pytest.raises(MalformedStreamError, match=f"passed {CAP} characters"):
+        feed_all(parser, stream)
+
+
+def test_the_next_events_unfinished_line_does_not_count_against_this_one() -> None:
+    parser = SSEParser(max_event_chars=CAP)
+
+    events = parser.feed(b"data: " + b"x" * 90 + b"\n\ndata: " + b"y" * 20)
+
+    assert [len(e.data) for e in events] == [90]
+
+
+def test_a_line_in_tiny_chunks_costs_a_few_bytes_per_character() -> None:
+    chunks = 200_000
+    parser = SSEParser(max_event_chars=4 * chunks)
+    parser.feed(b"data: ")
+    tracemalloc.start()
+    try:
+        for _ in range(chunks):
+            parser.feed(b"ab")
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < 4 * 2 * chunks
+
+
+def feed_all(parser: SSEParser, stream: list[bytes]) -> None:
+    for chunk in stream:
+        parser.feed(chunk)
+
+
+def test_the_cap_is_per_event_and_an_event_at_it_passes() -> None:
+    parser = SSEParser(max_event_chars=CAP)
+    event = b"data: " + b"x" * (CAP - 6) + b"\n\n"
+
+    events = [e for _ in range(5) for e in parser.feed(event)]
+
+    assert [len(e.data) for e in events] == [CAP - 6] * 5
+
 
 OPENROUTER_LIKE = (
     b": OPENROUTER PROCESSING\n\n"

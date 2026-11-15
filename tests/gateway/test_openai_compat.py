@@ -1,3 +1,4 @@
+import gzip
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,7 @@ from synthia.gateway.errors import (
     RateLimitedError,
 )
 from synthia.gateway.openai_compat import (
+    MAX_ERROR_BODY_BYTES,
     Dialect,
     Endpoint,
     OpenAICompatibleModel,
@@ -27,6 +29,7 @@ from synthia.gateway.openai_compat import (
     retry_after_seconds,
 )
 from synthia.gateway.protocol import collect
+from synthia.gateway.sse import MAX_EVENT_CHARS
 from synthia.gateway.types import (
     ChatChunk,
     ChatRequest,
@@ -40,6 +43,7 @@ from synthia.gateway.types import (
     ToolSpec,
     Usage,
 )
+from tests.endless_stream import PIECE, EndlessBody
 
 KEY = "sk-or-v1-adapter-test-key-000"  # pragma: allowlist secret
 INFO = ModelInfo("test/model", 32_000, vision=True, tools=True)
@@ -529,6 +533,57 @@ def test_error_bodies_of_every_shape_give_a_clean_message(
     body: bytes, expected: str
 ) -> None:
     assert str(error_for(500, body, {})) == expected
+
+
+async def test_an_endless_error_body_is_read_only_up_to_its_cap() -> None:
+    body = EndlessBody()
+    model = model_answering(lambda _request: httpx.Response(500, stream=body))
+
+    with pytest.raises(ProviderError, match=r"^HTTP 500$"):
+        await collect(model.stream(HELLO))
+
+    assert body.pieces_read * len(body.piece) == MAX_ERROR_BODY_BYTES
+
+
+async def test_an_endless_stream_event_is_refused_at_its_cap() -> None:
+    body = EndlessBody(b"data: " + b"x" * (PIECE - 6))
+    headers = {"content-type": "text/event-stream"}
+    model = model_answering(
+        lambda _r: httpx.Response(200, headers=headers, stream=body)
+    )
+
+    with pytest.raises(MalformedStreamError, match="passed"):
+        await collect(model.stream(HELLO))
+
+    assert body.pieces_read <= MAX_EVENT_CHARS // PIECE + 2
+
+
+async def test_an_uncompressed_body_is_asked_for_and_a_compressed_stream_refused() -> (
+    None
+):
+    sent: list[str | None] = []
+    answer = gzip.compress(sse(delta(content="Hi"), finish()))
+
+    def gzipped(request: httpx.Request) -> httpx.Response:
+        sent.append(request.headers.get("accept-encoding"))
+        headers = {"content-type": "text/event-stream", "content-encoding": "gzip"}
+        return httpx.Response(200, headers=headers, content=answer)
+
+    with pytest.raises(MalformedStreamError, match="compressed"):
+        await collect(model_answering(gzipped).stream(HELLO))
+
+    assert sent == ["identity"]
+
+
+async def test_a_compressed_error_body_is_not_read() -> None:
+    body = gzip.compress(b'{"error": "this message was read"}')
+    headers = {"content-encoding": "gzip"}
+    model = model_answering(
+        lambda _r: httpx.Response(500, headers=headers, content=body)
+    )
+
+    with pytest.raises(ProviderError, match=r"^HTTP 500$"):
+        await collect(model.stream(HELLO))
 
 
 async def test_a_keyless_local_server_error_is_reported_unchanged() -> None:

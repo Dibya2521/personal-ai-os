@@ -8,19 +8,27 @@ sends ``: OPENROUTER PROCESSING`` to keep a connection alive), and the fields
 
 Bytes arrive in whatever pieces the network delivers, so the parser holds a
 partial line and a multi-byte character split across pieces, and produces the
-same events however the stream is cut.
+same events however the stream is cut. One event may hold at most
+``MAX_EVENT_CHARS``, so a server that never ends a line or an event cannot
+make the parser hold unbounded text.
 """
 
 from __future__ import annotations
 
 import codecs
+import io
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
+
+from synthia.gateway.errors import MalformedStreamError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterable
 
+# Chat servers stream an answer in small deltas, so one event is a few KB; the
+# cap matches the most text a whole Anthropic answer may hold.
+MAX_EVENT_CHARS: Final = 8 * 1024 * 1024
 DEFAULT_EVENT = "message"
 BOM = "﻿"
 NULL = "\x00"
@@ -40,9 +48,11 @@ class ServerSentEvent:
 class SSEParser:
     """Turn chunks of bytes into events, carrying state between chunks."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, max_event_chars: int = MAX_EVENT_CHARS) -> None:
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        self._pending: list[str] = []
+        self._max_event_chars = max_event_chars
+        self._held = 0
+        self._pending = io.StringIO()
         self._started = False
         self._skip_lf = False
         self._data: list[str] = []
@@ -51,7 +61,12 @@ class SSEParser:
         self._retry: int | None = None
 
     def feed(self, chunk: bytes) -> list[ServerSentEvent]:
-        """Consume ``chunk`` and return the events it completed."""
+        """Consume ``chunk`` and return the events it completed.
+
+        Raises:
+            MalformedStreamError: If the event being read, with its unfinished
+                line, holds more than ``max_event_chars`` characters.
+        """
         return self._consume(self._decoder.decode(chunk))
 
     def close(self) -> None:
@@ -63,7 +78,7 @@ class SSEParser:
         closing never completes an event.
         """
         self._decoder.reset()
-        self._pending = []
+        self._pending = io.StringIO()
 
     def _consume(self, text: str) -> list[ServerSentEvent]:
         if not text:
@@ -76,19 +91,33 @@ class SSEParser:
         # A CR ends its line at once; an LF right after it, even in the next
         # chunk, belongs to the same line ending.
         self._skip_lf = text.endswith("\r")
-        # Only the new text is scanned and a partial line is kept in pieces, so
-        # a long line arriving in many chunks costs linear time, not quadratic.
+        # Only the new text is scanned and a partial line grows in one buffer:
+        # a long line arriving in many chunks costs linear time, and a few
+        # bytes of memory per character however small the chunks.
         first, *complete = _LINE_END.split(text)
         if not complete:
-            self._pending.append(first)
+            self._pending.write(first)
+            self._check(self._held + self._pending.tell())
             return []
         *complete, rest = complete
-        lines = ["".join([*self._pending, first]), *complete]
-        self._pending = [rest] if rest else []
+        self._pending.write(first)
+        lines = [self._pending.getvalue(), *complete]
+        self._pending = io.StringIO(rest)
+        self._pending.seek(0, io.SEEK_END)
         events: list[ServerSentEvent] = []
         for line in lines:
+            # Comments and ignored fields count too, so a run of them is
+            # bounded like data.
+            self._held += len(line)
+            self._check(self._held)
             events.extend(self._line(line))
+        self._check(self._held + self._pending.tell())
         return events
+
+    def _check(self, chars: int) -> None:
+        if chars > self._max_event_chars:
+            message = f"a stream event passed {self._max_event_chars} characters"
+            raise MalformedStreamError(message)
 
     def _line(self, line: str) -> list[ServerSentEvent]:
         if not line:
@@ -112,6 +141,7 @@ class SSEParser:
     def _dispatch(self) -> list[ServerSentEvent]:
         data, event = self._data, self._event
         self._data, self._event = [], ""
+        self._held = 0
         if not data:
             return []
         return [

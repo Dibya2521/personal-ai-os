@@ -15,7 +15,8 @@ from contextlib import aclosing
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
@@ -53,6 +54,12 @@ if TYPE_CHECKING:
 DONE = "[DONE]"
 EVENT_STREAM = "text/event-stream"
 MAX_ERROR_DETAIL = 300
+# An error body is read only for its message, which is cut to MAX_ERROR_DETAIL;
+# a body cut here simply fails to parse and the error keeps its HTTP status.
+MAX_ERROR_BODY_BYTES = 64 * 1024
+IDENTITY = "identity"
+# Asked on every request so a body is never compressed; see _compressed.
+PLAIN_BODY: Final = MappingProxyType({"accept-encoding": IDENTITY})
 SCHEMA_NAME = "response"
 REDACTED = "**********"
 # Thinking models stream their working under one of these, depending on the server.
@@ -329,7 +336,7 @@ class OpenAICompatibleModel:
             GatewayError: A subclass describing why the request failed; its
                 ``retryable`` says whether sending it again may succeed.
         """
-        headers = dict(self._headers)
+        headers = {**self._headers, **PLAIN_BODY}
         if self._api_key is not None:
             headers["Authorization"] = f"Bearer {self._api_key.get_secret_value()}"
         payload = build_payload(request, self._model, self._dialect)
@@ -338,7 +345,7 @@ class OpenAICompatibleModel:
                 "POST", self._url, json=payload, headers=headers, timeout=self._timeout
             ) as response:
                 if response.status_code >= httpx.codes.BAD_REQUEST:
-                    body = await response.aread()
+                    body = await read_error_body(response)
                     raise self._scrub(
                         error_for(response.status_code, body, response.headers)
                     )
@@ -376,6 +383,26 @@ class OpenAICompatibleModel:
         return scrub(error, self._api_key)
 
 
+async def read_error_body(response: httpx.Response) -> bytes:
+    """Return at most ``MAX_ERROR_BODY_BYTES`` from the start of an error body.
+
+    A compressed body is not read at all, so the error keeps only its status.
+    """
+    pieces: list[bytes] = []
+    size = 0
+    try:
+        if _compressed(response):
+            return b""
+        async for piece in response.aiter_bytes():
+            pieces.append(piece)
+            size += len(piece)
+            if size >= MAX_ERROR_BODY_BYTES:
+                break
+    finally:
+        await response.aclose()
+    return b"".join(pieces)[:MAX_ERROR_BODY_BYTES]
+
+
 def expect_event_stream(response: httpx.Response) -> None:
     """Refuse a successful response that is not an event stream.
 
@@ -383,12 +410,23 @@ def expect_event_stream(response: httpx.Response) -> None:
     rather than reporting an answer that never finished.
 
     Raises:
-        MalformedStreamError: If the content type is another one.
+        MalformedStreamError: If the content type is another one, or the
+            body is compressed.
     """
     content_type = response.headers.get("content-type", "").partition(";")[0].strip()
     if content_type and content_type != EVENT_STREAM:
         message = f"expected an event stream, got {content_type}"
         raise MalformedStreamError(message)
+    if _compressed(response):
+        message = "the stream came compressed after an uncompressed one was asked for"
+        raise MalformedStreamError(message)
+
+
+def _compressed(response: httpx.Response) -> bool:
+    # httpx inflates a compressed body with no size limit before any cap here
+    # sees it: one 64 KiB read of gzip can become 64 MiB.
+    encoding = response.headers.get("content-encoding", IDENTITY).strip().lower()
+    return encoding != IDENTITY
 
 
 def scrub(error: GatewayError, api_key: SecretStr | None) -> GatewayError:
