@@ -12,15 +12,16 @@ from __future__ import annotations
 
 import json
 import re
-import tempfile
-from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, Protocol, final
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from synthia.kernel.errors import ConfigError
+from synthia.kernel.files import write_text_atomic
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from keyring.backend import KeyringBackend
 
 KEY_SERVICE: Final = "synthia"
@@ -233,19 +234,7 @@ class KeyStore:
             indent=2,
         )
         try:
-            self._index.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                newline="",
-                dir=self._index.parent,
-                prefix=self._index.name,
-                suffix=".part",
-                delete_on_close=False,
-            ) as part:
-                part.write(text + "\n")
-                part.close()
-                Path(part.name).replace(self._index)
+            write_text_atomic(self._index, text + "\n")
         except OSError as error:
             message = f"cannot write {self._index}: {error.strerror}"
             raise KeyStoreError(message) from None

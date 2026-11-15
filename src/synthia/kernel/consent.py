@@ -18,9 +18,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
-import tempfile
 from enum import StrEnum
-from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final, Literal, final
 
 from pydantic import (
@@ -33,9 +31,11 @@ from pydantic import (
 )
 
 from synthia.kernel.errors import ConfigError
+from synthia.kernel.files import write_text_atomic
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
 CONSENT_FILE: Final = "consent.json"
 CONSENT_VERSION: Final = 1
@@ -245,19 +245,7 @@ class ConsentBook:
             raise ConsentError(message) from None
         text = json.dumps(book.model_dump(mode="json"), indent=2)
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                newline="",
-                dir=self.path.parent,
-                prefix=self.path.name,
-                suffix=".part",
-                delete_on_close=False,
-            ) as part:
-                part.write(text + "\n")
-                part.close()
-                Path(part.name).replace(self.path)
+            write_text_atomic(self.path, text + "\n")
         except OSError as error:
             message = f"cannot write {self.path}: {error.strerror}"
             raise ConsentError(message) from None
