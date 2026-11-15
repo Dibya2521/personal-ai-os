@@ -1,7 +1,9 @@
 """The remote providers SYNTHIA can reach, each described by one record.
 
-OpenRouter is built in. A person adds any other OpenAI-compatible provider as a
-``[providers.<name>]`` table in ``SYNTHIA_HOME/providers.toml``, and
+OpenRouter and Anthropic are built in. A person adds any other
+OpenAI-compatible provider, or another Anthropic Messages API address with
+``dialect = "anthropic"``, as a ``[providers.<name>]`` table in
+``SYNTHIA_HOME/providers.toml``, and
 ``SYNTHIA_REMOTE`` names the one in the remote slot. That provider is asked
 only when remote is turned on in a chat (``/remote on`` or
 ``synthia chat --remote``); every other turn stays on the machine.
@@ -34,6 +36,7 @@ if TYPE_CHECKING:
     from synthia.kernel.config import Settings
 
 OPENROUTER: Final = "openrouter"
+ANTHROPIC: Final = "anthropic"
 # OpenRouter's app attribution headers: who is calling, shown on its dashboards.
 APP_URL: Final = "https://github.com/Dibya2521/personal-ai-os"
 APP_TITLE: Final = "SYNTHIA"
@@ -72,8 +75,9 @@ class RemoteProvider:
 
     ``name`` is the key the daily budget is counted under. ``daily_cap`` is
     used until the provider has reported the cap of the key in use, which
-    only a provider with ``reports_daily_cap`` can do. ``dialect`` says how
-    the provider takes what the OpenAI chat API has no field for.
+    only a provider with ``reports_daily_cap`` can do. ``dialect`` says which
+    API the provider speaks, and for an OpenAI-compatible one how it takes
+    what that API has no field for.
     """
 
     name: str
@@ -120,6 +124,22 @@ OPENROUTER_FREE: Final = RemoteProvider(
     reports_daily_cap=True,
 )
 
+ANTHROPIC_OPUS: Final = RemoteProvider(
+    name=ANTHROPIC,
+    base_url="https://api.anthropic.com",
+    # Claude Opus 5.5: a 1M-token window, its default and its maximum.
+    model=ModelInfo("claude-opus-5-5", 1_000_000, vision=True, tools=True),
+    requests_per_minute=DEFAULT_REQUESTS_PER_MINUTE,
+    daily_cap=DEFAULT_DAILY_CAP,
+    headers=MappingProxyType[str, str]({}),
+    dialect=Dialect.ANTHROPIC,
+    reports_daily_cap=False,
+)
+
+BUILT_IN: Final = MappingProxyType(
+    {OPENROUTER: OPENROUTER_FREE, ANTHROPIC: ANTHROPIC_OPUS}
+)
+
 
 def _check_base_url(url: str) -> str:
     """Return ``url`` if the key may be sent to it.
@@ -156,8 +176,9 @@ def _check_base_url(url: str) -> str:
         raise ValueError(message) from None
     if parts.query or parts.fragment:
         message = (
-            "base_url must not have a query or a fragment; "
-            "requests go to base_url + /chat/completions"
+            "base_url must not have a query or a fragment; requests go to "
+            "base_url + /chat/completions, or + /v1/messages with "
+            'dialect = "anthropic"'
         )
         raise ValueError(message)
     if parts.scheme == HTTPS or (parts.scheme == HTTP and host in LOOPBACK_HOSTS):
@@ -220,28 +241,29 @@ class _ProvidersFile(BaseModel):
 
 
 def load_providers(home: Path) -> dict[str, RemoteProvider]:
-    """Return the built-in OpenRouter provider, then each in ``providers.toml``.
+    """Return the built-in providers, then each in ``providers.toml``.
 
-    Without the file there is only the built-in one. An error names the file,
-    the table and the field, never a value from the file, which may hold a
-    key pasted by mistake.
+    Without the file there are only the built-in ones. An error names the
+    file, the table and the field, never a value from the file, which may
+    hold a key pasted by mistake.
 
     Raises:
         ConfigError: If the file cannot be read, is larger than
             ``MAX_PROVIDERS_FILE_BYTES``, is not UTF-8 TOML, does not fit the
-            shape of :class:`ProviderEntry`, or redefines ``openrouter``.
+            shape of :class:`ProviderEntry`, or redefines a built-in name.
     """
     path = home / PROVIDERS_FILE
     text = _read(path)
     entries = {} if text is None else _parse(path, text)
-    if OPENROUTER in entries:
+    redefined = sorted(BUILT_IN.keys() & entries.keys())
+    if redefined:
         message = (
-            f"{path}: [providers.{OPENROUTER}] is built in and cannot be "
+            f"{path}: [providers.{redefined[0]}] is built in and cannot be "
             "redefined; give the table another name"
         )
         raise ConfigError(message)
     added = {name: entry.provider(name) for name, entry in entries.items()}
-    return {OPENROUTER: OPENROUTER_FREE} | added
+    return dict(BUILT_IN) | added
 
 
 def _read(path: Path) -> str | None:

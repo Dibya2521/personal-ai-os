@@ -15,6 +15,8 @@ GONE = Provider(name="gone", url="https://gone.example/v1")
 CODEX = Host(name="codex")
 LISTED = f"openrouter ({OPENROUTER.url}) chat"
 LISTED_PRIVATE = f"openrouter ({OPENROUTER.url}) private"
+ANTHROPIC_LISTED = "anthropic (https://api.anthropic.com)"
+UNDECIDED = "not decided, stays on this machine"
 
 
 @pytest.fixture(autouse=True)
@@ -39,8 +41,10 @@ def test_list_says_nothing_is_decided_at_first(home: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert result.output == (
-        f"{LISTED}: not decided, stays on this machine\n"
-        f"{LISTED_PRIVATE}: not decided, stays on this machine\n"
+        f"{LISTED}: {UNDECIDED}\n"
+        f"{LISTED_PRIVATE}: {UNDECIDED}\n"
+        f"{ANTHROPIC_LISTED} chat: {UNDECIDED}\n"
+        f"{ANTHROPIC_LISTED} private: {UNDECIDED}\n"
     )
     assert not (home / CONSENT_FILE).exists()
 
@@ -63,8 +67,12 @@ def test_a_private_grant_lets_the_chat_and_private_text_go(home: Path) -> None:
     assert granted.exit_code == 0, granted.output
     assert "with private memory and file passages" in granted.output
     assert allowed(home) == (True, True)
-    assert len(listed) == 2
-    assert all(": granted " in line for line in listed)
+    assert [line.split(": ")[1].split()[0] for line in listed] == [
+        "granted",
+        "granted",
+        "not",
+        "not",
+    ]
 
 
 def test_revoking_private_keeps_the_chat_and_revoking_the_chat_takes_both(
@@ -112,8 +120,9 @@ def test_grant_then_revoke_is_listed_with_who_decided(home: Path) -> None:
     assert "revoked: nothing goes to openrouter" in revoked.output
     assert after_grant
     assert not ConsentBook(home).allows(OPENROUTER, Scope.CHAT)
-    assert listed.output.startswith(f"{LISTED}: refused ")
-    assert listed.output.endswith(" (cli)\n")
+    first = listed.output.splitlines()[0]
+    assert first.startswith(f"{LISTED}: refused ")
+    assert first.endswith(" (cli)")
 
 
 def test_a_grant_does_not_follow_the_name_to_a_new_address(home: Path) -> None:

@@ -15,6 +15,8 @@ from synthia.gateway.errors import RemoteUnavailableError
 from synthia.gateway.openai_compat import Dialect
 from synthia.gateway.protocol import collect
 from synthia.gateway.providers import (
+    ANTHROPIC,
+    ANTHROPIC_OPUS,
     DEFAULT_DAILY_CAP,
     DEFAULT_REQUESTS_PER_MINUTE,
     HIDDEN_NAME,
@@ -96,7 +98,7 @@ def table(base_url: str = OPENAI_URL, **fields: str) -> str:
 def test_load_providers_adds_each_table_after_the_built_in(tmp_path: Path) -> None:
     found = load_providers(written(tmp_path, VALID))
 
-    assert list(found) == [OPENROUTER, "openai", "home-server"]
+    assert list(found) == [OPENROUTER, ANTHROPIC, "openai", "home-server"]
     assert found[OPENROUTER] is OPENROUTER_FREE
     openai, home = found["openai"], found["home-server"]
     assert openai.model == ModelInfo(
@@ -119,8 +121,21 @@ def test_load_providers_adds_each_table_after_the_built_in(tmp_path: Path) -> No
     )
 
 
+def test_a_table_with_the_anthropic_dialect_speaks_the_messages_api(
+    tmp_path: Path,
+) -> None:
+    text = table("https://gateway.example/anthropic", dialect='"anthropic"')
+
+    found = load_providers(written(tmp_path, text))["x"]
+
+    assert found.dialect is Dialect.ANTHROPIC
+
+
 def test_load_providers_without_a_file_is_only_the_built_in(tmp_path: Path) -> None:
-    assert load_providers(tmp_path) == {OPENROUTER: OPENROUTER_FREE}
+    assert load_providers(tmp_path) == {
+        OPENROUTER: OPENROUTER_FREE,
+        ANTHROPIC: ANTHROPIC_OPUS,
+    }
 
 
 @pytest.mark.parametrize(
@@ -171,6 +186,10 @@ def test_http_is_accepted_for_this_machine(tmp_path: Path, base_url: str) -> Non
         (
             table(f"https://evil.example/{PLANTED}").replace("x]", "openrouter]"),
             "[providers.openrouter] is built in and cannot be redefined",
+        ),
+        (
+            table(f"https://evil.example/{PLANTED}").replace("x]", "anthropic]"),
+            "[providers.anthropic] is built in and cannot be redefined",
         ),
         (f'[providers.x]\nmodel = "{PLANTED}\n', "is not valid TOML at line 2"),
         (
@@ -231,6 +250,7 @@ def test_http_is_accepted_for_this_machine(tmp_path: Path, base_url: str) -> Non
         "query",
         "bad name",
         "redefines openrouter",
+        "redefines anthropic",
         "not toml",
         "no host",
         "bad port",
@@ -307,7 +327,7 @@ def test_select_remote_names_the_known_providers_for_an_unknown_one(
     with pytest.raises(
         ConfigError,
         match=r"SYNTHIA_REMOTE=gemini is not a provider; "
-        r"the providers are openrouter, openai, home-server",
+        r"the providers are openrouter, anthropic, openai, home-server",
     ):
         select_remote(settings)
 
@@ -453,6 +473,10 @@ def test_the_providers_command_lists_each_without_its_key(
     assert result.stdout.splitlines() == [
         (
             "openrouter: https://openrouter.ai/api/v1, model openrouter/free, "
+            "not selected, no key"
+        ),
+        (
+            "anthropic: https://api.anthropic.com, model claude-opus-5-5, "
             "not selected, no key"
         ),
         f"openai: {OPENAI_URL}, model <model id from the vendor>, selected, key set",

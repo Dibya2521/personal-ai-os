@@ -40,6 +40,9 @@ ANSWER_SHARE: Final = 4
 
 def message_chars(message: Message) -> int:
     """Return the characters of ``message`` the model reads, images aside."""
+    # A replay is what is sent instead of the parts and calls: thinking included.
+    if message.replay is not None:
+        return len(message.replay.content)
     text = sum(len(p.text) for p in message.parts if isinstance(p, TextPart))
     calls = sum(len(c.name) + len(c.arguments) for c in message.tool_calls)
     return text + calls

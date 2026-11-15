@@ -13,6 +13,7 @@ from synthia.gateway.types import (
     ImagePart,
     Message,
     ModelInfo,
+    Replay,
     ToolCall,
     ToolCallDelta,
     ToolSpec,
@@ -98,6 +99,23 @@ async def test_tool_calls_survive_the_cache(tmp_path: Path) -> None:
     assert replayed.tool_calls == (ToolCall("c1", "clock", '{"zone":"IST"}'),)
     assert replayed.finish_reason is FinishReason.TOOL_CALLS
     assert replayed.usage is None
+
+
+async def test_a_replay_and_cache_counts_survive_the_cache(tmp_path: Path) -> None:
+    replay = Replay("anthropic", '[{"type":"thinking","signature":"s"}]')
+    chunks = (
+        ChatChunk(text="hi"),
+        ChatChunk(finish_reason=FinishReason.STOP, usage=Usage(30, 2, 20, 5)),
+        ChatChunk(replay=replay),
+    )
+    model, _ = cached(tmp_path, Counting(chunks))
+
+    await collect(model.stream(ASK))
+    replayed = await collect(model.stream(ASK))
+
+    assert replayed.replay == replay
+    assert replayed.usage == Usage(30, 2, 20, 5)
+    assert replayed.as_message().replay == replay
 
 
 async def test_a_failed_stream_is_never_cached(tmp_path: Path) -> None:

@@ -88,14 +88,27 @@ def _target(url: httpx.URL) -> str:
     return url.raw_path.decode("ascii")
 
 
+def _first_text(content: object) -> str:
+    """Return a message's text: a string, or the first text block of a list.
+
+    OpenAI-compatible APIs send a plain string; Anthropic's Messages API sends
+    a list of blocks.
+    """
+    if isinstance(content, str):
+        return content
+    for block in cast("list[JSON]", content) if isinstance(content, list) else []:
+        if block.get("type") == "text":
+            return str(block.get("text"))
+    return "(structured content)"
+
+
 def _summary(content: bytes) -> str:
     """Return a short, human-readable hint of what was asked, for reviewing diffs."""
     try:
         body = cast("JSON", json.loads(content))
         messages = cast("list[JSON]", body.get("messages") or [])
         last = messages[-1].get("content") if messages else None
-        text = last if isinstance(last, str) else "(structured content)"
-        hint = f"{body.get('model', '?')}: {text}"
+        hint = f"{body.get('model', '?')}: {_first_text(last)}"
     except (ValueError, UnicodeDecodeError, AttributeError, IndexError, TypeError):
         hint = f"{len(content)} bytes"
     return hint[:SUMMARY_LENGTH]

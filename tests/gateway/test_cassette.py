@@ -232,6 +232,17 @@ async def test_the_file_is_stable_and_readable(tmp_path: Path) -> None:
     assert interaction["request"]["summary"] == "qwen: hello"  # type: ignore[index]
 
 
+async def test_a_block_list_message_is_summarised_by_its_text(tmp_path: Path) -> None:
+    path = tmp_path / "blocks.json"
+    blocks = [{"type": "tool_result", "content": "x"}, {"type": "text", "text": "hi"}]
+    await record(
+        path, live_server(), {"model": "claude", "messages": [{"content": blocks}]}
+    )
+
+    (interaction,) = stored(path)["interactions"]  # type: ignore[misc]
+    assert interaction["request"]["summary"] == "claude: hi"  # type: ignore[index]
+
+
 @pytest.mark.parametrize(
     ("content", "problem"),
     [

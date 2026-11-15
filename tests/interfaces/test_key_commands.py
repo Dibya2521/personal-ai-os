@@ -85,6 +85,7 @@ def test_list_says_where_each_key_comes_from_and_never_the_key(
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines() == [
         "openrouter: .env or environment",
+        "anthropic: no key",
         "openai: key store, SYNTHIA_OPENAI_API_KEY in .env or environment unused",
     ]
     assert KEY not in result.output
@@ -99,6 +100,7 @@ def test_list_names_a_stored_key_no_provider_uses(home: Path) -> None:
 
     assert result.stdout.splitlines() == [
         "openrouter: no key",
+        "anthropic: no key",
         "SYNTHIA_OPENAI_API_KEY: key store, no provider uses it",
     ]
 

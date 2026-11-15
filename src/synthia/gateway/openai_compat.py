@@ -72,12 +72,14 @@ class Dialect(StrEnum):
     ``return_progress`` makes it report reading the prompt, once per batch.
     The plain OpenAI dialect sends none of these, so thinking depth is not
     sent to a server that speaks it; vendors that take thinking at all name
-    the field differently.
+    the field differently. ``anthropic`` is not this API at all: it selects
+    the adapter for Anthropic's own Messages API.
     """
 
     OPENAI = "openai"
     OPENROUTER = "openrouter"
     LLAMA_CPP = "llama.cpp"
+    ANTHROPIC = "anthropic"
 
 
 def _reasoning(request: ChatRequest, dialect: Dialect) -> JSON:
@@ -340,7 +342,7 @@ class OpenAICompatibleModel:
                     raise self._scrub(
                         error_for(response.status_code, body, response.headers)
                     )
-                _expect_event_stream(response)
+                expect_event_stream(response)
                 async with aclosing(self._chunks(response)) as chunks:
                     async for chunk in chunks:
                         yield chunk
@@ -374,9 +376,15 @@ class OpenAICompatibleModel:
         return scrub(error, self._api_key)
 
 
-def _expect_event_stream(response: httpx.Response) -> None:
-    # A captive portal or a proxy answers 200 with its own page; say so, rather
-    # than reporting an answer that never finished.
+def expect_event_stream(response: httpx.Response) -> None:
+    """Refuse a successful response that is not an event stream.
+
+    A captive portal or a proxy answers 200 with its own page; this says so,
+    rather than reporting an answer that never finished.
+
+    Raises:
+        MalformedStreamError: If the content type is another one.
+    """
     content_type = response.headers.get("content-type", "").partition(";")[0].strip()
     if content_type and content_type != EVENT_STREAM:
         message = f"expected an event stream, got {content_type}"

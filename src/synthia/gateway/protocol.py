@@ -15,7 +15,13 @@ from synthia.gateway.types import (
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterable, Iterable
 
-    from synthia.gateway.types import ChatChunk, ChatRequest, ModelInfo, Usage
+    from synthia.gateway.types import (
+        ChatChunk,
+        ChatRequest,
+        ModelInfo,
+        Replay,
+        Usage,
+    )
 
 
 class ChatModel(Protocol):
@@ -78,6 +84,7 @@ def join(chunks: Iterable[ChatChunk]) -> ChatResponse:
     finish: FinishReason | None = None
     usage: Usage | None = None
     model: str | None = None
+    replay: Replay | None = None
     for chunk in chunks:
         text.append(chunk.text)
         reasoning.append(chunk.reasoning)
@@ -89,6 +96,7 @@ def join(chunks: Iterable[ChatChunk]) -> ChatResponse:
         finish = chunk.finish_reason or finish
         usage = chunk.usage or usage
         model = model or chunk.model
+        replay = chunk.replay or replay
     if finish is None:
         message = "the answer ended without a finish reason"
         raise IncompleteResponseError(message)
@@ -99,6 +107,7 @@ def join(chunks: Iterable[ChatChunk]) -> ChatResponse:
         usage=usage,
         model=model,
         reasoning="".join(reasoning),
+        replay=replay,
     )
 
 

@@ -30,6 +30,7 @@ from synthia.gateway.types import (
     ChatChunk,
     ChatResponse,
     FinishReason,
+    Replay,
     ToolCall,
     ToolCallDelta,
     Usage,
@@ -77,6 +78,7 @@ def _encode(response: ChatResponse) -> str:
 def _decode(stored: str) -> ChatResponse:
     data = cast("dict[str, Any]", json.loads(stored))
     usage = cast("dict[str, int] | None", data["usage"])
+    replay = cast("dict[str, str] | None", data.get("replay"))
     return ChatResponse(
         text=data["text"],
         tool_calls=tuple(ToolCall(**c) for c in data["tool_calls"]),
@@ -84,6 +86,7 @@ def _decode(stored: str) -> ChatResponse:
         usage=Usage(**usage) if usage else None,
         model=data["model"],
         reasoning=data["reasoning"],
+        replay=Replay(**replay) if replay else None,
     )
 
 
@@ -99,7 +102,11 @@ def _as_chunks(response: ChatResponse) -> tuple[ChatChunk, ...]:
             tool_calls=calls,
             model=response.model,
         ),
-        ChatChunk(finish_reason=response.finish_reason, usage=response.usage),
+        ChatChunk(
+            finish_reason=response.finish_reason,
+            usage=response.usage,
+            replay=response.replay,
+        ),
     )
 
 

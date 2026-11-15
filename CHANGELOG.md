@@ -59,6 +59,17 @@ All notable changes are recorded here. The format follows
   --host <name>` takes them back from the next call, and `synthia consent list`
   shows what each host sees. The calls run in the daemon, started at the
   first one.
+- Anthropic is a built-in provider: `SYNTHIA_REMOTE=anthropic` with a key
+  from `synthia keys set anthropic` makes Claude Opus 5.5 the remote model,
+  through Anthropic's own Messages API rather than its OpenAI-compatible one,
+  so prompt caching and signed thinking work. The tools and the system prompt,
+  and the conversation so far, are marked for Anthropic's prompt cache;
+  `Usage` counts cached and cache-written prompt tokens apart. Thinking is
+  sent back unchanged with the tool results that follow it and never shown.
+  `temperature` is not sent, because API version 2026-10-21 rejects it, and
+  the log says so. Any other Messages API address is a `[providers.<name>]`
+  table with `dialect = "anthropic"`. A `[providers.anthropic]` table in
+  `providers.toml` is now refused, since the name is built in: rename it.
 
 ### Fixed
 

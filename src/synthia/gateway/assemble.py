@@ -15,10 +15,11 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+from synthia.gateway.anthropic import AnthropicModel
 from synthia.gateway.budget import BudgetLedger
 from synthia.gateway.circuit import CircuitBreaker
 from synthia.gateway.errors import GatewayError
-from synthia.gateway.openai_compat import OpenAICompatibleModel
+from synthia.gateway.openai_compat import Dialect, OpenAICompatibleModel
 from synthia.gateway.providers import REMOTE_KEY_HINT, remote_key, select_remote
 from synthia.gateway.ratelimit import SlidingWindowLimiter
 from synthia.gateway.router import Remote, RemoteHealth, Router, guard_remote
@@ -88,6 +89,16 @@ async def learn_daily_cap(
     return count.limit
 
 
+def remote_adapter(
+    client: httpx.AsyncClient, remote: RemoteProvider, api_key: SecretStr
+) -> ChatModel:
+    """Return the adapter for the API ``remote`` speaks, sending ``api_key``."""
+    endpoint = remote.endpoint(api_key)
+    if endpoint.dialect is Dialect.ANTHROPIC:
+        return AnthropicModel(client=client, endpoint=endpoint, info=remote.model)
+    return OpenAICompatibleModel(client=client, endpoint=endpoint, info=remote.model)
+
+
 NO_MODEL: Final = (
     "no model is available: install a local model with "
     f"`synthia models install`, or {REMOTE_KEY_HINT} to ask a remote one"
@@ -130,9 +141,7 @@ def build_gateway(
             SlidingWindowLimiter(remote.requests_per_minute),
             CircuitBreaker(remote.name),
         )
-        adapter = OpenAICompatibleModel(
-            client=client, endpoint=remote.endpoint(key), info=remote.model
-        )
+        adapter = remote_adapter(client, remote, key)
         guarded = Remote(
             guard_remote(adapter, health),
             health,

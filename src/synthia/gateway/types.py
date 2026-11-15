@@ -77,26 +77,44 @@ class ToolCall:
 
 
 @dataclass(frozen=True, slots=True)
+class Replay:
+    """An answer's content as its provider sent it, to be sent back unchanged.
+
+    Claude's thinking blocks are signed, and a conversation that continues
+    after a tool call must return them exactly as they came, in their place
+    among the text and tool calls. ``provider`` names the wire format of
+    ``content``, a JSON text; an adapter for any other format ignores it.
+    """
+
+    provider: str
+    content: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class Message:
     """One turn in a conversation.
 
+    ``replay`` is what the provider that wrote an assistant message needs back
+    to continue from it (see :class:`Replay`).
+
     Raises:
         ValueError: If the fields do not fit the role: a tool result without the
-            id of the call it answers, tool calls outside an assistant message,
-            or an image outside a user message.
+            id of the call it answers, tool calls or a replay outside an
+            assistant message, or an image outside a user message.
     """
 
     role: Role
     parts: tuple[Part, ...] = ()
     tool_calls: tuple[ToolCall, ...] = ()
     tool_call_id: str | None = None
+    replay: Replay | None = None
 
     def __post_init__(self) -> None:
         if (self.role is Role.TOOL) != (self.tool_call_id is not None):
             message = "tool_call_id is required on, and only on, a tool message"
             raise ValueError(message)
-        if self.tool_calls and self.role is not Role.ASSISTANT:
-            message = "only an assistant message can carry tool calls"
+        if (self.tool_calls or self.replay) and self.role is not Role.ASSISTANT:
+            message = "only an assistant message can carry tool calls or a replay"
             raise ValueError(message)
         if self.role is not Role.USER and any(
             isinstance(p, ImagePart) for p in self.parts
@@ -120,10 +138,12 @@ class Message:
         return cls(Role.USER, (TextPart(text), *images))
 
     @classmethod
-    def assistant(cls, text: str, *tool_calls: ToolCall) -> Message:
+    def assistant(
+        cls, text: str, *tool_calls: ToolCall, replay: Replay | None = None
+    ) -> Message:
         """Build an assistant message, optionally with the tool calls it made."""
         parts = (TextPart(text),) if text else ()
-        return cls(Role.ASSISTANT, parts, tool_calls)
+        return cls(Role.ASSISTANT, parts, tool_calls, replay=replay)
 
     @classmethod
     def tool_result(cls, tool_call_id: str, content: str) -> Message:
@@ -224,10 +244,18 @@ class FinishReason(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Usage:
-    """Tokens counted by the provider for one completion."""
+    """Tokens counted by the provider for one completion.
+
+    ``prompt_tokens`` is the whole prompt, cached or not.
+    ``cached_prompt_tokens`` of them were read from the provider's prompt
+    cache and ``cache_write_tokens`` were written to it; a provider that
+    reports no caching leaves both at 0.
+    """
 
     prompt_tokens: int
     completion_tokens: int
+    cached_prompt_tokens: int = 0
+    cache_write_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -267,6 +295,7 @@ class ChatChunk:
     or shown as the answer. ``id`` names the completion the chunk belongs to,
     which is how a server that takes commands mid-answer is told which one.
     ``progress`` comes from a server that reports reading a long prompt.
+    ``replay`` arrives once, when the whole answer is known.
     """
 
     text: str = ""
@@ -277,6 +306,7 @@ class ChatChunk:
     model: str | None = None
     id: str | None = None
     progress: PromptProgress | None = None
+    replay: Replay | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,10 +319,11 @@ class ChatResponse:
     usage: Usage | None
     model: str | None
     reasoning: str = ""
+    replay: Replay | None = None
 
     def as_message(self) -> Message:
         """Return the completion as an assistant message for the history."""
-        return Message.assistant(self.text, *self.tool_calls)
+        return Message.assistant(self.text, *self.tool_calls, replay=self.replay)
 
 
 @dataclass(frozen=True, slots=True)
